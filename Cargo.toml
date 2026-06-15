@@ -2,7 +2,7 @@
 name = "runseal"
 version = "0.0.0"
 edition = "2021"
-license = "MIT"
+license = "Apache-2.0"
 description = "OS-native sandbox layer and stable execution protocol for AI agents"
 repository = "https://github.com/runseal-labs/runseal"
 publish = false
