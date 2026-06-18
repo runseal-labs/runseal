@@ -162,7 +162,7 @@ fn rewrite_plain_http_request(
     version: &str,
     header: &str,
 ) -> io::Result<(String, String)> {
-    let (upstream_addr, path) = if let Some(rest) = target.strip_prefix("http://") {
+    let (upstream_addr, path) = if let Some(rest) = strip_http_scheme(target) {
         split_http_url(rest)?
     } else {
         let host = find_host_header(header)
@@ -186,6 +186,14 @@ fn rewrite_plain_http_request(
     rewritten.push_str("Connection: close\r\n");
     rewritten.push_str("\r\n");
     Ok((upstream_addr, rewritten))
+}
+
+fn strip_http_scheme(target: &str) -> Option<&str> {
+    if target.len() < "http://".len() {
+        return None;
+    }
+    let (scheme, rest) = target.split_at("http://".len());
+    scheme.eq_ignore_ascii_case("http://").then_some(rest)
 }
 
 fn split_http_url(rest: &str) -> io::Result<(String, String)> {
@@ -295,6 +303,13 @@ mod tests {
         assert!(rewritten.starts_with("GET /a?q=1 HTTP/1.1\r\n"));
         assert!(!rewritten.contains("Proxy-Connection"));
         assert!(rewritten.contains("Connection: close\r\n"));
+
+        let request = "GET HTTP://example.test/upper HTTP/1.1\r\nHost: ignored.test\r\n\r\n";
+        let (upstream, rewritten) =
+            rewrite_plain_http_request("GET", "HTTP://example.test/upper", "HTTP/1.1", request)
+                .expect("rewrite uppercase scheme");
+        assert_eq!(upstream, "example.test:80");
+        assert!(rewritten.starts_with("GET /upper HTTP/1.1\r\n"));
     }
 
     #[test]
