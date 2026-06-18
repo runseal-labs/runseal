@@ -40,6 +40,10 @@ fn run_cli(args: &[&str]) -> Result<Output> {
         .context("failed to spawn runseal")
 }
 
+fn python_bin() -> &'static str {
+    if cfg!(windows) { "python" } else { "python3" }
+}
+
 fn stdout_json(output: &Output) -> Result<Value> {
     serde_json::from_slice(&output.stdout).context("stdout was not valid JSON")
 }
@@ -260,7 +264,7 @@ fn exec_events_stream_uses_execution_vocabulary() -> Result<()> {
         "--cwd",
         &cwd,
         "--",
-        "python3",
+        python_bin(),
         "-c",
         "print('hello from runseal')",
     ])?;
@@ -312,7 +316,7 @@ fn exec_json_returns_execution_result() -> Result<()> {
         "--cwd",
         &cwd,
         "--",
-        "python3",
+        python_bin(),
         "-c",
         "print(42)",
     ])?;
@@ -404,7 +408,7 @@ fn exec_cli_enforces_timeout_ms() -> Result<()> {
         "--cwd",
         &cwd,
         "--",
-        "python3",
+        python_bin(),
         "-c",
         "import time; time.sleep(1)",
     ])?;
@@ -424,7 +428,7 @@ fn exec_cli_rejects_invalid_timeout_ms() -> Result<()> {
         "--timeout-ms",
         "soon",
         "--",
-        "python3",
+        python_bin(),
         "-c",
         "print('must not run')",
     ])?;

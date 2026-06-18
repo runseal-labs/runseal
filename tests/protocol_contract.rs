@@ -63,6 +63,10 @@ fn run_rpc_with_env(message: &str, envs: &[(&str, &str)]) -> Result<Output> {
         .context("failed to wait for runseal rpc")
 }
 
+fn python_bin() -> &'static str {
+    if cfg!(windows) { "python" } else { "python3" }
+}
+
 fn stdout_json_lines(output: &Output) -> Result<Vec<Value>> {
     String::from_utf8_lossy(&output.stdout)
         .lines()
@@ -279,7 +283,7 @@ fn execute_rejects_unsupported_request_fields() -> Result<()> {
 
     for (field, value) in unsupported_cases {
         let mut request = json!({
-            "command": ["python3", "-c", "print('must not run')"],
+            "command": [python_bin(), "-c", "print('must not run')"],
             "cwd": tmp.path(),
             "policy": "danger-full-access"
         });
@@ -316,7 +320,7 @@ fn execute_accepts_non_secret_env_and_audits_keys_only() -> Result<()> {
         "execute",
         json!({
             "command": [
-                "python3",
+                python_bin(),
                 "-c",
                 "import os; print('flag=' + os.environ.get('RUNSEAL_PUBLIC_FLAG', 'missing'))"
             ],
@@ -371,7 +375,7 @@ fn execute_rejects_secret_env_keys() -> Result<()> {
         let output = run_rpc(&rpc_request(
             "execute",
             json!({
-                "command": ["python3", "-c", "print('must not run')"],
+                "command": [python_bin(), "-c", "print('must not run')"],
                 "cwd": tmp.path(),
                 "policy": "danger-full-access",
                 "env": {key: "blocked"}
@@ -407,7 +411,7 @@ fn execute_copies_metadata_to_audit_events() -> Result<()> {
     let output = run_rpc(&rpc_request(
         "execute",
         json!({
-            "command": ["python3", "-c", "print('metadata ok')"],
+            "command": [python_bin(), "-c", "print('metadata ok')"],
             "cwd": tmp.path(),
             "policy": "danger-full-access",
             "metadata": metadata
@@ -467,7 +471,7 @@ fn execute_rejects_invalid_metadata() -> Result<()> {
         let output = run_rpc(&rpc_request(
             "execute",
             json!({
-                "command": ["python3", "-c", "print('must not run')"],
+                "command": [python_bin(), "-c", "print('must not run')"],
                 "cwd": tmp.path(),
                 "policy": "danger-full-access",
                 "metadata": metadata
@@ -500,7 +504,7 @@ fn execute_accepts_empty_stdin() -> Result<()> {
         "execute",
         json!({
             "command": [
-                "python3",
+                python_bin(),
                 "-c",
                 "import sys; data = sys.stdin.buffer.read(); print(f'stdin_bytes={len(data)}')"
             ],
@@ -541,7 +545,7 @@ fn execute_accepts_bytes_stdin_and_audits_metadata_only() -> Result<()> {
         "execute",
         json!({
             "command": [
-                "python3",
+                python_bin(),
                 "-c",
                 "import sys; data = sys.stdin.buffer.read(); print(f'stdin_bytes={len(data)}')"
             ],
@@ -635,7 +639,7 @@ fn execute_rejects_invalid_bytes_stdin() -> Result<()> {
         let output = run_rpc(&rpc_request(
             "execute",
             json!({
-                "command": ["python3", "-c", "print('must not run')"],
+                "command": [python_bin(), "-c", "print('must not run')"],
                 "cwd": tmp.path(),
                 "policy": "danger-full-access",
                 "stdin": stdin
@@ -668,7 +672,7 @@ fn execute_rejects_unimplemented_stdin_modes() -> Result<()> {
         let output = run_rpc(&rpc_request(
             "execute",
             json!({
-                "command": ["python3", "-c", "print('must not run')"],
+                "command": [python_bin(), "-c", "print('must not run')"],
                 "cwd": tmp.path(),
                 "policy": "danger-full-access",
                 "stdin": {"mode": mode}
@@ -700,7 +704,7 @@ fn execute_timeout_returns_stable_error_and_audit_event() -> Result<()> {
     let output = run_rpc(&rpc_request(
         "execute",
         json!({
-            "command": ["python3", "-c", "import time; time.sleep(1)"],
+            "command": [python_bin(), "-c", "import time; time.sleep(1)"],
             "cwd": tmp.path(),
             "policy": "danger-full-access",
             "timeout_ms": 10
@@ -860,7 +864,7 @@ fn policy_denial_uses_stable_error_code() -> Result<()> {
     let output = run_rpc(&rpc_request(
         "execute",
         json!({
-            "command": ["python3", "-c", code],
+            "command": [python_bin(), "-c", code],
             "cwd": tmp.path(),
             "policy": {
                 "version": "runseal.policy/v1",
@@ -970,7 +974,7 @@ fn sandboxed_policy_without_backend_fails_closed() -> Result<()> {
     let output = run_rpc(&rpc_request(
         "execute",
         json!({
-            "command": ["python3", "-c", "print('must not run')"],
+            "command": [python_bin(), "-c", "print('must not run')"],
             "cwd": tmp.path(),
             "policy": "read-only"
         }),
@@ -1130,7 +1134,7 @@ fn workspace_contained_plan_reports_profile_protection_without_private_paths() -
     let output = run_rpc(&rpc_request(
         "execute",
         json!({
-            "command": ["python3", "-c", "print('must not run')"],
+            "command": [python_bin(), "-c", "print('must not run')"],
             "cwd": tmp.path(),
             "policy": "workspace-contained"
         }),
@@ -1174,7 +1178,7 @@ fn execute_rpc_streams_events_and_final_result() -> Result<()> {
     let output = run_rpc(&rpc_request(
         "execute",
         json!({
-            "command": ["python3", "-c", "print('protocol ok')"],
+            "command": [python_bin(), "-c", "print('protocol ok')"],
             "cwd": tmp.path(),
             "policy": "danger-full-access"
         }),
@@ -1297,7 +1301,7 @@ fn execute_uses_minimal_environment() -> Result<()> {
             "execute",
             json!({
                 "command": [
-                    "python3",
+                    python_bin(),
                     "-c",
                     "import os; print('sentinel=' + os.environ.get('RUNSEAL_SECRET_SENTINEL', 'missing'))"
                 ],

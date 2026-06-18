@@ -56,6 +56,10 @@ fn run_rpc(message: &str) -> Result<Output> {
         .context("failed to wait for runseal rpc")
 }
 
+fn python_bin() -> &'static str {
+    if cfg!(windows) { "python" } else { "python3" }
+}
+
 fn stdout_json_lines(output: &Output) -> Result<Vec<Value>> {
     String::from_utf8_lossy(&output.stdout)
         .lines()
@@ -76,14 +80,14 @@ fn execute_with_network(
 ) -> Result<Value> {
     let params = if let Some(network) = network {
         json!({
-            "command": ["python3", "-c", code],
+            "command": [python_bin(), "-c", code],
             "cwd": cwd,
             "policy": policy,
             "network": {"mode": network}
         })
     } else {
         json!({
-            "command": ["python3", "-c", code],
+            "command": [python_bin(), "-c", code],
             "cwd": cwd,
             "policy": policy
         })

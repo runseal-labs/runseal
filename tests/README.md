@@ -8,6 +8,8 @@ They are black-box protocol tests. `cargo test` builds and runs the local binary
 RUNSEAL_BIN=/path/to/runseal cargo test --test cli_contract --test protocol_contract
 ```
 
+CI runs the suite on Linux and Windows so platform selection, fail-closed behavior, and the Windows reference backend scaffold stay buildable before any capability is promoted.
+
 The tests are black-box by design:
 
 - CLI behavior through `runseal exec`.

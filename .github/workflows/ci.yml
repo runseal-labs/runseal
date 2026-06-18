@@ -11,7 +11,11 @@ env:
 
 jobs:
   rust:
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
       - name: Checkout repository
@@ -37,19 +41,20 @@ jobs:
         run: git diff --check
 
       - name: Run redaction scan
-        shell: bash
+        shell: pwsh
         run: |
-          set -euo pipefail
+          $pattern = "tailos|tyclaw|myprojects|ferstar|private issue|private MR"
+          $allowed = '^(./|.\\)?(AGENTS\.md|\.github[/\\]workflows[/\\]ci\.yml):'
+          $files = Get-ChildItem -Recurse -File |
+            Where-Object { $_.FullName -notmatch '[\\/]target[\\/]' }
+          $matches = $files | Select-String -Pattern $pattern -CaseSensitive:$false |
+            ForEach-Object {
+              $path = Resolve-Path -Relative $_.Path
+              "${path}:$($_.LineNumber):$($_.Line)"
+            }
+          $disallowed = $matches | Where-Object { $_ -and ($_ -notmatch $allowed) }
 
-          if ! command -v rg >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y ripgrep
-          fi
-
-          matches="$(rg -n -i "tailos|tyclaw|myprojects|ferstar|private issue|private MR" . || true)"
-          disallowed="$(printf '%s\n' "$matches" | rg -v '^(\./)?(AGENTS.md|\.github/workflows/ci\.yml):' || true)"
-
-          if [[ -n "$disallowed" ]]; then
-            printf '%s\n' "$disallowed"
+          if ($disallowed) {
+            $disallowed | ForEach-Object { Write-Output $_ }
             exit 1
-          fi
+          }
