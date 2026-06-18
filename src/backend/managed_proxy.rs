@@ -1,7 +1,7 @@
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::{
-    Arc,
+    Arc, Mutex, OnceLock, Weak,
     atomic::{AtomicBool, Ordering},
 };
 use std::thread::{self, JoinHandle};
@@ -20,6 +20,10 @@ const PROXY_KEYS: &[&str] = &[
 const NO_PROXY_KEYS: &[&str] = &["NO_PROXY", "no_proxy"];
 
 pub(super) struct ManagedSandboxProxy {
+    inner: Arc<ManagedSandboxProxyState>,
+}
+
+struct ManagedSandboxProxyState {
     addr: SocketAddr,
     shutdown: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
@@ -27,21 +31,32 @@ pub(super) struct ManagedSandboxProxy {
 
 impl ManagedSandboxProxy {
     pub(super) fn start() -> io::Result<Self> {
+        static SHARED_PROXY: OnceLock<Mutex<Weak<ManagedSandboxProxyState>>> = OnceLock::new();
+        let mut shared = SHARED_PROXY
+            .get_or_init(|| Mutex::new(Weak::new()))
+            .lock()
+            .map_err(|_| io::Error::other("managed proxy cache lock poisoned"))?;
+        if let Some(inner) = shared.upgrade() {
+            return Ok(Self { inner });
+        }
+
         let listener = TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))?;
         listener.set_nonblocking(true)?;
         let addr = listener.local_addr()?;
         let shutdown = Arc::new(AtomicBool::new(false));
         let thread_shutdown = Arc::clone(&shutdown);
         let thread = thread::spawn(move || accept_loop(listener, thread_shutdown));
-        Ok(Self {
+        let inner = Arc::new(ManagedSandboxProxyState {
             addr,
             shutdown,
             thread: Some(thread),
-        })
+        });
+        *shared = Arc::downgrade(&inner);
+        Ok(Self { inner })
     }
 
     pub(super) fn environment(&self) -> Vec<(String, String)> {
-        let proxy_url = format!("http://{}", self.addr);
+        let proxy_url = format!("http://{}", self.inner.addr);
         let mut env = vec![
             ("RUNSEAL_NETWORK_PROXY_ACTIVE".to_string(), "1".to_string()),
             (
@@ -65,7 +80,7 @@ impl ManagedSandboxProxy {
     }
 }
 
-impl Drop for ManagedSandboxProxy {
+impl Drop for ManagedSandboxProxyState {
     fn drop(&mut self) {
         self.shutdown.store(true, Ordering::Relaxed);
         let _ = TcpStream::connect_timeout(&self.addr, Duration::from_millis(50));
@@ -288,6 +303,24 @@ mod tests {
             );
         }
         assert!(!env.iter().any(|(key, _)| key.starts_with("CODEX_")));
+    }
+
+    #[test]
+    fn reuses_active_proxy_listener() {
+        let first = ManagedSandboxProxy::start().expect("start first proxy");
+        let first_url = first
+            .environment()
+            .into_iter()
+            .find_map(|(key, value)| (key == "HTTP_PROXY").then_some(value))
+            .expect("first HTTP_PROXY");
+        let second = ManagedSandboxProxy::start().expect("start second proxy");
+        let second_url = second
+            .environment()
+            .into_iter()
+            .find_map(|(key, value)| (key == "HTTP_PROXY").then_some(value))
+            .expect("second HTTP_PROXY");
+
+        assert_eq!(first_url, second_url);
     }
 
     #[test]
