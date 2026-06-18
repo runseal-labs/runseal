@@ -248,6 +248,22 @@ mod tests {
             env.iter()
                 .any(|(key, value)| key == "HTTP_PROXY" && value.starts_with("http://127.0.0.1:"))
         );
+        let proxy_url = env
+            .iter()
+            .find_map(|(key, value)| (key == "HTTP_PROXY").then_some(value.as_str()))
+            .expect("HTTP_PROXY");
+        for key in [
+            "HTTPS_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "ALL_PROXY",
+            "all_proxy",
+        ] {
+            assert!(
+                env.iter()
+                    .any(|(name, value)| name == key && value == proxy_url)
+            );
+        }
         assert!(
             env.iter()
                 .any(|(key, value)| key == "RUNSEAL_NETWORK_PROXY_ACTIVE" && value == "1")
