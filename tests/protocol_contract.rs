@@ -933,6 +933,14 @@ fn execute_timeout_returns_stable_error_and_audit_event() -> Result<()> {
         .find(|event| event["type"] == "execution.failed")
         .context("execution.failed audit event must exist")?;
     assert_event_envelope(failed_event)?;
+    let limit_event = audit_events
+        .iter()
+        .find(|event| event["type"] == "execution.resource.limit_exceeded")
+        .context("execution.resource.limit_exceeded audit event must exist")?;
+    assert_event_envelope(limit_event)?;
+    assert_eq!(limit_event["decision"], "limit_exceeded");
+    assert_eq!(limit_event["resource"], "timeout_ms");
+    assert_eq!(limit_event["limit"], 10);
     Ok(())
 }
 

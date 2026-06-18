@@ -846,6 +846,17 @@ fn execute_command(
     let duration_ms = timer.elapsed().as_millis() as u64;
     if execution_output.timed_out {
         let timeout_ms = timeout.map(|duration| duration.as_millis() as u64);
+        let limit_exceeded = execution_event_now(
+            json!({
+                "type": "execution.resource.limit_exceeded",
+                "decision": "limit_exceeded",
+                "resource": "timeout_ms",
+                "limit": timeout_ms,
+                "duration_ms": duration_ms,
+            }),
+            &event_context,
+        );
+        write_audit_event_with_metadata(&mut audit, &limit_exceeded, &metadata)?;
         let failed = execution_event_now(
             json!({
                 "type": "execution.failed",
