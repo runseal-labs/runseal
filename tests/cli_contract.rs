@@ -153,6 +153,21 @@ fn expected_runtime_environment_supported() -> bool {
     cfg!(windows)
 }
 
+fn assert_no_private_windows_setup_terms(text: &str) {
+    for private_term in [
+        "single-sandbox-user",
+        "restricted-token",
+        "kill-on-close-job",
+        "offline",
+        "online",
+    ] {
+        assert!(
+            !text.contains(private_term),
+            "CLI output must not expose private Windows setup term {private_term}"
+        );
+    }
+}
+
 #[test]
 fn missing_binary_is_explicit_red_state() {
     if runseal_bin().exists() {
@@ -220,19 +235,7 @@ fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
     assert_eq!(payload["sandbox_levels"]["danger-full-access"], "supported");
     assert_eq!(payload["sandbox_levels"]["read-only"], "unsupported");
     assert_eq!(payload["network_modes"]["proxy"], "unsupported");
-    let public_payload = payload.to_string();
-    for private_term in [
-        "single-sandbox-user",
-        "restricted-token",
-        "kill-on-close-job",
-        "offline",
-        "online",
-    ] {
-        assert!(
-            !public_payload.contains(private_term),
-            "capabilities must not expose private Windows setup term {private_term}"
-        );
-    }
+    assert_no_private_windows_setup_terms(&payload.to_string());
     Ok(())
 }
 
@@ -425,6 +428,42 @@ fn exec_json_returns_execution_result() -> Result<()> {
     assert!(payload["stdout_bytes"].as_u64().unwrap_or_default() > 0);
     assert_eq!(payload["output_truncated"], false);
     assert!(payload["resource_usage"]["duration_ms"].as_u64().is_some());
+    Ok(())
+}
+
+#[test]
+fn sandboxed_exec_cli_fails_closed_without_setup_details() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let cwd = tmp.path().to_string_lossy().to_string();
+    let output = run_cli(&[
+        "exec",
+        "--json",
+        "--policy",
+        "read-only",
+        "--cwd",
+        &cwd,
+        "--",
+        python_bin(),
+        "-c",
+        "print('must not run')",
+    ])?;
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("cannot enforce policy read-only"),
+        "{stderr}"
+    );
+    assert_no_private_windows_setup_terms(&stderr);
+
+    let audit_dir = tmp.path().join(".runseal").join("audit");
+    let audit_files = fs::read_dir(&audit_dir)
+        .with_context(|| format!("audit dir must exist at {}", audit_dir.display()))?
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(audit_files.len(), 1);
+    let audit_jsonl = fs::read_to_string(audit_files[0].path())?;
+    assert_no_private_windows_setup_terms(&audit_jsonl);
     Ok(())
 }
 
