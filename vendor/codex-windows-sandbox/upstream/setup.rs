@@ -34,7 +34,6 @@ use anyhow::anyhow;
 use codex_protocol::models::PermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
-use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Security::AllocateAndInitializeSid;
 use windows_sys::Win32::Security::CheckTokenMembership;
@@ -43,7 +42,6 @@ use windows_sys::Win32::Security::SECURITY_NT_AUTHORITY;
 
 pub const SETUP_VERSION: u32 = 5;
 pub const SANDBOX_USERNAME: &str = "RunSealSandbox";
-const ERROR_CANCELLED: u32 = 1223;
 const SECURITY_BUILTIN_DOMAIN_RID: u32 = 0x0000_0020;
 const DOMAIN_ALIAS_RID_ADMINS: u32 = 0x0000_0220;
 const SETUP_EXE_FILENAME: &str = "runseal-windows-sandbox-setup.exe";
@@ -633,42 +631,6 @@ fn loopback_proxy_port_from_url(url: &str) -> Option<u16> {
     (port != 0).then_some(port)
 }
 
-fn quote_arg(arg: &str) -> String {
-    let needs = arg.is_empty()
-        || arg
-            .chars()
-            .any(|c| matches!(c, ' ' | '\t' | '\n' | '\r' | '"'));
-    if !needs {
-        return arg.to_string();
-    }
-    let mut out = String::from("\"");
-    let mut bs = 0;
-    for ch in arg.chars() {
-        match ch {
-            '\\' => {
-                bs += 1;
-            }
-            '"' => {
-                out.push_str(&"\\".repeat(bs * 2 + 1));
-                out.push('"');
-                bs = 0;
-            }
-            _ => {
-                if bs > 0 {
-                    out.push_str(&"\\".repeat(bs));
-                    bs = 0;
-                }
-                out.push(ch);
-            }
-        }
-    }
-    if bs > 0 {
-        out.push_str(&"\\".repeat(bs * 2));
-    }
-    out.push('"');
-    out
-}
-
 fn setup_payload_dir(codex_home: &Path) -> PathBuf {
     sandbox_dir(codex_home).join(SETUP_PAYLOAD_DIRNAME)
 }
@@ -1006,13 +968,6 @@ fn run_setup_exe(
     needs_elevation: bool,
     codex_home: &Path,
 ) -> Result<()> {
-    use windows_sys::Win32::System::Threading::GetExitCodeProcess;
-    use windows_sys::Win32::System::Threading::INFINITE;
-    use windows_sys::Win32::System::Threading::WaitForSingleObject;
-    use windows_sys::Win32::UI::Shell::SEE_MASK_FLAG_NO_UI;
-    use windows_sys::Win32::UI::Shell::SEE_MASK_NOCLOSEPROCESS;
-    use windows_sys::Win32::UI::Shell::SHELLEXECUTEINFOW;
-    use windows_sys::Win32::UI::Shell::ShellExecuteExW;
     let exe = find_setup_exe(codex_home);
     let payload_json = serde_json::to_string(payload).map_err(|err| {
         failure(
@@ -1072,72 +1027,17 @@ fn run_setup_exe(
         return Ok(());
     }
 
-    match try_run_setup_exe_via_scheduled_task(payload_json.as_bytes(), codex_home, cleared_report)
-    {
-        Ok(()) => return Ok(()),
-        Err(err) => {
-            log_note(
-                &format!("setup orchestrator: scheduled setup task unavailable: {err}"),
-                Some(&sandbox_dir(codex_home)),
-            );
-            if std::env::var_os("RUNSEAL_WINDOWS_SANDBOX_NO_UAC").is_some() {
-                return Err(err);
-            }
-        }
-    }
-
-    let payload_path = write_setup_payload_file(codex_home, payload_json.as_bytes())?;
-    let exe_w = crate::winutil::to_wide(&exe);
-    let params = format!(
-        "--payload-file {}",
-        quote_arg(&payload_path.to_string_lossy())
-    );
-    let params_w = crate::winutil::to_wide(params);
-    let verb_w = crate::winutil::to_wide("runas");
-    let mut sei: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
-    sei.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
-    sei.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI;
-    sei.lpVerb = verb_w.as_ptr();
-    sei.lpFile = exe_w.as_ptr();
-    sei.lpParameters = params_w.as_ptr();
-    // Hide the window for the elevated helper.
-    sei.nShow = 0; // SW_HIDE
-    let ok = unsafe { ShellExecuteExW(&mut sei) };
-    if ok == 0 || sei.hProcess == 0 {
-        let _ = remove_setup_payload_file(&payload_path);
-        let last_error = unsafe { GetLastError() };
-        let code = if last_error == ERROR_CANCELLED {
-            SetupErrorCode::OrchestratorHelperLaunchCanceled
-        } else {
-            SetupErrorCode::OrchestratorHelperLaunchFailed
-        };
-        return Err(failure(
-            code,
-            format!("ShellExecuteExW failed to launch setup helper: {last_error}"),
-        ));
-    }
-    unsafe {
-        WaitForSingleObject(sei.hProcess, INFINITE);
-        let mut code: u32 = 1;
-        GetExitCodeProcess(sei.hProcess, &mut code);
-        CloseHandle(sei.hProcess);
-        let _ = remove_setup_payload_file(&payload_path);
-        if code != 0 {
-            return Err(report_helper_failure(
-                codex_home,
-                cleared_report,
-                Some(code as i32),
-            ));
-        }
-    }
-    verify_setup_completed(codex_home)?;
-    if let Err(err) = clear_setup_error_report(codex_home) {
+    let result =
+        try_run_setup_exe_via_scheduled_task(payload_json.as_bytes(), codex_home, cleared_report);
+    if let Err(err) = &result {
         log_note(
-            &format!("setup orchestrator: failed to clear setup_error.json after success: {err}"),
+            &format!(
+                "setup orchestrator: scheduled setup task unavailable; run `runseal setup windows-sandbox` from an elevated shell to install or repair it: {err}"
+            ),
             Some(&sandbox_dir(codex_home)),
         );
     }
-    Ok(())
+    result
 }
 
 pub fn run_elevated_setup(

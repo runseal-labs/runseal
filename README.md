@@ -43,6 +43,25 @@ For the Phase 0 local execution baseline:
 runseal exec --policy danger-full-access -- python skill.py
 ```
 
+## Windows sandbox setup
+
+Build all Windows binaries, including the setup helper and command runner:
+
+```powershell
+.\scripts\build-windows.ps1
+```
+
+Run sandbox bootstrap or repair explicitly from an elevated PowerShell session:
+
+```powershell
+.\target\debug\runseal.exe setup windows-sandbox --cwd C:\path\to\workspace
+```
+
+Sandboxed `runseal exec` does not invoke UAC directly. It uses the installed
+`\RunSeal\WindowsSandboxSetup` scheduled task broker; if the broker is missing
+or stale, execution fails closed with `windows sandbox setup unavailable` until
+the setup command above is run again.
+
 ## Intended protocol
 
 ```json

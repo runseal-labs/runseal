@@ -23,9 +23,9 @@ pub enum SetupErrorCode {
     OrchestratorElevationRequired,
     /// Failed to serialize the elevation payload before launching the helper.
     OrchestratorPayloadSerializeFailed,
-    /// Failed to launch the setup helper process (spawn or ShellExecuteExW).
+    /// Failed to launch the setup helper process or scheduled task broker.
     OrchestratorHelperLaunchFailed,
-    /// User canceled the UAC prompt while launching the helper.
+    /// Reserved for explicit interactive setup launch cancellation.
     OrchestratorHelperLaunchCanceled,
     /// Helper exited non-zero and no structured report was available.
     OrchestratorHelperExitNonzero,

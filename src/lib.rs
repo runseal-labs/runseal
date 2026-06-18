@@ -67,6 +67,7 @@ fn run() -> Result<(), String> {
             Ok(())
         }
         [command, flag] if command == "rpc" && flag == "--stdio" => run_rpc_stdio(),
+        [command, rest @ ..] if command == "setup" => run_setup(rest),
         [command, rest @ ..] if command == "explain-policy" => run_explain_policy(rest),
         [command, rest @ ..] if command == "exec" => run_exec(rest),
         [] => Err("missing command".to_string()),
@@ -176,6 +177,39 @@ fn run_exec(args: &[String]) -> Result<(), String> {
         print!("{text}");
     }
     Ok(())
+}
+
+fn run_setup(args: &[String]) -> Result<(), String> {
+    match args {
+        [target] if target == "windows-sandbox" => run_windows_sandbox_setup(&current_dir()),
+        [target, flag, cwd] if target == "windows-sandbox" && flag == "--cwd" => {
+            run_windows_sandbox_setup(&PathBuf::from(cwd))
+        }
+        _ => Err("usage: runseal setup windows-sandbox [--cwd <path>]".to_string()),
+    }
+}
+
+#[cfg(windows)]
+fn run_windows_sandbox_setup(cwd: &Path) -> Result<(), String> {
+    validate_execution_cwd(cwd).map_err(|err| err.message)?;
+    let sandbox_home = backend::windows_sandbox_home(cwd);
+    let real_user = env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string());
+    codex_windows_sandbox::run_elevated_provisioning_setup(&sandbox_home, &real_user)
+        .map_err(|err| format!("windows sandbox setup failed: {err}"))?;
+    println!(
+        "{}",
+        json!({
+            "status": "ok",
+            "setup": "windows-sandbox",
+            "sandbox_home": sandbox_home.to_string_lossy(),
+        })
+    );
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn run_windows_sandbox_setup(_cwd: &Path) -> Result<(), String> {
+    Err("windows sandbox setup is only supported on Windows".to_string())
 }
 
 fn run_explain_policy(args: &[String]) -> Result<(), String> {

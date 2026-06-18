@@ -186,6 +186,7 @@ fn vendored_windows_setup_reuses_elevation_via_scheduled_task() {
 
     assert!(setup_main.contains("run_scheduled_setup_task"));
     assert!(setup_main.contains("ensure_scheduled_setup_task"));
+    assert!(setup_main.contains("ensure_scheduled_setup_task_or_fail"));
     assert!(setup_main.contains("/RL"));
     assert!(setup_main.contains("HIGHEST"));
     assert!(setup_main.contains("\\RunSeal\\WindowsSandboxSetup"));
@@ -196,14 +197,17 @@ fn vendored_windows_setup_reuses_elevation_via_scheduled_task() {
 }
 
 #[test]
-fn vendored_windows_setup_launch_suppresses_shell_error_ui() {
+fn vendored_windows_setup_does_not_shell_elevate_from_exec_path() {
     let setup = VENDOR_SETUP_SOURCES
         .iter()
         .find_map(|(name, source)| (*name == "setup.rs").then_some(*source))
         .expect("setup.rs must be included");
 
-    assert!(setup.contains("SEE_MASK_FLAG_NO_UI"));
-    assert!(setup.contains("SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI"));
+    assert!(!setup.contains("ShellExecuteExW"));
+    assert!(!setup.contains("SEE_MASK"));
+    assert!(!setup.contains("\"runas\""));
+    assert!(!setup.contains("RUNSEAL_WINDOWS_SANDBOX_NO_UAC"));
+    assert!(setup.contains("run `runseal setup windows-sandbox`"));
 }
 
 #[test]

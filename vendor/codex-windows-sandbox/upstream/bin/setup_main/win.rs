@@ -336,6 +336,15 @@ fn ensure_scheduled_setup_task(codex_home: &Path, log: &mut dyn Write) -> Result
     Ok(())
 }
 
+fn ensure_scheduled_setup_task_or_fail(codex_home: &Path, log: &mut dyn Write) -> Result<()> {
+    ensure_scheduled_setup_task(codex_home, log).map_err(|err| {
+        anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperUnknownError,
+            format!("scheduled setup task configure failed: {err}"),
+        ))
+    })
+}
+
 fn spawn_read_acl_helper(payload: &Payload, _log: &mut dyn Write) -> Result<()> {
     let mut read_payload = payload.clone();
     read_payload.mode = SetupMode::ReadAclsOnly;
@@ -993,6 +1002,7 @@ fn run_provision_only(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) ->
 
     lock_sandbox_bin_dir(payload, &sandbox_group_sid, log)?;
     lock_persistent_sandbox_dirs(payload, &sandbox_group_sid, log)?;
+    ensure_scheduled_setup_task_or_fail(&payload.codex_home, log)?;
     log_note("setup provisioning binary completed", Some(sbx_dir));
     Ok(())
 }
@@ -1272,12 +1282,7 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
     }
     if !refresh_only {
         lock_persistent_sandbox_dirs(payload, &sandbox_group_sid, log)?;
-        if let Err(err) = ensure_scheduled_setup_task(&payload.codex_home, log) {
-            log_line(
-                log,
-                &format!("scheduled setup task configure failed: {err:?}"),
-            )?;
-        }
+        ensure_scheduled_setup_task_or_fail(&payload.codex_home, log)?;
     }
 
     unsafe {

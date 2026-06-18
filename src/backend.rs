@@ -1372,8 +1372,14 @@ fn required_plan_path(value: Option<&str>, name: &'static str) -> io::Result<Pat
     })
 }
 
-fn vendor_sandbox_home(cwd: &Path) -> PathBuf {
+#[cfg(windows)]
+pub(crate) fn windows_sandbox_home(cwd: &Path) -> PathBuf {
     cwd.join(".runseal").join("sandbox")
+}
+
+#[cfg(windows)]
+fn vendor_sandbox_home(cwd: &Path) -> PathBuf {
+    windows_sandbox_home(cwd)
 }
 
 #[cfg(windows)]
