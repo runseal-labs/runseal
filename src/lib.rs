@@ -37,6 +37,17 @@ const MAX_ENV_KEY_BYTES: usize = 128;
 const MAX_ENV_VALUE_BYTES: usize = 4096;
 const WINDOWS_SANDBOX_SETUP_FAILED: &str =
     "windows sandbox setup failed; run from an elevated shell";
+const HELP_TEXT: &str = "\
+Usage: runseal <command> [options]
+
+Commands:
+  exec --policy <policy> [--network <mode>] [--cwd <path>] -- <command> [args...]
+  explain-policy --policy <policy> [--network <mode>] [--cwd <path>]
+  capabilities
+  setup windows-sandbox [--cwd <path>]
+  rpc --stdio
+  version
+";
 
 pub fn run_cli() {
     if let Err(err) = run() {
@@ -48,6 +59,14 @@ pub fn run_cli() {
 fn run() -> Result<(), String> {
     let args: Vec<String> = env::args().skip(1).collect();
     match args.as_slice() {
+        [flag] if flag == "--help" || flag == "-h" => {
+            print!("{HELP_TEXT}");
+            Ok(())
+        }
+        [command] if command == "help" => {
+            print!("{HELP_TEXT}");
+            Ok(())
+        }
         [flag] if flag == "--version" => {
             println!("{}", env!("CARGO_PKG_VERSION"));
             Ok(())

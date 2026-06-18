@@ -202,6 +202,25 @@ fn missing_binary_is_explicit_red_state() {
 }
 
 #[test]
+fn help_lists_core_commands() -> Result<()> {
+    let output = run_cli(&["--help"])?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+    let stdout = String::from_utf8(output.stdout)?;
+    assert!(stdout.contains("Usage: runseal <command> [options]"));
+    assert!(stdout.contains("exec --policy <policy>"));
+    assert!(stdout.contains("setup windows-sandbox [--cwd <path>]"));
+    assert!(stdout.contains("capabilities"));
+    assert_no_private_windows_setup_terms(&stdout);
+    Ok(())
+}
+
+#[test]
 fn version_reports_protocol_and_runtime_versions() -> Result<()> {
     let output = run_cli(&["--json", "version"])?;
 
