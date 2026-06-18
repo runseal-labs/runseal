@@ -1080,6 +1080,9 @@ fn run_setup_exe(
                 &format!("setup orchestrator: scheduled setup task unavailable: {err}"),
                 Some(&sandbox_dir(codex_home)),
             );
+            if std::env::var_os("RUNSEAL_WINDOWS_SANDBOX_NO_UAC").is_some() {
+                return Err(err);
+            }
         }
     }
 
