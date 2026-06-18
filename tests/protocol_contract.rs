@@ -1163,6 +1163,55 @@ fn policy_request_uses_approval_required_error_code() -> Result<()> {
 }
 
 #[test]
+fn broad_write_request_uses_approval_required_error_code() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let output = run_rpc(&rpc_request(
+        "execute",
+        json!({
+            "command": [python_bin(), "-c", "print('must not run')"],
+            "cwd": tmp.path(),
+            "policy": {
+                "version": "runseal.policy/v1",
+                "sandbox_level": "workspace-write",
+                "filesystem": {"write": ["*"]},
+                "network": {"mode": "disabled"},
+                "approval": {
+                    "on_broad_write": "request"
+                }
+            }
+        }),
+    ))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = messages
+        .iter()
+        .find(|message| message.get("id") == Some(&json!(1)))
+        .unwrap();
+    assert_eq!(response["error"]["data"]["code"], "APPROVAL_REQUIRED");
+    assert!(
+        response["error"]["data"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("broad write")
+    );
+    let audit_path = response["error"]["data"]["audit_path"]
+        .as_str()
+        .expect("approval required error must return audit_path");
+    let audit_events = read_audit_events(tmp.path(), audit_path)?;
+    assert!(audit_events.iter().any(|event| {
+        event["type"] == "policy.requires_approval"
+            && event["decision"] == "requires_approval"
+            && event["reason"].as_str().unwrap().contains("broad write")
+    }));
+    Ok(())
+}
+
+#[test]
 fn execute_rejects_missing_cwd_without_creating_it() -> Result<()> {
     let tmp = TempDir::new()?;
     let missing_cwd = tmp.path().join("missing-workspace");

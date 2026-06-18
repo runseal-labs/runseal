@@ -280,6 +280,16 @@ impl SandboxPolicy {
             && self.filesystem.write.is_empty()
     }
 
+    pub fn requires_broad_write_approval(&self) -> bool {
+        self.sandbox_level != SandboxLevel::DangerFullAccess
+            && self.approval.on_broad_write == "request"
+            && self
+                .filesystem
+                .write
+                .iter()
+                .any(|entry| is_broad_write_root(entry))
+    }
+
     pub fn required_backend_features(&self) -> Vec<BackendFeature> {
         if self.allows_local_execution() {
             return Vec::new();
@@ -394,16 +404,17 @@ pub fn normalize_policy(
     } else {
         default_network_mode(sandbox_level)
     };
+    let approval = inline_approval(optional_object(object, "approval")?)?;
     let network = inline_network_policy(object.get("network"), network)?;
     let environment = inline_environment(optional_object(object, "environment")?, network.mode)?;
     let resources = inline_resources(optional_object(object, "resources")?, sandbox_level)?;
     let process = inline_process(optional_object(object, "process")?, sandbox_level)?;
-    let approval = inline_approval(optional_object(object, "approval")?)?;
+    let filesystem = inline_filesystem(filesystem, cwd, sandbox_level, &approval)?;
 
     Ok(SandboxPolicy {
         id,
         sandbox_level,
-        filesystem: inline_filesystem(filesystem, cwd, sandbox_level)?,
+        filesystem,
         network,
         environment,
         resources,
@@ -468,6 +479,7 @@ fn inline_filesystem(
     filesystem: Option<&Map<String, Value>>,
     cwd: &Path,
     sandbox_level: SandboxLevel,
+    approval: &ApprovalPolicy,
 ) -> Result<FilesystemPolicy, PolicyError> {
     if let Some(filesystem) = filesystem {
         validate_keys(
@@ -497,11 +509,9 @@ fn inline_filesystem(
     });
     validate_path_entries(&read, "filesystem.read", false)?;
     validate_path_entries(&read_only, "filesystem.read_only", false)?;
-    validate_path_entries(
-        &write,
-        "filesystem.write",
-        sandbox_level != SandboxLevel::DangerFullAccess,
-    )?;
+    let reject_broad_write =
+        sandbox_level != SandboxLevel::DangerFullAccess && approval.on_broad_write != "request";
+    validate_path_entries(&write, "filesystem.write", reject_broad_write)?;
     validate_path_entries(&deny, "filesystem.deny", false)?;
 
     Ok(FilesystemPolicy {
@@ -1577,6 +1587,33 @@ mod tests {
                 }
             }),
             "filesystem.write broad roots require danger-full-access",
+        );
+    }
+
+    #[test]
+    fn broad_write_request_materializes_approval_requirement() {
+        let cwd = PathBuf::from("/workspace");
+        let policy = normalize_policy(
+            &json!({
+                "version": POLICY_VERSION,
+                "sandbox_level": "workspace-write",
+                "filesystem": {
+                    "write": ["*"]
+                },
+                "approval": {
+                    "on_broad_write": "request"
+                }
+            }),
+            &cwd,
+            None,
+        )
+        .unwrap();
+
+        assert!(policy.requires_broad_write_approval());
+        assert_eq!(policy.canonical_json()["filesystem"]["write"], json!(["*"]));
+        assert_eq!(
+            policy.canonical_json()["approval"]["on_broad_write"],
+            "request"
         );
     }
 

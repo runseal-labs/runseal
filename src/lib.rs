@@ -521,6 +521,34 @@ fn execute_command(
         backend: backend_event_json(backend.name(), backend.status(), backend.platform()),
     };
 
+    if policy.requires_broad_write_approval() {
+        let reason = "filesystem broad write requires approval";
+        let event = execution_event_now(
+            json!({
+                "type": "policy.requires_approval",
+                "execution_id": ids.execution_id,
+                "policy_id": policy_id,
+                "policy_hash": policy_hash,
+                "audit_path": audit_path,
+                "decision": "requires_approval",
+                "reason": reason,
+            }),
+            &event_context,
+        );
+        write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
+
+        return Err(RunSealError::with_details(
+            "APPROVAL_REQUIRED",
+            reason,
+            json!({
+                "execution_id": ids.execution_id,
+                "session_id": ids.session_id,
+                "seal_id": ids.seal_id,
+                "audit_path": audit_path,
+            }),
+        ));
+    }
+
     if policy.denies_execution_without_backend() {
         let reason = "filesystem write denied by policy";
         let requires_approval = policy.approval.on_violation == "request";
