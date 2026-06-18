@@ -16,6 +16,7 @@ The public contract lives in `runseal-labs/rfcs`. This repo implements that cont
 - Treat the current implementation as greenfield until an accepted public compatibility RFC says otherwise.
 - Do not treat existing repository code, tests, fixtures, examples, drafts, or early releases as legacy behavior that must be preserved; this is a new implementation with no historical baggage.
 - There is no backward-compatibility obligation for early scaffold behavior, provisional field names, aliases, fixtures, audit shapes, CLI details, JSON-RPC details, or test expectations.
+- Breaking changes to provisional code, fixtures, tests, CLI flags, JSON fields, and audit shapes are expected while the public contract is being established; choose the clean current design over preserving prior local behavior.
 - Prefer replacing incorrect provisional behavior over adding adapters, compatibility shims, version gates, silent fallbacks, deprecated aliases, or migration paths.
 - Add compatibility behavior only when an accepted RFC explicitly requires it.
 
