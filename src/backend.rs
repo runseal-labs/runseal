@@ -1,5 +1,7 @@
 use crate::policy::{SandboxLevel, SandboxPolicy};
 use serde_json::{json, Value};
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -165,6 +167,23 @@ impl PlatformSandboxPlan {
                 "mode": self.network_mode,
             }
         })
+    }
+
+    pub fn prepare_runtime_roots(&self) -> io::Result<Vec<String>> {
+        let mut prepared = Vec::new();
+        for root in [
+            self.runtime_root.as_ref(),
+            self.profile_root.as_ref(),
+            self.synthetic_home.as_ref(),
+            self.temp_root.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            fs::create_dir_all(root)?;
+            prepared.push(root.clone());
+        }
+        Ok(prepared)
     }
 }
 

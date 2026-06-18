@@ -382,6 +382,49 @@ fn execute_command(
         Ok(plan) => plan,
         Err(err) => {
             let details = err.details_json();
+            if let Some(plan) = &err.plan {
+                match plan.prepare_runtime_roots() {
+                    Ok(prepared_roots) => {
+                        let event = json!({
+                            "type": "sandbox.prepared",
+                            "execution_id": execution_id,
+                            "policy_id": policy_id,
+                            "policy_hash": policy_hash,
+                            "audit_path": audit_path.clone(),
+                            "decision": "prepared",
+                            "prepared_roots": prepared_roots,
+                            "platform_plan": plan.json(),
+                        });
+                        write_audit_event(&mut audit, &event)?;
+                    }
+                    Err(setup_err) => {
+                        let event = json!({
+                            "type": "sandbox.setup_failed",
+                            "execution_id": execution_id,
+                            "policy_id": policy_id,
+                            "policy_hash": policy_hash,
+                            "audit_path": audit_path.clone(),
+                            "decision": "failed",
+                            "reason": setup_err.to_string(),
+                            "platform_plan": plan.json(),
+                        });
+                        write_audit_event(&mut audit, &event)?;
+
+                        let mut details = details;
+                        if let Some(details) = details.as_object_mut() {
+                            details.insert("audit_path".to_string(), json!(audit_path.clone()));
+                            details.insert("setup_error".to_string(), json!(setup_err.to_string()));
+                        }
+
+                        return Err(RunSealError::with_details(
+                            "INTERNAL_ERROR",
+                            "failed to prepare sandbox runtime roots",
+                            details,
+                        ));
+                    }
+                }
+            }
+
             let event = json!({
                 "type": "sandbox.backend_capability",
                 "execution_id": execution_id,

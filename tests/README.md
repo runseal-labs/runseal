@@ -14,6 +14,7 @@ The tests are black-box by design:
 - Capability reporting through `runseal capabilities` and `getCapabilities`.
 - Windows hosts select the Windows reference backend scaffold and still fail closed for unsupported sandbox levels.
 - Windows fail-closed errors include a `PlatformSandboxPlan` preview for runtime root and synthetic home planning.
+- Windows fail-closed setup creates planned runtime roots before returning unsupported.
 - Execution results include a `PlatformSandboxPlan` summary for the selected backend.
 - Policy explanation through `runseal explain-policy`.
 - JSON-RPC behavior through `runseal rpc --stdio`.

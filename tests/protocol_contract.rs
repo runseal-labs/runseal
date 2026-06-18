@@ -311,6 +311,18 @@ fn sandboxed_policy_without_backend_fails_closed() -> Result<()> {
             .as_array()
             .expect("read-only write roots must be an array")
             .is_empty());
+        for key in [
+            "runtime_root",
+            "profile_root",
+            "synthetic_home",
+            "temp_root",
+        ] {
+            let root = PathBuf::from(plan[key].as_str().expect("planned root must be a string"));
+            assert!(root.is_dir(), "planned root must exist: {}", root.display());
+        }
+        assert!(audit_events
+            .iter()
+            .any(|event| event["type"] == "sandbox.prepared" && event["decision"] == "prepared"));
     }
     assert!(messages
         .iter()
