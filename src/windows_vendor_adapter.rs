@@ -68,6 +68,40 @@ impl WindowsVendorSandboxProfile {
             Some(WindowsVendorTokenMode::ReadOnlyCapability)
         }
     }
+
+    pub(crate) fn read_roots(&self) -> Vec<String> {
+        self.entries_with_access(WindowsVendorFilesystemAccess::Read)
+    }
+
+    pub(crate) fn write_roots(&self) -> Vec<String> {
+        self.entries_with_access(WindowsVendorFilesystemAccess::Write)
+    }
+
+    pub(crate) fn deny_roots(&self) -> Vec<String> {
+        self.entries_with_access(WindowsVendorFilesystemAccess::Deny)
+    }
+
+    pub(crate) fn managed_proxy_required(&self) -> bool {
+        match self {
+            Self::Disabled => false,
+            Self::Managed {
+                managed_proxy_required,
+                ..
+            } => *managed_proxy_required,
+        }
+    }
+
+    fn entries_with_access(&self, access: WindowsVendorFilesystemAccess) -> Vec<String> {
+        match self {
+            Self::Disabled => Vec::new(),
+            Self::Managed { filesystem, .. } => filesystem
+                .entries
+                .iter()
+                .filter(|entry| entry.access == access)
+                .map(|entry| entry.path.clone())
+                .collect(),
+        }
+    }
 }
 
 fn filesystem_entries(policy: &SandboxPolicy) -> Vec<WindowsVendorFilesystemEntry> {
@@ -151,6 +185,22 @@ mod tests {
             profile.token_mode(),
             Some(WindowsVendorTokenMode::WritableRootsCapability)
         );
+        assert_eq!(
+            profile.read_roots(),
+            vec![cwd.to_string_lossy().to_string()]
+        );
+        assert_eq!(
+            profile.write_roots(),
+            vec![cwd.to_string_lossy().to_string()]
+        );
+        assert_eq!(
+            profile.deny_roots(),
+            [".git", ".agents", ".codex"]
+                .into_iter()
+                .map(|path| cwd.join(path).to_string_lossy().to_string())
+                .collect::<Vec<_>>()
+        );
+        assert!(profile.managed_proxy_required());
     }
 
     #[test]
@@ -161,5 +211,9 @@ mod tests {
 
         assert_eq!(profile, WindowsVendorSandboxProfile::Disabled);
         assert_eq!(profile.token_mode(), None);
+        assert!(profile.read_roots().is_empty());
+        assert!(profile.write_roots().is_empty());
+        assert!(profile.deny_roots().is_empty());
+        assert!(!profile.managed_proxy_required());
     }
 }

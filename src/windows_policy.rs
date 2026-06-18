@@ -1,4 +1,4 @@
-use crate::policy::{NetworkMode, SandboxLevel, SandboxPolicy};
+use crate::policy::{SandboxLevel, SandboxPolicy};
 use crate::windows_vendor_adapter::{WindowsVendorSandboxProfile, WindowsVendorTokenMode};
 use std::env;
 use std::path::Path;
@@ -416,9 +416,10 @@ impl WindowsPolicyPlan {
                 WindowsFilesystemMode::WritableRootsCapability
             }
         };
-        let guard = match policy.network.mode {
-            NetworkMode::Disabled => WindowsNetworkGuard::Disabled,
-            NetworkMode::Proxy => WindowsNetworkGuard::Proxy,
+        let guard = if vendor_profile.managed_proxy_required() {
+            WindowsNetworkGuard::Proxy
+        } else {
+            WindowsNetworkGuard::Disabled
         };
         let managed_proxy = match guard {
             WindowsNetworkGuard::Disabled => WindowsManagedProxy::None,
@@ -428,10 +429,10 @@ impl WindowsPolicyPlan {
         Self {
             filesystem: WindowsFilesystemPlan {
                 mode,
-                read_roots: policy.filesystem.read.clone(),
-                write_roots: policy.filesystem.write.clone(),
+                read_roots: vendor_profile.read_roots(),
+                write_roots: vendor_profile.write_roots(),
                 runtime_write_roots,
-                protected_roots: policy.filesystem.deny.clone(),
+                protected_roots: vendor_profile.deny_roots(),
                 private_protected_roots: host_roots.protected_roots(policy),
             },
             network: WindowsNetworkPlan {
