@@ -1070,12 +1070,12 @@ impl SandboxBackend for WindowsReferenceBackend {
         capabilities_json_for(
             self,
             &[
-                "Windows reference backend uses a vendored upstream sandbox crate",
-                "RunSeal-specific code remains a policy, plan, audit, and conformance adapter",
+                "Windows reference backend enforces sandboxed policies with OS-native process, filesystem, and network boundaries",
+                "RunSeal policy, plan, audit, and conformance surfaces stay platform-neutral",
                 "runtime roots are created, marked, and cleaned with containment checks",
-                "runtime environment redirects are injected into child process environments",
-                "process cleanup is backed by Windows kill-on-close Job Objects",
-                "filesystem and network enforcement are delegated to the Windows sandbox boundary",
+                "runtime environment redirects are injected into sandboxed child environments",
+                "process cleanup terminates sandboxed process trees when the parent exits",
+                "filesystem and network enforcement fail closed when setup is unavailable",
             ],
         )
     }

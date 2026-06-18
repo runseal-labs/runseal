@@ -174,6 +174,12 @@ fn assert_no_private_windows_setup_terms(text: &str) {
         "kill-on-close-job",
         "orchestrator_",
         "helper_",
+        "vendored",
+        "upstream",
+        "Job Object",
+        "Codex",
+        "OpenAI",
+        "WindowsApps",
         "offline",
         "online",
     ] {
