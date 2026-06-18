@@ -49,7 +49,53 @@ pub(crate) enum WindowsFilesystemRuleSource {
     PolicyRead,
 }
 
-impl WindowsFilesystemRule {
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WindowsFilesystemAclPlan {
+    entries: Vec<WindowsFilesystemAclEntry>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WindowsFilesystemAclEntry {
+    access: WindowsFilesystemAccess,
+    source: WindowsFilesystemRuleSource,
+    root: String,
+    scope: WindowsFilesystemAclScope,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WindowsFilesystemAclScope {
+    RootAndDescendants,
+}
+
+impl WindowsFilesystemAclPlan {
+    pub(crate) fn from_rules(rules: &[WindowsFilesystemRule]) -> Self {
+        Self {
+            entries: rules
+                .iter()
+                .map(WindowsFilesystemAclEntry::from_rule)
+                .collect(),
+        }
+    }
+
+    pub(crate) fn entries(&self) -> &[WindowsFilesystemAclEntry] {
+        &self.entries
+    }
+}
+
+impl WindowsFilesystemAclEntry {
+    fn from_rule(rule: &WindowsFilesystemRule) -> Self {
+        Self {
+            access: rule.access,
+            source: rule.source,
+            root: rule.root.clone(),
+            scope: WindowsFilesystemAclScope::RootAndDescendants,
+        }
+    }
+
+    pub(crate) fn root(&self) -> &str {
+        &self.root
+    }
+
     pub(crate) fn requires_existing_root(&self) -> bool {
         matches!(
             self.source,
@@ -57,6 +103,28 @@ impl WindowsFilesystemRule {
                 | WindowsFilesystemRuleSource::PolicyWrite
                 | WindowsFilesystemRuleSource::RuntimeWrite
         )
+    }
+
+    pub(crate) fn has_consistent_access_source(&self) -> bool {
+        matches!(
+            (self.access, self.source),
+            (
+                WindowsFilesystemAccess::Deny,
+                WindowsFilesystemRuleSource::ProtectedDeny
+                    | WindowsFilesystemRuleSource::PrivateDeny
+            ) | (
+                WindowsFilesystemAccess::ReadWrite,
+                WindowsFilesystemRuleSource::PolicyWrite
+                    | WindowsFilesystemRuleSource::RuntimeWrite
+            ) | (
+                WindowsFilesystemAccess::ReadOnly,
+                WindowsFilesystemRuleSource::PolicyRead
+            )
+        )
+    }
+
+    pub(crate) fn is_tree_scoped(&self) -> bool {
+        self.scope == WindowsFilesystemAclScope::RootAndDescendants
     }
 }
 
@@ -610,6 +678,7 @@ mod tests {
 
         let plan = WindowsPolicyPlan::from_policy_and_runtime_roots(&policy, None);
         let rules = plan.filesystem.enforcement_rules();
+        let acl_plan = WindowsFilesystemAclPlan::from_rules(&rules);
 
         assert_eq!(
             rules[0],
@@ -630,6 +699,17 @@ mod tests {
         assert!(
             rules.iter().all(|rule| rule.root != "/workspace"
                 || rule.access != WindowsFilesystemAccess::ReadOnly)
+        );
+        assert_eq!(acl_plan.entries().len(), rules.len());
+        assert_eq!(acl_plan.entries()[0].root(), rules[0].root.as_str());
+        assert!(!acl_plan.entries()[0].requires_existing_root());
+        assert!(acl_plan.entries()[0].has_consistent_access_source());
+        assert!(acl_plan.entries()[0].is_tree_scoped());
+        assert!(
+            acl_plan
+                .entries()
+                .iter()
+                .any(|entry| entry.root() == "/workspace" && entry.requires_existing_root())
         );
     }
 

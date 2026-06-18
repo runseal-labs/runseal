@@ -1,6 +1,7 @@
 use crate::policy::{BackendFeature, SandboxLevel, SandboxPolicy};
 use crate::windows_plan::{
-    WindowsFilesystemRule, WindowsHostRoots, WindowsPolicyPlan, WindowsRuntimeRoots,
+    WindowsFilesystemAclEntry, WindowsFilesystemAclPlan, WindowsFilesystemRule, WindowsHostRoots,
+    WindowsPolicyPlan, WindowsRuntimeRoots,
 };
 use serde_json::Map;
 use serde_json::{Value, json};
@@ -333,14 +334,12 @@ impl PlatformSandboxPlan {
     }
 
     pub fn prepare_filesystem_rules(&self) -> io::Result<Vec<String>> {
+        let acl_plan = WindowsFilesystemAclPlan::from_rules(&self.private_filesystem_rules);
         let mut prepared = Vec::new();
-        for rule in &self.private_filesystem_rules {
-            validate_private_filesystem_rule_root(&rule.root)?;
-            if rule.requires_existing_root() {
-                validate_existing_filesystem_rule_root(rule)?;
-            }
-            if !prepared.iter().any(|root| root == &rule.root) {
-                prepared.push(rule.root.clone());
+        for entry in acl_plan.entries() {
+            validate_private_filesystem_acl_entry(entry)?;
+            if !prepared.iter().any(|root| root == entry.root()) {
+                prepared.push(entry.root().to_string());
             }
         }
         Ok(prepared)
@@ -429,6 +428,32 @@ fn prepare_unique_runtime_root(prepared: &mut Vec<String>, root: &str) -> io::Re
     Ok(())
 }
 
+fn validate_private_filesystem_acl_entry(entry: &WindowsFilesystemAclEntry) -> io::Result<()> {
+    validate_private_filesystem_rule_root(entry.root())?;
+    if !entry.has_consistent_access_source() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "inconsistent private filesystem ACL entry for root: {}",
+                entry.root()
+            ),
+        ));
+    }
+    if !entry.is_tree_scoped() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "private filesystem ACL entry must be tree scoped: {}",
+                entry.root()
+            ),
+        ));
+    }
+    if entry.requires_existing_root() {
+        validate_existing_filesystem_rule_root(entry)?;
+    }
+    Ok(())
+}
+
 fn validate_private_filesystem_rule_root(root: &str) -> io::Result<()> {
     if root.is_empty() || root == "*" {
         return Err(invalid_filesystem_rule_root(root));
@@ -443,14 +468,14 @@ fn validate_private_filesystem_rule_root(root: &str) -> io::Result<()> {
     Ok(())
 }
 
-fn validate_existing_filesystem_rule_root(rule: &WindowsFilesystemRule) -> io::Result<()> {
-    let metadata = fs::symlink_metadata(&rule.root).map_err(|err| {
+fn validate_existing_filesystem_rule_root(entry: &WindowsFilesystemAclEntry) -> io::Result<()> {
+    let metadata = fs::symlink_metadata(entry.root()).map_err(|err| {
         if err.kind() == io::ErrorKind::NotFound {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!(
                     "private filesystem rule root must exist before setup: {}",
-                    rule.root
+                    entry.root()
                 ),
             )
         } else {
@@ -462,7 +487,7 @@ fn validate_existing_filesystem_rule_root(rule: &WindowsFilesystemRule) -> io::R
             io::ErrorKind::PermissionDenied,
             format!(
                 "refusing to prepare symlinked filesystem rule root: {}",
-                rule.root
+                entry.root()
             ),
         ));
     }
@@ -471,7 +496,7 @@ fn validate_existing_filesystem_rule_root(rule: &WindowsFilesystemRule) -> io::R
             io::ErrorKind::InvalidInput,
             format!(
                 "private filesystem rule root must be a directory: {}",
-                rule.root
+                entry.root()
             ),
         ));
     }
@@ -1479,6 +1504,30 @@ mod tests {
         let prepared = plan.prepare_filesystem_rules()?;
 
         assert_eq!(prepared, vec![path_string(&missing)]);
+        Ok(())
+    }
+
+    #[test]
+    fn filesystem_rule_setup_rejects_inconsistent_acl_sources() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&cwd)?;
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+        let mut plan =
+            WindowsReferenceBackend.fail_closed_plan("exec_inconsistent_acl", &cwd, &policy);
+        plan.private_filesystem_rules = vec![WindowsFilesystemRule {
+            access: WindowsFilesystemAccess::Deny,
+            source: WindowsFilesystemRuleSource::PolicyWrite,
+            root: path_string(&cwd),
+        }];
+
+        let err = plan.prepare_filesystem_rules().unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(
+            err.to_string()
+                .contains("inconsistent private filesystem ACL entry")
+        );
         Ok(())
     }
 
