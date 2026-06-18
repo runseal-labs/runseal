@@ -204,6 +204,78 @@ fn dispose_session_is_noop_for_stdio_mvp() -> Result<()> {
 }
 
 #[test]
+fn execute_rejects_unsupported_request_fields() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let unsupported_cases = [
+        ("env", json!({"CI": "1"})),
+        ("stdin", json!({"mode": "empty"})),
+        ("timeout_ms", json!(1000)),
+        ("metadata", json!({"agent_id": "agent_test"})),
+    ];
+
+    for (field, value) in unsupported_cases {
+        let mut request = json!({
+            "command": ["python3", "-c", "print('must not run')"],
+            "cwd": tmp.path(),
+            "policy": "danger-full-access"
+        });
+        request
+            .as_object_mut()
+            .expect("request must be an object")
+            .insert(field.to_string(), value);
+
+        let output = run_rpc(&rpc_request("execute", request))?;
+
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let messages = stdout_json_lines(&output)?;
+        let response = &messages[0];
+
+        assert_eq!(response["error"]["data"]["code"], "INVALID_REQUEST");
+        assert!(
+            response["error"]["data"]["reason"]
+                .as_str()
+                .unwrap_or_default()
+                .contains(&format!("params.{field} is not supported"))
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn explain_policy_rejects_unsupported_request_fields() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let output = run_rpc(&rpc_request(
+        "explainPolicy",
+        json!({
+            "cwd": tmp.path(),
+            "policy": "workspace-write",
+            "metadata": {"agent_id": "agent_test"}
+        }),
+    ))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = &messages[0];
+
+    assert_eq!(response["error"]["data"]["code"], "INVALID_REQUEST");
+    assert!(
+        response["error"]["data"]["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("params.metadata is not supported")
+    );
+    Ok(())
+}
+
+#[test]
 fn explain_policy_returns_effective_hash_and_network_mode() -> Result<()> {
     let tmp = TempDir::new()?;
     let cwd = tmp.path().to_string_lossy().to_string();

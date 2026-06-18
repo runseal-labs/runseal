@@ -5,7 +5,7 @@ mod policy;
 use audit::AuditWriter;
 use backend::{BackendError, SandboxBackend, active_backend};
 use policy::{NetworkMode, POLICY_VERSION, PolicyError, SandboxPolicy, normalize_policy};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use std::env;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -290,6 +290,12 @@ fn parse_network_mode(value: &str) -> Result<NetworkMode, String> {
 }
 
 fn explain_policy_from_params(params: &Value) -> Result<Value, RunSealError> {
+    let params = params_object(params, "explainPolicy")?;
+    validate_param_keys(
+        params,
+        "explainPolicy",
+        &["policy", "cwd", "network", "network_mode"],
+    )?;
     let cwd = params
         .get("cwd")
         .and_then(Value::as_str)
@@ -306,6 +312,12 @@ fn explain_policy_from_params(params: &Value) -> Result<Value, RunSealError> {
 }
 
 fn execute_from_params(params: &Value) -> Result<(Vec<Value>, Value), RunSealError> {
+    let params = params_object(params, "execute")?;
+    validate_param_keys(
+        params,
+        "execute",
+        &["command", "cwd", "policy", "network", "network_mode"],
+    )?;
     let command = params
         .get("command")
         .and_then(Value::as_array)
@@ -333,6 +345,8 @@ fn execute_from_params(params: &Value) -> Result<(Vec<Value>, Value), RunSealErr
 }
 
 fn execution_not_found_from_params(params: &Value) -> Result<Value, RunSealError> {
+    let params = params_object(params, "execution lookup")?;
+    validate_param_keys(params, "execution lookup", &["execution_id"])?;
     let execution_id = required_string_param(params, "execution_id")?;
 
     Err(RunSealError::with_details(
@@ -345,6 +359,8 @@ fn execution_not_found_from_params(params: &Value) -> Result<Value, RunSealError
 }
 
 fn dispose_session_from_params(params: &Value) -> Result<Value, RunSealError> {
+    let params = params_object(params, "disposeSession")?;
+    validate_param_keys(params, "disposeSession", &["session_id"])?;
     let session_id = required_string_param(params, "session_id")?;
 
     Ok(json!({
@@ -353,7 +369,38 @@ fn dispose_session_from_params(params: &Value) -> Result<Value, RunSealError> {
     }))
 }
 
-fn required_string_param(params: &Value, field: &'static str) -> Result<String, RunSealError> {
+fn params_object<'a>(
+    params: &'a Value,
+    method: &'static str,
+) -> Result<&'a Map<String, Value>, RunSealError> {
+    params.as_object().ok_or_else(|| {
+        RunSealError::new(
+            "INVALID_REQUEST",
+            format!("{method} params must be an object"),
+        )
+    })
+}
+
+fn validate_param_keys(
+    params: &Map<String, Value>,
+    method: &'static str,
+    allowed_keys: &[&'static str],
+) -> Result<(), RunSealError> {
+    for key in params.keys() {
+        if !allowed_keys.contains(&key.as_str()) {
+            return Err(RunSealError::new(
+                "INVALID_REQUEST",
+                format!("params.{key} is not supported by {method}"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn required_string_param(
+    params: &Map<String, Value>,
+    field: &'static str,
+) -> Result<String, RunSealError> {
     params
         .get(field)
         .and_then(Value::as_str)
@@ -362,7 +409,9 @@ fn required_string_param(params: &Value, field: &'static str) -> Result<String, 
         .ok_or_else(|| RunSealError::new("INVALID_REQUEST", format!("params.{field} is required")))
 }
 
-fn network_override_from_params(params: &Value) -> Result<Option<NetworkMode>, RunSealError> {
+fn network_override_from_params(
+    params: &Map<String, Value>,
+) -> Result<Option<NetworkMode>, RunSealError> {
     let Some(value) = params.get("network").or_else(|| params.get("network_mode")) else {
         return Ok(None);
     };
