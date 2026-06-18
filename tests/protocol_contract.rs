@@ -1001,6 +1001,12 @@ fn sandboxed_policy_without_backend_fails_closed() -> Result<()> {
         assert_eq!(plan["network"]["mode"], "disabled");
         assert_eq!(plan["network"]["direct_egress"], "deny");
         assert_eq!(plan["network"]["managed_proxy"], "none");
+        assert_eq!(plan["setup"]["requires_runtime_roots"], true);
+        assert_eq!(plan["setup"]["requires_runtime_environment"], true);
+        assert_eq!(plan["setup"]["requires_runtime_cleanup"], true);
+        assert_eq!(plan["setup"]["requires_network_guard"], true);
+        assert_eq!(plan["setup"]["requires_managed_proxy"], false);
+        assert_eq!(plan["setup"]["fail_closed_on_setup_error"], true);
         assert_eq!(
             plan["required_backend_features"],
             json!(["filesystem_policy", "network_disabled"])
@@ -1151,6 +1157,18 @@ fn execute_rpc_streams_events_and_final_result() -> Result<()> {
     assert_eq!(
         response["result"]["platform_plan"]["environment"]["inherit"],
         "minimal"
+    );
+    assert_eq!(
+        response["result"]["platform_plan"]["setup"]["requires_runtime_roots"],
+        false
+    );
+    assert_eq!(
+        response["result"]["platform_plan"]["setup"]["requires_network_guard"],
+        false
+    );
+    assert_eq!(
+        response["result"]["platform_plan"]["setup"]["fail_closed_on_setup_error"],
+        false
     );
     assert!(
         response["result"]["audit_path"]

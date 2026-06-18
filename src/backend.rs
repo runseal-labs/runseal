@@ -257,7 +257,19 @@ impl PlatformSandboxPlan {
                 "proxy": self.environment_proxy,
                 "runtime": environment_runtime_json(&self.environment_runtime),
             },
+            "setup": self.setup_json(),
             "required_backend_features": self.required_backend_features.clone(),
+        })
+    }
+
+    fn setup_json(&self) -> Value {
+        json!({
+            "requires_runtime_roots": self.runtime_root.is_some(),
+            "requires_runtime_environment": !self.environment_runtime.is_empty(),
+            "requires_runtime_cleanup": self.runtime_root.is_some(),
+            "requires_network_guard": self.network_direct_egress == "deny",
+            "requires_managed_proxy": self.network_managed_proxy == "required",
+            "fail_closed_on_setup_error": self.is_sandbox_enforced(),
         })
     }
 
@@ -1086,6 +1098,13 @@ mod tests {
         assert_eq!(plan.network_direct_egress, "deny");
         assert_eq!(plan.network_managed_proxy, "required");
         assert!(plan.environment_proxy);
+        let plan_json = plan.json();
+        assert_eq!(plan_json["setup"]["requires_runtime_roots"], true);
+        assert_eq!(plan_json["setup"]["requires_runtime_environment"], true);
+        assert_eq!(plan_json["setup"]["requires_runtime_cleanup"], true);
+        assert_eq!(plan_json["setup"]["requires_network_guard"], true);
+        assert_eq!(plan_json["setup"]["requires_managed_proxy"], true);
+        assert_eq!(plan_json["setup"]["fail_closed_on_setup_error"], true);
         assert_eq!(WindowsReferenceBackend.supported_features(), &[]);
         Ok(())
     }
