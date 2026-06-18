@@ -102,6 +102,7 @@ pub struct PlatformSandboxPlan {
     pub enforcement: &'static str,
     pub cwd: String,
     pub runtime_root: Option<String>,
+    pub profile_root: Option<String>,
     pub synthetic_home: Option<String>,
     pub temp_root: Option<String>,
     pub filesystem_read: Vec<String>,
@@ -128,6 +129,7 @@ impl PlatformSandboxPlan {
             enforcement: "local-execution",
             cwd: path_string(cwd),
             runtime_root: None,
+            profile_root: None,
             synthetic_home: None,
             temp_root: None,
             filesystem_read: policy.filesystem.read.clone(),
@@ -151,6 +153,7 @@ impl PlatformSandboxPlan {
             "enforcement": self.enforcement,
             "cwd": self.cwd.clone(),
             "runtime_root": self.runtime_root.clone(),
+            "profile_root": self.profile_root.clone(),
             "synthetic_home": self.synthetic_home.clone(),
             "temp_root": self.temp_root.clone(),
             "filesystem": {
@@ -173,10 +176,19 @@ pub struct BackendError {
     pub backend_status: &'static str,
     pub platform: &'static str,
     pub support: &'static str,
+    pub plan: Option<PlatformSandboxPlan>,
 }
 
 impl BackendError {
     fn unsupported(backend: &dyn SandboxBackend, policy: &SandboxPolicy) -> Self {
+        Self::unsupported_with_plan(backend, policy, None)
+    }
+
+    fn unsupported_with_plan(
+        backend: &dyn SandboxBackend,
+        policy: &SandboxPolicy,
+        plan: Option<PlatformSandboxPlan>,
+    ) -> Self {
         Self {
             code: "BACKEND_CAPABILITY_MISSING",
             reason: format!(
@@ -188,18 +200,25 @@ impl BackendError {
             backend_status: backend.status(),
             platform: backend.platform(),
             support: CapabilityStatus::Unsupported.as_str(),
+            plan,
         }
     }
 
     pub fn details_json(&self) -> Value {
-        json!({
+        let mut details = json!({
             "backend": {
                 "name": self.backend,
                 "status": self.backend_status,
                 "platform": self.platform,
             },
             "support": self.support,
-        })
+        });
+
+        if let (Some(details), Some(plan)) = (details.as_object_mut(), &self.plan) {
+            details.insert("platform_plan".to_string(), plan.json());
+        }
+
+        details
     }
 }
 
@@ -277,6 +296,40 @@ impl SandboxBackend for LocalBackend {
     }
 }
 
+impl WindowsReferenceBackend {
+    fn fail_closed_plan(
+        &self,
+        execution_id: &str,
+        cwd: &Path,
+        policy: &SandboxPolicy,
+    ) -> PlatformSandboxPlan {
+        let runtime_root = cwd.join(".runseal").join("runtime").join(execution_id);
+        let profile_root = runtime_root.join("profile");
+        let synthetic_home = runtime_root.join("home");
+        let temp_root = runtime_root.join("temp");
+
+        PlatformSandboxPlan {
+            backend: self.name(),
+            backend_status: self.status(),
+            platform: self.platform(),
+            execution_id: execution_id.to_string(),
+            policy_id: policy.id.clone(),
+            policy_hash: policy.hash(),
+            sandbox_level: policy.sandbox_level.as_str(),
+            enforcement: "fail-closed-preview",
+            cwd: path_string(cwd),
+            runtime_root: Some(path_string(&runtime_root)),
+            profile_root: Some(path_string(&profile_root)),
+            synthetic_home: Some(path_string(&synthetic_home)),
+            temp_root: Some(path_string(&temp_root)),
+            filesystem_read: policy.filesystem.read.clone(),
+            filesystem_write: policy.filesystem.write.clone(),
+            filesystem_deny: policy.filesystem.deny.clone(),
+            network_mode: policy.network.mode.as_str(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct WindowsReferenceBackend;
 
@@ -315,7 +368,12 @@ impl SandboxBackend for WindowsReferenceBackend {
                 policy,
             ))
         } else {
-            Err(BackendError::unsupported(self, policy))
+            let plan = self.fail_closed_plan(execution_id, cwd, policy);
+            Err(BackendError::unsupported_with_plan(
+                self,
+                policy,
+                Some(plan),
+            ))
         }
     }
 

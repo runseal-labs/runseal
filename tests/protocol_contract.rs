@@ -270,6 +270,22 @@ fn sandboxed_policy_without_backend_fails_closed() -> Result<()> {
         expected_backend_name()
     );
     assert_eq!(response["error"]["data"]["support"], "unsupported");
+    if cfg!(windows) {
+        let plan = &response["error"]["data"]["platform_plan"];
+        assert_eq!(plan["enforcement"], "fail-closed-preview");
+        assert_eq!(plan["sandbox_level"], "read-only");
+        assert!(plan["runtime_root"]
+            .as_str()
+            .unwrap_or_default()
+            .contains(".runseal"));
+        assert!(plan["profile_root"].as_str().is_some());
+        assert!(plan["synthetic_home"].as_str().is_some());
+        assert!(plan["temp_root"].as_str().is_some());
+        assert!(plan["filesystem"]["write"]
+            .as_array()
+            .expect("read-only write roots must be an array")
+            .is_empty());
+    }
     assert!(messages
         .iter()
         .all(|message| message.get("method") != Some(&json!("event"))));
