@@ -484,7 +484,9 @@ impl PlatformSandboxPlan {
             return Ok(());
         }
         let marker = runtime_root.join(RUNTIME_ROOT_MARKER);
-        if !marker.is_file() || fs::read_to_string(&marker)? != self.execution_id {
+        if !runtime_marker_is_regular_file(&marker)?
+            || fs::read_to_string(&marker)? != self.execution_id
+        {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 format!(
@@ -543,7 +545,7 @@ impl PlatformSandboxPlan {
             ));
         }
         let marker = runtime_root.join(RUNTIME_ROOT_MARKER);
-        if !marker.is_file() {
+        if !runtime_marker_is_regular_file(&marker)? {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 format!(
@@ -609,6 +611,14 @@ fn validate_runtime_root_not_symlink(root: &Path, operation: &str) -> io::Result
         )),
         Ok(_) => Ok(()),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
+fn runtime_marker_is_regular_file(marker: &Path) -> io::Result<bool> {
+    match fs::symlink_metadata(marker) {
+        Ok(metadata) => Ok(metadata.is_file() && !metadata.file_type().is_symlink()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
         Err(err) => Err(err),
     }
 }
@@ -1657,9 +1667,19 @@ mod tests {
         std::os::unix::fs::symlink(target, link)
     }
 
+    #[cfg(unix)]
+    fn symlink_file_for_test(target: &Path, link: &Path) -> io::Result<()> {
+        std::os::unix::fs::symlink(target, link)
+    }
+
     #[cfg(windows)]
     fn symlink_dir_for_test(target: &Path, link: &Path) -> io::Result<()> {
         std::os::windows::fs::symlink_dir(target, link)
+    }
+
+    #[cfg(windows)]
+    fn symlink_file_for_test(target: &Path, link: &Path) -> io::Result<()> {
+        std::os::windows::fs::symlink_file(target, link)
     }
 
     #[derive(Default)]
@@ -2739,6 +2759,35 @@ mod tests {
 
     #[cfg(any(unix, windows))]
     #[test]
+    fn runtime_setup_refuses_symlinked_runtime_marker() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&cwd)?;
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+        let plan =
+            WindowsReferenceBackend.fail_closed_plan("exec_setup_marker_symlink", &cwd, &policy);
+        let runtime_root = PathBuf::from(plan.runtime_root.as_ref().unwrap());
+        fs::create_dir_all(&runtime_root)?;
+        let marker_target = tmp.path().join("marker-target");
+        fs::write(&marker_target, plan.execution_id.as_bytes())?;
+        if let Err(err) =
+            symlink_file_for_test(&marker_target, &runtime_root.join(RUNTIME_ROOT_MARKER))
+        {
+            if err.kind() == io::ErrorKind::PermissionDenied {
+                return Ok(());
+            }
+            return Err(err);
+        }
+
+        let err = plan.prepare_runtime_roots().unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        assert!(runtime_root.exists());
+        Ok(())
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
     fn runtime_setup_refuses_symlink_ancestor_before_creating_runtime_tree() -> io::Result<()> {
         let tmp = TempDir::new()?;
         let cwd = tmp.path().join("workspace");
@@ -2865,6 +2914,35 @@ mod tests {
         let runtime_root = PathBuf::from(plan.runtime_root.as_ref().unwrap());
         fs::create_dir_all(&runtime_root)?;
         fs::write(runtime_root.join(RUNTIME_ROOT_MARKER), b"exec_other")?;
+
+        let err = plan.cleanup_runtime_roots().unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        assert!(runtime_root.exists());
+        Ok(())
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn runtime_cleanup_refuses_symlinked_runtime_marker() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&cwd)?;
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+        let plan =
+            WindowsReferenceBackend.fail_closed_plan("exec_cleanup_marker_symlink", &cwd, &policy);
+        let runtime_root = PathBuf::from(plan.runtime_root.as_ref().unwrap());
+        fs::create_dir_all(&runtime_root)?;
+        let marker_target = tmp.path().join("marker-target");
+        fs::write(&marker_target, plan.execution_id.as_bytes())?;
+        if let Err(err) =
+            symlink_file_for_test(&marker_target, &runtime_root.join(RUNTIME_ROOT_MARKER))
+        {
+            if err.kind() == io::ErrorKind::PermissionDenied {
+                return Ok(());
+            }
+            return Err(err);
+        }
 
         let err = plan.cleanup_runtime_roots().unwrap_err();
 
