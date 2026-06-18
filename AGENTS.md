@@ -66,6 +66,7 @@ Work in this order unless an accepted RFC changes it:
 - The RunSeal Windows backend uses one dedicated sandbox user as the implementation model. Do not inherit an upstream offline/online dual-user split unless an RFC and conformance evidence explicitly require it.
 - Private product integration experience may inform Windows backend work, but it must be translated into RunSeal RFC text, adapter code, and conformance tests before landing. Do not commit private product names, local paths, account names, logs, screenshots, or chat-only context as rationale.
 - When adapting upstream sandbox code, collapse any dual-identity setup, readiness, cleanup, WFP/firewall/proxy, ACL, restricted-token, or IPC assumptions into one internal sandbox identity at the RunSeal boundary.
+- Do not add compatibility readers, migrations, or stale-state handling for upstream dual-user setup files; RunSeal is greenfield and should only define the current single-user schema.
 - Keep the sandbox user model private to the Windows backend. Public protocol, audit, README, and RFC vocabulary should expose generic process and sandbox boundary terms, not local account names or account counts.
 - Do not expose ACLs, SIDs, token attributes, integrity levels, Job Object handles, firewall rule names, WFP callouts, helper identities, or private profile names as public API.
 - Any unsupported or partially enforceable sandbox request must fail closed with a structured error.

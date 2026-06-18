@@ -27,13 +27,13 @@ Single-user vendor wiring acceptance criteria:
 
 - Setup payloads carry one sandbox identity, not separate offline and online
   identities.
-- Setup secrets use a single-user schema such as `{ version, user }`; legacy
-  `offline` and `online` records must be treated as stale state.
-- Setup markers use one sandbox username field; legacy offline/online marker
-  fields must not be accepted as ready state.
+- Setup secrets use only a single-user schema such as `{ version, user }`; do
+  not add readers or migrations for upstream `offline` and `online` records.
+- Setup markers use only one sandbox username field; do not add marker fields
+  for upstream offline/online identities.
 - Diagnostics and smoke/conformance tests must assert that exactly the expected
-  sandbox identity exists, the sandbox group exists, and legacy dual-user state
-  is absent before sandboxed execution is reported as supported.
+  sandbox identity exists and the sandbox group exists before sandboxed
+  execution is reported as supported.
 - WFP, firewall, proxy, command-runner IPC, restricted-token, and ACL setup must
   all derive from the same single sandbox identity.
 - Public protocol, audit, and capability output must keep the account model
