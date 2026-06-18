@@ -822,6 +822,24 @@ fn execute_command(
         write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
         events.push(event);
     }
+    if output_truncated {
+        let event = execution_event_now(
+            json!({
+                "type": "execution.output.truncated",
+                "execution_id": ids.execution_id,
+                "policy_id": policy_id,
+                "policy_hash": policy_hash,
+                "audit_path": audit_path,
+                "decision": "truncated",
+                "max_output_bytes": policy.resources.max_output_bytes,
+                "stdout_bytes": output.stdout.len(),
+                "stderr_bytes": output.stderr.len(),
+            }),
+            &event_context,
+        );
+        write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
+        events.push(event);
+    }
     let exit_code = output.status.code().unwrap_or(1);
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();

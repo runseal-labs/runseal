@@ -524,6 +524,21 @@ fn execute_truncates_output_from_policy_resource_limit() -> Result<()> {
         .find(|event| event["type"] == "execution.stdout")
         .context("execution.stdout notification must exist")?;
     assert_eq!(decode_stream_event(stdout_event)?, "abc");
+    let truncation_event = messages
+        .iter()
+        .map(|message| &message["params"])
+        .find(|event| event["type"] == "execution.output.truncated")
+        .context("execution.output.truncated notification must exist")?;
+    assert_eq!(truncation_event["decision"], "truncated");
+    assert_eq!(truncation_event["max_output_bytes"], 3);
+
+    let audit_path = response["result"]["audit_path"]
+        .as_str()
+        .context("truncated execution result must include audit_path")?;
+    let audit_events = read_audit_events(tmp.path(), audit_path)?;
+    assert!(audit_events.iter().any(|event| {
+        event["type"] == "execution.output.truncated" && event["decision"] == "truncated"
+    }));
     Ok(())
 }
 
