@@ -178,12 +178,19 @@ fn expected_runtime_roots_supported() -> bool {
     cfg!(windows)
 }
 
+fn expected_runtime_environment_supported() -> bool {
+    cfg!(windows)
+}
+
 fn expected_missing_features(additional: &[&'static str]) -> Vec<&'static str> {
     let mut features = vec!["filesystem_policy"];
     if !expected_runtime_roots_supported() {
         features.push("runtime_roots");
     }
-    features.extend_from_slice(&["runtime_environment", "process_isolation"]);
+    if !expected_runtime_environment_supported() {
+        features.push("runtime_environment");
+    }
+    features.push("process_isolation");
     if !expected_process_cleanup_supported() {
         features.push("process_cleanup");
     }
@@ -250,7 +257,10 @@ fn get_capabilities_rpc_contract() -> Result<()> {
         payload["features"]["runtime_roots"],
         expected_runtime_roots_supported()
     );
-    assert_eq!(payload["features"]["runtime_environment"], false);
+    assert_eq!(
+        payload["features"]["runtime_environment"],
+        expected_runtime_environment_supported()
+    );
     assert_eq!(payload["features"]["process_isolation"], false);
     assert_eq!(
         payload["features"]["process_cleanup"],

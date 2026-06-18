@@ -149,6 +149,10 @@ fn expected_runtime_roots_supported() -> bool {
     cfg!(windows)
 }
 
+fn expected_runtime_environment_supported() -> bool {
+    cfg!(windows)
+}
+
 #[test]
 fn missing_binary_is_explicit_red_state() {
     if runseal_bin().exists() {
@@ -201,7 +205,10 @@ fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
         payload["features"]["runtime_roots"],
         expected_runtime_roots_supported()
     );
-    assert_eq!(payload["features"]["runtime_environment"], false);
+    assert_eq!(
+        payload["features"]["runtime_environment"],
+        expected_runtime_environment_supported()
+    );
     assert_eq!(payload["features"]["process_isolation"], false);
     assert_eq!(
         payload["features"]["process_cleanup"],

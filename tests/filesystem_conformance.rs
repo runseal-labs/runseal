@@ -116,7 +116,10 @@ fn expected_missing_features(additional: &[&'static str]) -> Vec<&'static str> {
     if !cfg!(windows) {
         features.push("runtime_roots");
     }
-    features.extend_from_slice(&["runtime_environment", "process_isolation"]);
+    if !cfg!(windows) {
+        features.push("runtime_environment");
+    }
+    features.push("process_isolation");
     if !cfg!(windows) {
         features.push("process_cleanup");
     }

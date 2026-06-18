@@ -867,8 +867,11 @@ fn protected_filesystem_labels(policy: &SandboxPolicy) -> Vec<&'static str> {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct WindowsReferenceBackend;
 
-const WINDOWS_REFERENCE_SUPPORTED_FEATURES: &[BackendFeature] =
-    &[BackendFeature::RuntimeRoots, BackendFeature::ProcessCleanup];
+const WINDOWS_REFERENCE_SUPPORTED_FEATURES: &[BackendFeature] = &[
+    BackendFeature::RuntimeRoots,
+    BackendFeature::RuntimeEnvironment,
+    BackendFeature::ProcessCleanup,
+];
 
 impl SandboxBackend for WindowsReferenceBackend {
     fn name(&self) -> &'static str {
@@ -928,6 +931,7 @@ impl SandboxBackend for WindowsReferenceBackend {
             &[
                 "Windows reference backend scaffold is present",
                 "runtime roots are created, marked, and cleaned with containment checks",
+                "runtime environment redirects are injected into child process environments",
                 "process cleanup is backed by Windows kill-on-close Job Objects",
                 "filesystem and network enforcement are not implemented yet",
                 "sandboxed policies fail closed until conformance tests prove enforcement",
@@ -1383,6 +1387,7 @@ mod tests {
         WindowsFilesystemRule, WindowsFilesystemRuleSource,
     };
     use serde_json::json;
+    use std::ffi::OsString;
     use std::fs;
     use std::io;
     use std::path::PathBuf;
@@ -1394,6 +1399,17 @@ mod tests {
         fail_on_capture_root: Option<String>,
         fail_on_apply_root: Option<String>,
         fail_rollback: bool,
+    }
+
+    fn effective_environment_value(
+        environment: &[(OsString, OsString)],
+        key: &str,
+    ) -> Option<String> {
+        environment
+            .iter()
+            .rev()
+            .find(|(candidate, _)| candidate.to_string_lossy().eq_ignore_ascii_case(key))
+            .map(|(_, value)| value.to_string_lossy().into_owned())
     }
 
     impl WindowsFilesystemAclDriver for RecordingAclDriver {
@@ -1527,7 +1543,11 @@ mod tests {
         assert_eq!(plan.enforcement, "fail-closed-preview");
         assert_eq!(
             WindowsReferenceBackend.supported_features(),
-            &[BackendFeature::RuntimeRoots, BackendFeature::ProcessCleanup]
+            &[
+                BackendFeature::RuntimeRoots,
+                BackendFeature::RuntimeEnvironment,
+                BackendFeature::ProcessCleanup,
+            ]
         );
         Ok(())
     }
@@ -1619,7 +1639,39 @@ mod tests {
         assert_eq!(plan_json["setup"]["fail_closed_on_setup_error"], true);
         assert_eq!(
             WindowsReferenceBackend.supported_features(),
-            &[BackendFeature::RuntimeRoots, BackendFeature::ProcessCleanup]
+            &[
+                BackendFeature::RuntimeRoots,
+                BackendFeature::RuntimeEnvironment,
+                BackendFeature::ProcessCleanup,
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_environment_redirects_override_minimal_environment() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&cwd)?;
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+        let plan = WindowsReferenceBackend.fail_closed_plan("exec_runtime_env", &cwd, &policy);
+
+        let environment = minimal_environment(&plan);
+
+        for (key, value) in &plan.environment_runtime {
+            assert_eq!(
+                effective_environment_value(&environment, key).as_deref(),
+                Some(value.as_str()),
+                "runtime environment value must win for {key}"
+            );
+        }
+        assert_eq!(
+            effective_environment_value(&environment, "RUNSEAL_HOME").as_deref(),
+            plan.synthetic_home.as_deref()
+        );
+        assert_eq!(
+            effective_environment_value(&environment, "TEMP").as_deref(),
+            plan.temp_root.as_deref()
         );
         Ok(())
     }

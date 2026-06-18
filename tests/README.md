@@ -19,6 +19,7 @@ The tests are black-box by design:
 - Windows fail-closed errors include a `PlatformSandboxPlan` preview for runtime root, synthetic home, setup requirements, protected filesystem categories, process boundary state, and network guard planning.
 - Windows fail-closed setup creates and cleans planned runtime roots before returning unsupported.
 - Windows runtime roots can be reported as a verified single capability without making any sandbox level supported by itself.
+- Windows runtime environment redirects can be reported as a verified single capability without making any sandbox level supported by itself.
 - Windows process cleanup can be reported as a verified single capability without making any sandbox level supported by itself.
 - Execution results include a `PlatformSandboxPlan` summary for the selected backend.
 - Policy explanation through `runseal explain-policy`.
