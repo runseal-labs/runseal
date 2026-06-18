@@ -764,6 +764,21 @@ fn execute_command(
     };
 
     let sandbox_enforced = plan.is_sandbox_enforced();
+    let allowed = execution_event_now(
+        json!({
+            "type": "policy.allowed",
+            "decision": "allowed",
+            "sandbox": {
+                "level": policy.sandbox_level.as_str(),
+                "enforced": sandbox_enforced,
+            },
+            "network": {
+                "mode": policy.network.mode.as_str(),
+            },
+        }),
+        &event_context,
+    );
+    write_audit_event_with_metadata(&mut audit, &allowed, &metadata)?;
     let started_at = timestamp_now();
     let started = execution_event_at(
         json!({

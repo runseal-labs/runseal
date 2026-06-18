@@ -622,6 +622,7 @@ fn execute_copies_metadata_to_audit_events() -> Result<()> {
     for event_type in [
         "execution.requested",
         "policy.resolved",
+        "policy.allowed",
         "execution.started",
         "execution.finished",
     ] {
@@ -645,6 +646,13 @@ fn execute_copies_metadata_to_audit_events() -> Result<()> {
     assert_eq!(resolved["decision"], "resolved");
     assert_eq!(resolved["sandbox_level"], "danger-full-access");
     assert_eq!(resolved["backend_requirement"], "local-execution");
+    let allowed = audit_events
+        .iter()
+        .find(|event| event["type"] == "policy.allowed")
+        .unwrap();
+    assert_eq!(allowed["decision"], "allowed");
+    assert_eq!(allowed["sandbox"]["level"], "danger-full-access");
+    assert_eq!(allowed["sandbox"]["enforced"], false);
     Ok(())
 }
 
