@@ -447,7 +447,10 @@ fn dispose_session_is_noop_for_stdio_mvp() -> Result<()> {
 #[test]
 fn execute_rejects_unsupported_request_fields() -> Result<()> {
     let tmp = TempDir::new()?;
-    let unsupported_cases = [("trace_id", json!("trace_test"))];
+    let unsupported_cases = [
+        ("trace_id", json!("trace_test")),
+        ("network_mode", json!("proxy")),
+    ];
 
     for (field, value) in unsupported_cases {
         let mut request = json!({
@@ -1190,30 +1193,39 @@ fn execute_rejects_timeout_above_policy_limit() -> Result<()> {
 #[test]
 fn explain_policy_rejects_unsupported_request_fields() -> Result<()> {
     let tmp = TempDir::new()?;
-    let output = run_rpc(&rpc_request(
-        "explainPolicy",
-        json!({
+    let unsupported_cases = [
+        ("metadata", json!({"agent_id": "agent_test"})),
+        ("network_mode", json!("proxy")),
+    ];
+
+    for (field, value) in unsupported_cases {
+        let mut request = json!({
             "cwd": tmp.path(),
-            "policy": "workspace-write",
-            "metadata": {"agent_id": "agent_test"}
-        }),
-    ))?;
+            "policy": "workspace-write"
+        });
+        request
+            .as_object_mut()
+            .expect("request must be an object")
+            .insert(field.to_string(), value);
 
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let messages = stdout_json_lines(&output)?;
-    let response = &messages[0];
+        let output = run_rpc(&rpc_request("explainPolicy", request))?;
 
-    assert_eq!(response["error"]["data"]["code"], "INVALID_REQUEST");
-    assert!(
-        response["error"]["data"]["reason"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("params.metadata is not supported")
-    );
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let messages = stdout_json_lines(&output)?;
+        let response = &messages[0];
+
+        assert_eq!(response["error"]["data"]["code"], "INVALID_REQUEST");
+        assert!(
+            response["error"]["data"]["reason"]
+                .as_str()
+                .unwrap_or_default()
+                .contains(&format!("params.{field} is not supported"))
+        );
+    }
     Ok(())
 }
 

@@ -324,11 +324,7 @@ fn explain_policy_json(policy: &SandboxPolicy) -> Value {
 
 fn explain_policy_from_params(params: &Value) -> Result<Value, RunSealError> {
     let params = params_object(params, "explainPolicy")?;
-    validate_param_keys(
-        params,
-        "explainPolicy",
-        &["policy", "cwd", "network", "network_mode"],
-    )?;
+    validate_param_keys(params, "explainPolicy", &["policy", "cwd", "network"])?;
     let cwd = params
         .get("cwd")
         .and_then(Value::as_str)
@@ -354,7 +350,6 @@ fn execute_from_params(params: &Value) -> Result<(Vec<Value>, Value), RunSealErr
             "cwd",
             "policy",
             "network",
-            "network_mode",
             "stdin",
             "timeout_ms",
             "metadata",
@@ -502,7 +497,7 @@ fn required_string_param(
 fn network_override_from_params(
     params: &Map<String, Value>,
 ) -> Result<Option<NetworkMode>, RunSealError> {
-    let Some(value) = params.get("network").or_else(|| params.get("network_mode")) else {
+    let Some(value) = params.get("network") else {
         return Ok(None);
     };
     let mode = if let Some(mode) = value.as_str() {
