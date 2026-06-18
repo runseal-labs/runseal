@@ -105,3 +105,16 @@ fn vendored_windows_setup_launch_suppresses_shell_error_ui() {
     assert!(setup.contains("SEE_MASK_FLAG_NO_UI"));
     assert!(setup.contains("SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI"));
 }
+
+#[test]
+fn vendored_windows_setup_launches_copied_setup_helper() {
+    let setup = VENDOR_SETUP_SOURCES
+        .iter()
+        .find_map(|(name, source)| (*name == "setup.rs").then_some(*source))
+        .expect("setup.rs must be included");
+
+    assert!(setup.contains("use crate::helper_materialization::resolve_exe_for_launch;"));
+    assert!(setup.contains("fn find_setup_exe(codex_home: &Path) -> PathBuf"));
+    assert!(setup.contains("return resolve_exe_for_launch(&setup_exe, codex_home);"));
+    assert!(setup.contains("let exe = find_setup_exe(codex_home);"));
+}
