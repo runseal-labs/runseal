@@ -337,7 +337,7 @@ impl WindowsFilesystemPlan {
 
         let mut writable_roots = Vec::new();
         for root in self.effective_write_roots() {
-            if contains_windows_root(&deny_roots, &root) {
+            if contains_same_or_descendant_windows_root(&deny_roots, &root) {
                 continue;
             }
             push_unique_root(&mut writable_roots, root.clone());
@@ -345,8 +345,8 @@ impl WindowsFilesystemPlan {
         }
 
         for root in &self.read_roots {
-            if contains_windows_root(&deny_roots, root)
-                || contains_windows_root(&writable_roots, root)
+            if contains_same_or_descendant_windows_root(&deny_roots, root)
+                || contains_same_or_descendant_windows_root(&writable_roots, root)
             {
                 continue;
             }
@@ -412,7 +412,7 @@ fn push_unique(roots: &mut Vec<String>, root: String) {
 }
 
 fn push_unique_root(roots: &mut Vec<String>, root: String) {
-    if !contains_windows_root(roots, &root) {
+    if !contains_same_windows_root(roots, &root) {
         roots.push(root);
     }
 }
@@ -432,12 +432,32 @@ fn push_filesystem_rule(
     rules.push(WindowsFilesystemRule { access, root });
 }
 
-fn contains_windows_root(roots: &[String], candidate: &str) -> bool {
+fn contains_same_windows_root(roots: &[String], candidate: &str) -> bool {
     roots.iter().any(|root| same_windows_root(root, candidate))
+}
+
+fn contains_same_or_descendant_windows_root(roots: &[String], candidate: &str) -> bool {
+    roots
+        .iter()
+        .any(|root| same_or_descendant_windows_root(root, candidate))
 }
 
 fn same_windows_root(left: &str, right: &str) -> bool {
     windows_root_key(left) == windows_root_key(right)
+}
+
+fn same_or_descendant_windows_root(root: &str, candidate: &str) -> bool {
+    let root = windows_root_key(root);
+    let candidate = windows_root_key(candidate);
+    if root == candidate {
+        return true;
+    }
+
+    let mut root_prefix = root;
+    if !root_prefix.ends_with('\\') {
+        root_prefix.push('\\');
+    }
+    candidate.starts_with(&root_prefix)
 }
 
 fn windows_root_key(root: &str) -> String {
@@ -596,6 +616,41 @@ mod tests {
                 .count(),
             0
         );
+    }
+
+    #[test]
+    fn filesystem_rules_use_root_containment_not_string_prefixes() {
+        let filesystem = WindowsFilesystemPlan {
+            mode: WindowsFilesystemMode::WritableRootsCapability,
+            read_roots: vec!["C:/Workspace/src".to_string(), "C:/Workspace2".to_string()],
+            write_roots: vec![
+                "C:/Workspace".to_string(),
+                "C:/Workspace/.git/hooks".to_string(),
+                "C:/Workspace2/cache".to_string(),
+            ],
+            runtime_write_roots: Vec::new(),
+            protected_roots: vec!["C:/Workspace/.git".to_string()],
+            private_protected_roots: Vec::new(),
+        };
+
+        let rules = filesystem.enforcement_rules();
+
+        assert!(rules.iter().any(|rule| {
+            rule.access == WindowsFilesystemAccess::Deny
+                && same_windows_root(&rule.root, "c:\\workspace\\.git")
+        }));
+        assert!(!rules.iter().any(|rule| {
+            rule.access == WindowsFilesystemAccess::ReadWrite
+                && same_windows_root(&rule.root, "c:\\workspace\\.git\\hooks")
+        }));
+        assert!(!rules.iter().any(|rule| {
+            rule.access == WindowsFilesystemAccess::ReadOnly
+                && same_windows_root(&rule.root, "c:\\workspace\\src")
+        }));
+        assert!(rules.iter().any(|rule| {
+            rule.access == WindowsFilesystemAccess::ReadWrite
+                && same_windows_root(&rule.root, "c:\\workspace2\\cache")
+        }));
     }
 
     #[test]
