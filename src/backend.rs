@@ -44,7 +44,7 @@ use {
     codex_utils_absolute_path::AbsolutePathBuf,
     std::collections::{HashMap, HashSet},
     std::os::windows::process::ExitStatusExt,
-    std::sync::{Condvar, Mutex, OnceLock},
+    std::sync::{Mutex, OnceLock},
 };
 
 #[derive(Debug)]
@@ -60,10 +60,45 @@ impl std::fmt::Display for BackendUnavailableError {
 
 impl std::error::Error for BackendUnavailableError {}
 
+#[cfg(windows)]
+const POLICY_TRANSITION_BUSY_REASON: &str =
+    "policy transition busy: active sandboxed executions use a different policy epoch";
+
+#[cfg(windows)]
+#[derive(Debug)]
+struct PolicyTransitionBusyError {
+    reason: &'static str,
+}
+
+#[cfg(windows)]
+impl std::fmt::Display for PolicyTransitionBusyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.reason)
+    }
+}
+
+#[cfg(windows)]
+impl std::error::Error for PolicyTransitionBusyError {}
+
 pub(crate) fn backend_unavailable_reason(err: &io::Error) -> Option<&str> {
     err.get_ref()?
         .downcast_ref::<BackendUnavailableError>()
         .map(|err| err.reason.as_str())
+}
+
+pub(crate) fn policy_transition_busy_reason(err: &io::Error) -> Option<&str> {
+    #[cfg(windows)]
+    {
+        err.get_ref()?
+            .downcast_ref::<PolicyTransitionBusyError>()
+            .map(|err| err.reason)
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = err;
+        None
+    }
 }
 
 #[cfg(windows)]
@@ -84,7 +119,6 @@ struct WindowsSandboxExecutionGate;
 #[cfg(windows)]
 struct WindowsSandboxExecutionGateLock {
     state: Mutex<WindowsSandboxExecutionGateState>,
-    changed: Condvar,
 }
 
 #[cfg(windows)]
@@ -99,7 +133,6 @@ fn windows_sandbox_execution_gate_lock() -> &'static WindowsSandboxExecutionGate
     static GATE: OnceLock<WindowsSandboxExecutionGateLock> = OnceLock::new();
     GATE.get_or_init(|| WindowsSandboxExecutionGateLock {
         state: Mutex::new(WindowsSandboxExecutionGateState::default()),
-        changed: Condvar::new(),
     })
 }
 
@@ -121,16 +154,15 @@ fn windows_sandbox_execution_gate_for_key(
         .state
         .lock()
         .map_err(|_| io::Error::other("windows sandbox execution gate poisoned"))?;
-    // One active policy cohort is enough while policy_hash captures the full enforcement state.
-    while state
+    // ponytail: one global Windows sandbox cohort; split by identity if multi-tenant throughput matters.
+    if state
         .active_key
         .as_ref()
         .is_some_and(|active_key| active_key != &key)
     {
-        state = gate
-            .changed
-            .wait(state)
-            .map_err(|_| io::Error::other("windows sandbox execution gate poisoned"))?;
+        return Err(io::Error::other(PolicyTransitionBusyError {
+            reason: POLICY_TRANSITION_BUSY_REASON,
+        }));
     }
     state.active_key.get_or_insert(key);
     state.active_count += 1;
@@ -147,7 +179,6 @@ impl Drop for WindowsSandboxExecutionGate {
         state.active_count = state.active_count.saturating_sub(1);
         if state.active_count == 0 {
             state.active_key = None;
-            gate.changed.notify_all();
         }
     }
 }
@@ -1833,8 +1864,8 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn windows_sandbox_execution_gate_allows_same_policy_and_serializes_policy_switches()
-    -> io::Result<()> {
+    fn windows_sandbox_execution_gate_allows_same_policy_and_rejects_mixed_policy() -> io::Result<()>
+    {
         let policy_a = WindowsSandboxPolicyCohortKey {
             policy_hash: "hash-a".to_string(),
         };
@@ -1843,48 +1874,22 @@ mod tests {
         };
 
         let guard = windows_sandbox_execution_gate_for_key(policy_a.clone())?;
-        let (same_tx, same_rx) = std::sync::mpsc::channel();
-        let same_worker = std::thread::spawn(move || {
-            let gate = windows_sandbox_execution_gate_for_key(policy_a);
-            let acquired = gate.is_ok();
-            drop(gate);
-            let _ = same_tx.send(acquired);
-        });
-        assert!(
-            same_rx
-                .recv_timeout(Duration::from_secs(1))
-                .map_err(|err| io::Error::other(err.to_string()))?
+        let same_policy_guard = windows_sandbox_execution_gate_for_key(policy_a)?;
+        drop(same_policy_guard);
+
+        let err = match windows_sandbox_execution_gate_for_key(policy_b.clone()) {
+            Ok(_) => return Err(io::Error::other("mixed-policy execution was not rejected")),
+            Err(err) => err,
+        };
+        assert_eq!(
+            policy_transition_busy_reason(&err),
+            Some(POLICY_TRANSITION_BUSY_REASON)
         );
-        same_worker
-            .join()
-            .map_err(|_| io::Error::other("same-policy gate test thread panicked"))?;
 
-        let (started_tx, started_rx) = std::sync::mpsc::channel();
-        let (acquired_tx, acquired_rx) = std::sync::mpsc::channel();
-        let worker = std::thread::spawn(move || {
-            let _ = started_tx.send(());
-            let gate = windows_sandbox_execution_gate_for_key(policy_b);
-            let acquired = gate.is_ok();
-            drop(gate);
-            let _ = acquired_tx.send(acquired);
-        });
-
-        started_rx
-            .recv_timeout(Duration::from_secs(1))
-            .map_err(|err| io::Error::other(err.to_string()))?;
-        assert!(matches!(
-            acquired_rx.recv_timeout(Duration::from_millis(50)),
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
-        ));
         drop(guard);
 
-        let acquired = acquired_rx
-            .recv_timeout(Duration::from_secs(1))
-            .map_err(|err| io::Error::other(err.to_string()))?;
-        worker
-            .join()
-            .map_err(|_| io::Error::other("policy-switch gate test thread panicked"))?;
-        assert!(acquired);
+        let next_policy_guard = windows_sandbox_execution_gate_for_key(policy_b)?;
+        drop(next_policy_guard);
         Ok(())
     }
 

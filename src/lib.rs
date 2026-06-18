@@ -12,6 +12,7 @@ mod windows;
 use audit::{create_audit_writer, write_audit_event_with_metadata};
 use backend::{
     ExecutionEnv, ExecutionStdin, SandboxBackend, active_backend, backend_unavailable_reason,
+    policy_transition_busy_reason,
 };
 use cli::{parse_exec_args, parse_policy_args};
 use error::RunSealError;
@@ -1027,13 +1028,15 @@ fn execute_command(
     let execution_output = match backend.execute_plan(&plan, command, cwd, stdin, &env, timeout) {
         Ok(output) => output,
         Err(err) => {
+            let transition_busy_reason = policy_transition_busy_reason(&err).map(str::to_string);
             let unavailable_reason = if sandbox_enforced {
                 backend_unavailable_reason(&err).map(str::to_string)
             } else {
                 None
             };
-            let failure_reason = unavailable_reason
+            let failure_reason = transition_busy_reason
                 .as_deref()
+                .or(unavailable_reason.as_deref())
                 .unwrap_or("execution failed to start");
             let failed = execution_event_now(
                 json!({
@@ -1049,6 +1052,25 @@ fn execute_command(
                 &event_context,
             );
             write_audit_event_with_metadata(&mut audit, &failed, &metadata)?;
+
+            if let Some(reason) = transition_busy_reason {
+                return Err(RunSealError::with_details(
+                    "POLICY_TRANSITION_BUSY",
+                    reason,
+                    json!({
+                        "execution_id": ids.execution_id,
+                        "session_id": ids.session_id,
+                        "seal_id": ids.seal_id,
+                        "audit_path": audit_path,
+                        "backend": {
+                            "name": plan.backend,
+                            "status": plan.backend_status,
+                            "platform": plan.platform,
+                        },
+                        "platform_plan": plan.json(),
+                    }),
+                ));
+            }
 
             if let Some(reason) = unavailable_reason {
                 return Err(RunSealError::with_details(
