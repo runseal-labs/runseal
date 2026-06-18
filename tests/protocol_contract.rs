@@ -974,6 +974,36 @@ fn execute_rejects_invalid_bytes_stdin() -> Result<()> {
                 .contains(expected_reason)
         );
     }
+    let oversized = STANDARD.encode(vec![b'x'; 64 * 1024 + 1]);
+    let output = run_rpc(&rpc_request(
+        "execute",
+        json!({
+            "command": [python_bin(), "-c", "print('must not run')"],
+            "cwd": tmp.path(),
+            "policy": "danger-full-access",
+            "stdin": {
+                "mode": "bytes",
+                "data": format!("base64:{oversized}"),
+                "encoding": "base64"
+            }
+        }),
+    ))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = &messages[0];
+
+    assert_eq!(response["error"]["data"]["code"], "INVALID_REQUEST");
+    assert!(
+        response["error"]["data"]["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("params.stdin.data must decode to at most 65536 bytes")
+    );
     Ok(())
 }
 
