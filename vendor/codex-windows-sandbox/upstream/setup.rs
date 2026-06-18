@@ -803,6 +803,18 @@ fn scheduled_setup_result_path(codex_home: &Path, request_id: &str) -> PathBuf {
     sandbox_dir(codex_home).join(format!("{SCHEDULED_SETUP_RESULT_PREFIX}{request_id}.json"))
 }
 
+fn remove_scheduled_setup_result_file(path: &Path) -> Result<()> {
+    remove_setup_payload_file(path).map_err(|err| {
+        failure(
+            SetupErrorCode::OrchestratorHelperLaunchFailed,
+            format!(
+                "failed to remove stale scheduled setup result {}: {err}",
+                path.display()
+            ),
+        )
+    })
+}
+
 fn write_scheduled_setup_payload_file(
     broker_home: &Path,
     request_id: &str,
@@ -907,7 +919,7 @@ fn try_run_setup_exe_via_scheduled_task(
     }
 
     let result_path = scheduled_setup_result_path(&broker_home, &request_id);
-    let _ = std::fs::remove_file(&result_path);
+    remove_scheduled_setup_result_file(&result_path)?;
     let payload_path = write_scheduled_setup_payload_file(&broker_home, &request_id, payload_json)?;
 
     let output = Command::new("schtasks.exe")
@@ -1474,6 +1486,20 @@ mod tests {
             extract_failure(&err).map(|failure| failure.code),
             Some(SetupErrorCode::OrchestratorHelperLaunchFailed)
         );
+    }
+
+    #[test]
+    fn stale_scheduled_setup_result_is_removed_before_launch() {
+        let tmp = TempDir::new().expect("tempdir");
+        let broker_home = tmp.path().join("runseal-broker");
+        let result_path = super::scheduled_setup_result_path(&broker_home, "req-1");
+        fs::create_dir_all(result_path.parent().expect("result parent")).expect("result dir");
+        fs::write(&result_path, br#"{"ok":true}"#).expect("write stale result");
+
+        super::remove_scheduled_setup_result_file(&result_path).expect("remove stale result");
+
+        assert!(!result_path.exists());
+        super::remove_scheduled_setup_result_file(&result_path).expect("ignore missing result");
     }
 
     #[test]
