@@ -5,26 +5,20 @@ use crate::windows::policy::{
     WindowsFilesystemAclTransactionStep, WindowsFilesystemRule, WindowsHostRoots,
     WindowsPolicyPlan, WindowsRuntimeRoots,
 };
+mod process;
+
+#[cfg(all(test, windows))]
+use process::WindowsKillOnCloseJob;
+use process::spawn_local_command;
+#[cfg(test)]
+use process::{cleanup_child_after_setup_error, minimal_environment};
 use serde_json::Map;
 use serde_json::{Value, json};
-use std::env;
-use std::ffi::OsString;
 use std::fs;
-use std::io::{self, Write};
-#[cfg(windows)]
-use std::os::windows::io::AsRawHandle;
+use std::io;
 use std::path::{Component, Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
-#[cfg(windows)]
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
-#[cfg(windows)]
-use windows_sys::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-    SetInformationJobObject,
-};
+use std::process::Output;
+use std::time::Duration;
 
 const RUNTIME_ROOT_MARKER: &str = ".runseal-runtime-root";
 
@@ -1362,244 +1356,6 @@ fn path_string(path: &Path) -> String {
     PathBuf::from(path).to_string_lossy().to_string()
 }
 
-fn spawn_local_command(
-    plan: &PlatformSandboxPlan,
-    command: &[String],
-    cwd: &Path,
-    stdin: ExecutionStdin,
-    env: &ExecutionEnv,
-    timeout: Option<Duration>,
-) -> io::Result<BackendExecutionOutput> {
-    if plan.is_sandbox_enforced() {
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "refusing to spawn sandboxed plan through local execution path",
-        ));
-    }
-
-    let mut process = Command::new(&command[0]);
-    process
-        .args(&command[1..])
-        .current_dir(cwd)
-        .env_clear()
-        .envs(minimal_environment(plan))
-        .envs(env.entries.iter().map(|(key, value)| (key, value)));
-    match &stdin {
-        ExecutionStdin::Empty => {
-            process.stdin(Stdio::null());
-        }
-        ExecutionStdin::Bytes(_) => {
-            process.stdin(Stdio::piped());
-        }
-    }
-
-    let Some(timeout) = timeout else {
-        process.stdout(Stdio::piped()).stderr(Stdio::piped());
-        let mut child = process.spawn()?;
-        #[cfg(windows)]
-        let _process_job = match assign_windows_process_job(plan, &child) {
-            Ok(process_job) => process_job,
-            Err(err) => return Err(cleanup_child_after_setup_error(child, err)),
-        };
-        if let ExecutionStdin::Bytes(bytes) = stdin
-            && let Err(err) = write_child_stdin(&mut child, bytes)
-        {
-            return Err(cleanup_child_after_setup_error(child, err));
-        }
-        return child
-            .wait_with_output()
-            .map(|output| BackendExecutionOutput {
-                output,
-                timed_out: false,
-            });
-    };
-
-    if matches!(stdin, ExecutionStdin::Bytes(_)) {
-        process.stdout(Stdio::piped()).stderr(Stdio::piped());
-    }
-    let start = Instant::now();
-    let mut child = process.spawn()?;
-    #[cfg(windows)]
-    let _process_job = match assign_windows_process_job(plan, &child) {
-        Ok(process_job) => process_job,
-        Err(err) => return Err(cleanup_child_after_setup_error(child, err)),
-    };
-    if let ExecutionStdin::Bytes(bytes) = stdin
-        && let Err(err) = write_child_stdin(&mut child, bytes)
-    {
-        return Err(cleanup_child_after_setup_error(child, err));
-    }
-    loop {
-        if child.try_wait()?.is_some() {
-            return child
-                .wait_with_output()
-                .map(|output| BackendExecutionOutput {
-                    output,
-                    timed_out: false,
-                });
-        }
-
-        if start.elapsed() >= timeout {
-            if let Err(err) = child.kill()
-                && err.kind() != io::ErrorKind::InvalidInput
-            {
-                return Err(err);
-            }
-            return child
-                .wait_with_output()
-                .map(|output| BackendExecutionOutput {
-                    output,
-                    timed_out: true,
-                });
-        }
-
-        thread::sleep(
-            timeout
-                .saturating_sub(start.elapsed())
-                .min(Duration::from_millis(10)),
-        );
-    }
-}
-
-fn write_child_stdin(child: &mut std::process::Child, bytes: Vec<u8>) -> io::Result<()> {
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(&bytes)?;
-    }
-    Ok(())
-}
-
-fn cleanup_child_after_setup_error(mut child: Child, setup_err: io::Error) -> io::Error {
-    let kill_err = match child.kill() {
-        Ok(()) => None,
-        Err(err) if err.kind() == io::ErrorKind::InvalidInput => None,
-        Err(err) => Some(err),
-    };
-    let wait_err = child.wait().err();
-
-    match (kill_err, wait_err) {
-        (None, None) => setup_err,
-        (Some(kill_err), None) => io::Error::other(format!(
-            "child setup failed ({setup_err}); cleanup kill failed ({kill_err})"
-        )),
-        (None, Some(wait_err)) => io::Error::other(format!(
-            "child setup failed ({setup_err}); cleanup wait failed ({wait_err})"
-        )),
-        (Some(kill_err), Some(wait_err)) => io::Error::other(format!(
-            "child setup failed ({setup_err}); cleanup kill failed ({kill_err}); cleanup wait failed ({wait_err})"
-        )),
-    }
-}
-
-#[cfg(windows)]
-fn assign_windows_process_job(
-    plan: &PlatformSandboxPlan,
-    child: &std::process::Child,
-) -> io::Result<Option<WindowsKillOnCloseJob>> {
-    if plan.private_process_job != "kill-on-close-job" {
-        return Ok(None);
-    }
-    let job = WindowsKillOnCloseJob::new()?;
-    job.assign_child(child)?;
-    Ok(Some(job))
-}
-
-#[cfg(windows)]
-struct WindowsKillOnCloseJob {
-    handle: HANDLE,
-}
-
-#[cfg(windows)]
-impl WindowsKillOnCloseJob {
-    fn new() -> io::Result<Self> {
-        let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
-        if handle.is_null() {
-            return Err(io::Error::last_os_error());
-        }
-        let job = Self { handle };
-        if let Err(err) = job.set_kill_on_close() {
-            drop(job);
-            return Err(err);
-        }
-        Ok(job)
-    }
-
-    fn set_kill_on_close(&self) -> io::Result<()> {
-        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        let result = unsafe {
-            SetInformationJobObject(
-                self.handle,
-                JobObjectExtendedLimitInformation,
-                std::ptr::addr_of!(limits).cast(),
-                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-            )
-        };
-        if result == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(())
-    }
-
-    fn assign_child(&self, child: &std::process::Child) -> io::Result<()> {
-        let process_handle = child.as_raw_handle() as HANDLE;
-        let result = unsafe { AssignProcessToJobObject(self.handle, process_handle) };
-        if result == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(())
-    }
-}
-
-#[cfg(windows)]
-impl Drop for WindowsKillOnCloseJob {
-    fn drop(&mut self) {
-        unsafe {
-            CloseHandle(self.handle);
-        }
-    }
-}
-
-fn minimal_environment(plan: &PlatformSandboxPlan) -> Vec<(OsString, OsString)> {
-    if plan.environment_inherit != "minimal" {
-        return Vec::new();
-    }
-
-    let mut environment: Vec<(OsString, OsString)> = minimal_environment_keys()
-        .into_iter()
-        .filter(|key| {
-            !plan
-                .environment_scrub
-                .iter()
-                .any(|pattern| matches_environment_scrub_pattern(key, pattern))
-        })
-        .filter_map(|key| env::var_os(key).map(|value| (OsString::from(key), value)))
-        .collect();
-    environment.extend(
-        plan.environment_runtime
-            .iter()
-            .map(|(key, value)| (OsString::from(key), OsString::from(value))),
-    );
-    environment
-}
-
-fn minimal_environment_keys() -> Vec<&'static str> {
-    if cfg!(windows) {
-        vec![
-            "PATH",
-            "Path",
-            "PATHEXT",
-            "SYSTEMROOT",
-            "SystemRoot",
-            "WINDIR",
-            "COMSPEC",
-            "TEMP",
-            "TMP",
-        ]
-    } else {
-        vec!["PATH", "TMPDIR", "LANG", "LC_ALL"]
-    }
-}
-
 pub(crate) fn matches_environment_scrub_pattern(key: &str, pattern: &str) -> bool {
     let key = key.to_ascii_uppercase();
     let pattern = pattern.to_ascii_uppercase();
@@ -1691,6 +1447,7 @@ mod tests {
     use std::fs;
     use std::io;
     use std::path::{Path, PathBuf};
+    use std::time::Instant;
     use tempfile::TempDir;
 
     #[cfg(unix)]
