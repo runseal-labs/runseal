@@ -488,6 +488,46 @@ fn execute_applies_policy_environment_set() -> Result<()> {
 }
 
 #[test]
+fn execute_truncates_output_from_policy_resource_limit() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let output = run_rpc(&rpc_request(
+        "execute",
+        json!({
+            "command": [python_bin(), "-c", "import sys; sys.stdout.write('abcdef')"],
+            "cwd": tmp.path(),
+            "policy": {
+                "version": "runseal.policy/v1",
+                "sandbox_level": "danger-full-access",
+                "resources": {"max_output_bytes": 3}
+            }
+        }),
+    ))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = messages
+        .iter()
+        .find(|message| message.get("id") == Some(&json!(1)))
+        .unwrap();
+
+    assert_eq!(response["result"]["stdout"], "abc");
+    assert_eq!(response["result"]["stdout_bytes"], 3);
+    assert_eq!(response["result"]["output_truncated"], true);
+
+    let stdout_event = messages
+        .iter()
+        .map(|message| &message["params"])
+        .find(|event| event["type"] == "execution.stdout")
+        .context("execution.stdout notification must exist")?;
+    assert_eq!(decode_stream_event(stdout_event)?, "abc");
+    Ok(())
+}
+
+#[test]
 fn execute_rejects_secret_env_keys() -> Result<()> {
     let tmp = TempDir::new()?;
     for key in ["OPENAI_API_KEY", "RUNSEAL_TOKEN", "AWS_REGION"] {
@@ -1172,7 +1212,8 @@ fn inline_policy_accepts_environment_controls() -> Result<()> {
                     "proxy": false
                 },
                 "resources": {
-                    "timeout_ms": 1000
+                    "timeout_ms": 1000,
+                    "max_output_bytes": 2048
                 },
                 "network": {"mode": "proxy"}
             }
@@ -1192,12 +1233,17 @@ fn inline_policy_accepts_environment_controls() -> Result<()> {
     assert_eq!(payload["environment"]["set"]["CI"], "1");
     assert_eq!(payload["environment"]["proxy"], false);
     assert_eq!(payload["resources"]["timeout_ms"], 1000);
+    assert_eq!(payload["resources"]["max_output_bytes"], 2048);
     assert_eq!(
         payload["canonical_policy"]["environment"]["scrub"],
         json!(["RUNSEAL_SECRET_*"])
     );
     assert_eq!(payload["canonical_policy"]["environment"]["set"]["CI"], "1");
     assert_eq!(payload["canonical_policy"]["resources"]["timeout_ms"], 1000);
+    assert_eq!(
+        payload["canonical_policy"]["resources"]["max_output_bytes"],
+        2048
+    );
     Ok(())
 }
 

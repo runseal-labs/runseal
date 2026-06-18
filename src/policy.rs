@@ -118,6 +118,7 @@ pub struct EnvironmentPolicy {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResourcePolicy {
     pub timeout_ms: Option<u64>,
+    pub max_output_bytes: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -162,6 +163,7 @@ impl SandboxPolicy {
             },
             "resources": {
                 "timeout_ms": self.resources.timeout_ms,
+                "max_output_bytes": self.resources.max_output_bytes,
             }
         })
     }
@@ -198,6 +200,7 @@ impl SandboxPolicy {
             },
             "resources": {
                 "timeout_ms": self.resources.timeout_ms,
+                "max_output_bytes": self.resources.max_output_bytes,
             },
             "backend_requirement": if self.allows_local_execution() {
                 "local-execution"
@@ -559,14 +562,11 @@ fn inline_resources(resources: Option<&Map<String, Value>>) -> Result<ResourcePo
             "max_output_bytes",
         ],
     )?;
-    reject_present_fields(
-        resources,
-        &["memory_bytes", "cpu_percent", "max_output_bytes"],
-        "resources",
-    )?;
+    reject_present_fields(resources, &["memory_bytes", "cpu_percent"], "resources")?;
 
     Ok(ResourcePolicy {
         timeout_ms: optional_u64(resources, "resources", "timeout_ms")?,
+        max_output_bytes: optional_u64(resources, "resources", "max_output_bytes")?,
     })
 }
 
@@ -634,7 +634,10 @@ fn default_environment(network: NetworkMode) -> EnvironmentPolicy {
 }
 
 fn default_resources() -> ResourcePolicy {
-    ResourcePolicy { timeout_ms: None }
+    ResourcePolicy {
+        timeout_ms: None,
+        max_output_bytes: None,
+    }
 }
 
 fn infer_level(filesystem: Option<&Map<String, Value>>) -> SandboxLevel {
@@ -1010,7 +1013,8 @@ mod tests {
             &json!({
                 "version": POLICY_VERSION,
                 "resources": {
-                    "timeout_ms": 1000
+                    "timeout_ms": 1000,
+                    "max_output_bytes": 2048
                 }
             }),
             &cwd,
@@ -1019,7 +1023,12 @@ mod tests {
         .unwrap();
 
         assert_eq!(policy.resources.timeout_ms, Some(1000));
+        assert_eq!(policy.resources.max_output_bytes, Some(2048));
         assert_eq!(policy.canonical_json()["resources"]["timeout_ms"], 1000);
+        assert_eq!(
+            policy.canonical_json()["resources"]["max_output_bytes"],
+            2048
+        );
     }
 
     #[test]
