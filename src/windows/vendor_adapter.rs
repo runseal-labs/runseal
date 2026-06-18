@@ -126,6 +126,12 @@ impl WindowsVendorSandboxUserModel {
             Self::SingleSandboxUser => "single-sandbox-user",
         }
     }
+
+    pub(crate) fn setup_identity_artifacts(self) -> &'static str {
+        match self {
+            Self::SingleSandboxUser => "single-sandbox-user-artifacts",
+        }
+    }
 }
 
 fn filesystem_entries(policy: &SandboxPolicy) -> Vec<WindowsVendorFilesystemEntry> {

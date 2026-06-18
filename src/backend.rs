@@ -194,6 +194,7 @@ pub struct PlatformSandboxPlan {
     private_process_sandbox_user_model: &'static str,
     private_process_token: &'static str,
     private_process_job: &'static str,
+    private_setup_identity_artifacts: &'static str,
     pub network_mode: &'static str,
     pub network_direct_egress: &'static str,
     pub network_managed_proxy: &'static str,
@@ -237,6 +238,7 @@ impl PlatformSandboxPlan {
             private_process_sandbox_user_model: "current-user",
             private_process_token: "none",
             private_process_job: "none",
+            private_setup_identity_artifacts: "current-user",
             network_mode: policy.network.mode.as_str(),
             network_direct_egress: "unmanaged",
             network_managed_proxy: "none",
@@ -337,13 +339,14 @@ impl PlatformSandboxPlan {
             && self.private_process_sandbox_user_model == "single-sandbox-user"
             && self.private_process_token == "restricted-token"
             && self.private_process_job == "kill-on-close-job"
+            && self.private_setup_identity_artifacts == "single-sandbox-user-artifacts"
         {
             return Ok(());
         }
 
         Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "sandboxed plan requires a single sandbox user restricted process boundary",
+            "sandboxed plan requires a single sandbox user restricted process boundary and setup identity artifacts",
         ))
     }
 
@@ -768,6 +771,10 @@ impl WindowsReferenceBackend {
         let private_filesystem_deny = windows_policy.filesystem.private_protected_roots.clone();
         let private_filesystem_rules = windows_policy.filesystem.enforcement_rules();
         let private_process_sandbox_user_model = windows_policy.process.sandbox_user_model.as_str();
+        let private_setup_identity_artifacts = windows_policy
+            .process
+            .sandbox_user_model
+            .setup_identity_artifacts();
         let private_process_token = windows_policy.process.token.as_str();
         let private_process_job = windows_policy.process.job.as_str();
         let filesystem_write = windows_policy.filesystem.effective_write_roots();
@@ -798,6 +805,7 @@ impl WindowsReferenceBackend {
             private_process_sandbox_user_model,
             private_process_token,
             private_process_job,
+            private_setup_identity_artifacts,
             network_mode: windows_policy.network.guard.as_str(),
             network_direct_egress: windows_policy.network.direct_egress.as_str(),
             network_managed_proxy: windows_policy.network.managed_proxy.as_str(),
@@ -1419,12 +1427,17 @@ mod tests {
         );
         assert_eq!(plan.private_process_token, "restricted-token");
         assert_eq!(plan.private_process_job, "kill-on-close-job");
+        assert_eq!(
+            plan.private_setup_identity_artifacts,
+            "single-sandbox-user-artifacts"
+        );
         assert_eq!(plan.filesystem_protected, vec!["workspace_metadata"]);
         let plan_json = plan.json();
         let public_plan = plan_json.to_string();
         assert!(!public_plan.contains("single-sandbox-user"));
         assert!(!public_plan.contains("restricted-token"));
         assert!(!public_plan.contains("kill-on-close-job"));
+        assert!(!public_plan.contains("single-sandbox-user-artifacts"));
         assert_eq!(
             plan_json["filesystem"]["protected"],
             json!(["workspace_metadata"])
@@ -2166,6 +2179,27 @@ mod tests {
 
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
         assert!(err.to_string().contains("single sandbox user"));
+        assert!(!runtime_root.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn sandbox_setup_rejects_dual_user_setup_artifacts_before_runtime_tree() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&cwd)?;
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+        let mut plan =
+            WindowsReferenceBackend.fail_closed_plan("exec_bad_user_artifacts", &cwd, &policy);
+        let runtime_root = PathBuf::from(plan.runtime_root.as_ref().unwrap());
+        plan.private_setup_identity_artifacts = "dual-sandbox-user-artifacts";
+
+        let Err(err) = plan.prepare_sandbox_setup() else {
+            panic!("dual sandbox user setup artifacts must fail sandbox setup");
+        };
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains("setup identity artifacts"));
         assert!(!runtime_root.exists());
         Ok(())
     }
