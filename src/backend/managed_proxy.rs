@@ -43,9 +43,9 @@ impl ManagedSandboxProxy {
     pub(super) fn environment(&self) -> Vec<(String, String)> {
         let proxy_url = format!("http://{}", self.addr);
         let mut env = vec![
-            ("CODEX_NETWORK_PROXY_ACTIVE".to_string(), "1".to_string()),
+            ("RUNSEAL_NETWORK_PROXY_ACTIVE".to_string(), "1".to_string()),
             (
-                "CODEX_NETWORK_ALLOW_LOCAL_BINDING".to_string(),
+                "RUNSEAL_NETWORK_ALLOW_LOCAL_BINDING".to_string(),
                 "0".to_string(),
             ),
             ("ELECTRON_GET_USE_PROXY".to_string(), "true".to_string()),
@@ -250,12 +250,13 @@ mod tests {
         );
         assert!(
             env.iter()
-                .any(|(key, value)| key == "CODEX_NETWORK_PROXY_ACTIVE" && value == "1")
+                .any(|(key, value)| key == "RUNSEAL_NETWORK_PROXY_ACTIVE" && value == "1")
         );
         assert!(
             env.iter()
-                .any(|(key, value)| key == "CODEX_NETWORK_ALLOW_LOCAL_BINDING" && value == "0")
+                .any(|(key, value)| key == "RUNSEAL_NETWORK_ALLOW_LOCAL_BINDING" && value == "0")
         );
+        assert!(!env.iter().any(|(key, _)| key.starts_with("CODEX_")));
     }
 
     #[test]

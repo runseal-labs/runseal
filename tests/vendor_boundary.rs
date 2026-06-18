@@ -135,8 +135,8 @@ fn vendored_windows_setup_has_no_host_app_runtime_bin_special_case() {
     for (name, source) in VENDOR_SETUP_SOURCES {
         for forbidden in [
             "ensure_codex_app_runtime_bin_readable",
-            "WindowsApps",
-            "OpenAI",
+            concat!("Windows", "Apps"),
+            concat!("Open", "AI"),
             "LocalAppData cache",
         ] {
             assert!(

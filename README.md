@@ -1,6 +1,6 @@
 # RunSeal
 
-RunSeal is a Codex-style, OS-native sandbox layer for AI agents.
+RunSeal is an OS-native sandbox layer for AI agents.
 
 It exposes a stable execution protocol for running local commands inside policy-governed filesystem, process, resource, and network boundaries. Enterprise network access is expected to go through a controlled proxy that can enforce routes, inject authentication at the boundary, redact sensitive data, and emit structured audit events.
 
