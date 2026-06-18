@@ -1,5 +1,7 @@
 use crate::policy::{BackendFeature, SandboxPolicy};
 use serde_json::{Value, json};
+use std::env;
+use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -142,6 +144,9 @@ pub struct PlatformSandboxPlan {
     pub filesystem_write: Vec<String>,
     pub filesystem_deny: Vec<String>,
     pub network_mode: &'static str,
+    pub environment_inherit: String,
+    pub environment_scrub: Vec<String>,
+    pub environment_proxy: bool,
     pub required_backend_features: Vec<&'static str>,
 }
 
@@ -170,6 +175,9 @@ impl PlatformSandboxPlan {
             filesystem_write: policy.filesystem.write.clone(),
             filesystem_deny: policy.filesystem.deny.clone(),
             network_mode: policy.network.mode.as_str(),
+            environment_inherit: policy.environment.inherit.clone(),
+            environment_scrub: policy.environment.scrub.clone(),
+            environment_proxy: policy.environment.proxy,
             required_backend_features: policy.required_backend_feature_names(),
         }
     }
@@ -198,6 +206,11 @@ impl PlatformSandboxPlan {
             },
             "network": {
                 "mode": self.network_mode,
+            },
+            "environment": {
+                "inherit": self.environment_inherit.clone(),
+                "scrub": self.environment_scrub.clone(),
+                "proxy": self.environment_proxy,
             },
             "required_backend_features": self.required_backend_features.clone(),
         })
@@ -325,11 +338,11 @@ impl SandboxBackend for LocalBackend {
 
     fn execute_plan(
         &self,
-        _plan: &PlatformSandboxPlan,
+        plan: &PlatformSandboxPlan,
         command: &[String],
         cwd: &Path,
     ) -> io::Result<Output> {
-        spawn_local_command(command, cwd)
+        spawn_local_command(plan, command, cwd)
     }
 
     fn capabilities_json(&self) -> Value {
@@ -373,6 +386,9 @@ impl WindowsReferenceBackend {
             filesystem_write: policy.filesystem.write.clone(),
             filesystem_deny: policy.filesystem.deny.clone(),
             network_mode: policy.network.mode.as_str(),
+            environment_inherit: policy.environment.inherit.clone(),
+            environment_scrub: policy.environment.scrub.clone(),
+            environment_proxy: policy.environment.proxy,
             required_backend_features: policy.required_backend_feature_names(),
         }
     }
@@ -423,11 +439,11 @@ impl SandboxBackend for WindowsReferenceBackend {
 
     fn execute_plan(
         &self,
-        _plan: &PlatformSandboxPlan,
+        plan: &PlatformSandboxPlan,
         command: &[String],
         cwd: &Path,
     ) -> io::Result<Output> {
-        spawn_local_command(command, cwd)
+        spawn_local_command(plan, command, cwd)
     }
 
     fn capabilities_json(&self) -> Value {
@@ -473,11 +489,11 @@ impl SandboxBackend for MacosExperimentalBackend {
 
     fn execute_plan(
         &self,
-        _plan: &PlatformSandboxPlan,
+        plan: &PlatformSandboxPlan,
         command: &[String],
         cwd: &Path,
     ) -> io::Result<Output> {
-        spawn_local_command(command, cwd)
+        spawn_local_command(plan, command, cwd)
     }
 
     fn capabilities_json(&self) -> Value {
@@ -522,11 +538,11 @@ impl SandboxBackend for LinuxCommunityBackend {
 
     fn execute_plan(
         &self,
-        _plan: &PlatformSandboxPlan,
+        plan: &PlatformSandboxPlan,
         command: &[String],
         cwd: &Path,
     ) -> io::Result<Output> {
-        spawn_local_command(command, cwd)
+        spawn_local_command(plan, command, cwd)
     }
 
     fn capabilities_json(&self) -> Value {
@@ -565,11 +581,67 @@ fn path_string(path: &Path) -> String {
     PathBuf::from(path).to_string_lossy().to_string()
 }
 
-fn spawn_local_command(command: &[String], cwd: &Path) -> io::Result<Output> {
-    Command::new(&command[0])
+fn spawn_local_command(
+    plan: &PlatformSandboxPlan,
+    command: &[String],
+    cwd: &Path,
+) -> io::Result<Output> {
+    let mut process = Command::new(&command[0]);
+    process
         .args(&command[1..])
         .current_dir(cwd)
-        .output()
+        .env_clear()
+        .envs(minimal_environment(plan));
+    process.output()
+}
+
+fn minimal_environment(plan: &PlatformSandboxPlan) -> Vec<(OsString, OsString)> {
+    if plan.environment_inherit != "minimal" {
+        return Vec::new();
+    }
+
+    minimal_environment_keys()
+        .into_iter()
+        .filter(|key| {
+            !plan
+                .environment_scrub
+                .iter()
+                .any(|pattern| matches_scrub_pattern(key, pattern))
+        })
+        .filter_map(|key| env::var_os(key).map(|value| (OsString::from(key), value)))
+        .collect()
+}
+
+fn minimal_environment_keys() -> Vec<&'static str> {
+    if cfg!(windows) {
+        vec![
+            "PATH",
+            "Path",
+            "PATHEXT",
+            "SYSTEMROOT",
+            "SystemRoot",
+            "WINDIR",
+            "COMSPEC",
+            "TEMP",
+            "TMP",
+        ]
+    } else {
+        vec!["PATH", "TMPDIR", "LANG", "LC_ALL"]
+    }
+}
+
+fn matches_scrub_pattern(key: &str, pattern: &str) -> bool {
+    let key = key.to_ascii_uppercase();
+    let pattern = pattern.to_ascii_uppercase();
+
+    if let Some(prefix) = pattern.strip_suffix('*') {
+        return key.starts_with(prefix);
+    }
+    if let Some(suffix) = pattern.strip_prefix('*') {
+        return key.ends_with(suffix);
+    }
+
+    key == pattern
 }
 
 fn compile_local_execution_or_unsupported(

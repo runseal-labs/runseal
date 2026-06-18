@@ -36,9 +36,14 @@ fn rpc_request(method: &str, params: Value) -> String {
 }
 
 fn run_rpc(message: &str) -> Result<Output> {
+    run_rpc_with_env(message, &[])
+}
+
+fn run_rpc_with_env(message: &str, envs: &[(&str, &str)]) -> Result<Output> {
     let bin = require_runseal_bin()?;
     let mut child = Command::new(bin)
         .args(["rpc", "--stdio"])
+        .envs(envs.iter().copied())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -488,6 +493,10 @@ fn execute_rpc_streams_events_and_final_result() -> Result<()> {
         response["result"]["platform_plan"]["backend"]["name"],
         expected_backend_name()
     );
+    assert_eq!(
+        response["result"]["platform_plan"]["environment"]["inherit"],
+        "minimal"
+    );
     assert!(
         response["result"]["audit_path"]
             .as_str()
@@ -502,6 +511,54 @@ fn execute_rpc_streams_events_and_final_result() -> Result<()> {
     assert_eq!(
         response["result"]["backend"]["status"],
         expected_backend_status()
+    );
+    Ok(())
+}
+
+#[test]
+fn execute_uses_minimal_environment() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let output = run_rpc_with_env(
+        &rpc_request(
+            "execute",
+            json!({
+                "command": [
+                    "python3",
+                    "-c",
+                    "import os; print('sentinel=' + os.environ.get('RUNSEAL_SECRET_SENTINEL', 'missing'))"
+                ],
+                "cwd": tmp.path(),
+                "policy": "danger-full-access"
+            }),
+        ),
+        &[("RUNSEAL_SECRET_SENTINEL", "blocked")],
+    )?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = messages
+        .iter()
+        .find(|message| message.get("id") == Some(&json!(1)))
+        .unwrap();
+
+    assert_eq!(response["result"]["status"], "finished");
+    assert_eq!(response["result"]["exit_code"], 0);
+    assert!(
+        response["result"]["stdout"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("sentinel=missing")
+    );
+    assert!(
+        response["result"]["platform_plan"]["environment"]["scrub"]
+            .as_array()
+            .expect("environment.scrub must be an array")
+            .iter()
+            .any(|pattern| pattern == "*_TOKEN")
     );
     Ok(())
 }
