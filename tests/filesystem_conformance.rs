@@ -112,6 +112,7 @@ fn assert_backend_missing(response: &Value, root: &Path) -> Result<()> {
             "runtime_environment",
             "process_isolation",
             "process_cleanup",
+            "direct_network_deny",
         ],
     )
 }
@@ -298,6 +299,7 @@ fn network_disabled_blocks_direct_egress_when_supported_or_fails_closed() -> Res
                 "runtime_environment",
                 "process_isolation",
                 "process_cleanup",
+                "direct_network_deny",
                 "network_disabled",
             ],
         )?;
@@ -333,6 +335,7 @@ fn network_proxy_blocks_direct_egress_when_supported_or_fails_closed() -> Result
                 "runtime_environment",
                 "process_isolation",
                 "process_cleanup",
+                "direct_network_deny",
                 "network_proxy",
             ],
         )?;

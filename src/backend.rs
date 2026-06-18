@@ -993,6 +993,7 @@ fn capabilities_json_for(backend: &dyn SandboxBackend, notes: &[&'static str]) -
             "runtime_environment": supported_features.contains(&BackendFeature::RuntimeEnvironment),
             "process_isolation": supported_features.contains(&BackendFeature::ProcessIsolation),
             "process_cleanup": supported_features.contains(&BackendFeature::ProcessCleanup),
+            "direct_network_deny": supported_features.contains(&BackendFeature::DirectNetworkDeny),
             "network_disabled": supported_features.contains(&BackendFeature::NetworkDisabled),
             "network_proxy": supported_features.contains(&BackendFeature::NetworkProxy),
             "resource_limits": false,
@@ -1046,6 +1047,7 @@ mod tests {
                 BackendFeature::RuntimeEnvironment,
                 BackendFeature::ProcessIsolation,
                 BackendFeature::ProcessCleanup,
+                BackendFeature::DirectNetworkDeny,
                 BackendFeature::NetworkProxy,
             ]
         );

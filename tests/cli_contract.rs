@@ -189,6 +189,7 @@ fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
     assert_eq!(payload["features"]["runtime_environment"], false);
     assert_eq!(payload["features"]["process_isolation"], false);
     assert_eq!(payload["features"]["process_cleanup"], false);
+    assert_eq!(payload["features"]["direct_network_deny"], false);
     assert_eq!(payload["features"]["audit_jsonl"], true);
     assert_eq!(payload["sandbox_levels"]["danger-full-access"], "supported");
     assert_eq!(payload["sandbox_levels"]["read-only"], "unsupported");
@@ -229,6 +230,7 @@ fn explain_policy_cli_materializes_standard_profile() -> Result<()> {
             "runtime_environment",
             "process_isolation",
             "process_cleanup",
+            "direct_network_deny",
             "network_disabled"
         ])
     );

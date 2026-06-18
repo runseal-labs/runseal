@@ -224,6 +224,7 @@ fn get_capabilities_rpc_contract() -> Result<()> {
     assert_eq!(payload["features"]["runtime_environment"], false);
     assert_eq!(payload["features"]["process_isolation"], false);
     assert_eq!(payload["features"]["process_cleanup"], false);
+    assert_eq!(payload["features"]["direct_network_deny"], false);
     assert_eq!(payload["features"]["audit_jsonl"], true);
     Ok(())
 }
@@ -796,6 +797,7 @@ fn explain_policy_returns_effective_hash_and_network_mode() -> Result<()> {
             "runtime_environment",
             "process_isolation",
             "process_cleanup",
+            "direct_network_deny",
             "network_proxy"
         ])
     );
@@ -999,6 +1001,7 @@ fn sandboxed_policy_without_backend_fails_closed() -> Result<()> {
             "runtime_environment",
             "process_isolation",
             "process_cleanup",
+            "direct_network_deny",
             "network_disabled"
         ])
     );
@@ -1038,6 +1041,7 @@ fn sandboxed_policy_without_backend_fails_closed() -> Result<()> {
                 "runtime_environment",
                 "process_isolation",
                 "process_cleanup",
+                "direct_network_deny",
                 "network_disabled"
             ])
         );

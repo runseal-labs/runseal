@@ -67,6 +67,7 @@ pub enum BackendFeature {
     RuntimeEnvironment,
     ProcessIsolation,
     ProcessCleanup,
+    DirectNetworkDeny,
     NetworkDisabled,
     NetworkProxy,
 }
@@ -79,6 +80,7 @@ impl BackendFeature {
             Self::RuntimeEnvironment => "runtime_environment",
             Self::ProcessIsolation => "process_isolation",
             Self::ProcessCleanup => "process_cleanup",
+            Self::DirectNetworkDeny => "direct_network_deny",
             Self::NetworkDisabled => "network_disabled",
             Self::NetworkProxy => "network_proxy",
         }
@@ -210,6 +212,7 @@ impl SandboxPolicy {
             BackendFeature::RuntimeEnvironment,
             BackendFeature::ProcessIsolation,
             BackendFeature::ProcessCleanup,
+            BackendFeature::DirectNetworkDeny,
         ];
         features.push(match self.network.mode {
             NetworkMode::Disabled => BackendFeature::NetworkDisabled,
@@ -656,6 +659,7 @@ mod tests {
                 "runtime_environment",
                 "process_isolation",
                 "process_cleanup",
+                "direct_network_deny",
                 "network_proxy"
             ]
         );
