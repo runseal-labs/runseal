@@ -11,6 +11,7 @@ pub struct ElevatedSandboxProfileCaptureRequest<'a> {
     pub command: Vec<String>,
     pub cwd: &'a Path,
     pub env_map: HashMap<String, String>,
+    pub stdin_bytes: Option<Vec<u8>>,
     pub timeout_ms: Option<u64>,
     pub cancellation: Option<crate::WindowsSandboxCancellationToken>,
     pub use_private_desktop: bool,
@@ -34,10 +35,13 @@ mod windows_impl {
     use crate::identity::require_logon_sandbox_creds;
     use crate::ipc_framed::EmptyPayload;
     use crate::ipc_framed::FramedMessage;
+    use crate::ipc_framed::IPC_PROTOCOL_VERSION;
     use crate::ipc_framed::Message;
     use crate::ipc_framed::OutputStream;
     use crate::ipc_framed::SpawnRequest;
+    use crate::ipc_framed::StdinPayload;
     use crate::ipc_framed::decode_bytes;
+    use crate::ipc_framed::encode_bytes;
     use crate::ipc_framed::read_frame;
     use crate::ipc_framed::write_frame;
     use crate::logging::log_failure;
@@ -80,7 +84,7 @@ mod windows_impl {
                     let _ = write_frame(
                         &mut pipe_write,
                         &FramedMessage {
-                            version: 1,
+                            version: IPC_PROTOCOL_VERSION,
                             message: Message::Terminate {
                                 payload: EmptyPayload::default(),
                             },
@@ -92,6 +96,31 @@ mod windows_impl {
             }
         });
         Ok(Some((handle, done)))
+    }
+
+    fn write_stdin_and_close(pipe_write: &mut File, bytes: &[u8]) -> Result<()> {
+        if !bytes.is_empty() {
+            write_frame(
+                &mut *pipe_write,
+                &FramedMessage {
+                    version: IPC_PROTOCOL_VERSION,
+                    message: Message::Stdin {
+                        payload: StdinPayload {
+                            data_b64: encode_bytes(bytes),
+                        },
+                    },
+                },
+            )?;
+        }
+        write_frame(
+            pipe_write,
+            &FramedMessage {
+                version: IPC_PROTOCOL_VERSION,
+                message: Message::CloseStdin {
+                    payload: EmptyPayload::default(),
+                },
+            },
+        )
     }
 
     /// Launches the command runner under the sandbox user and captures its output.
@@ -106,6 +135,7 @@ mod windows_impl {
             command,
             cwd,
             mut env_map,
+            stdin_bytes,
             timeout_ms,
             cancellation,
             use_private_desktop,
@@ -191,7 +221,7 @@ mod windows_impl {
                 cap_sids,
                 timeout_ms,
                 tty: false,
-                stdin_open: false,
+                stdin_open: stdin_bytes.is_some(),
                 use_private_desktop,
             };
             let transport = match spawn_runner_transport(
@@ -225,8 +255,14 @@ mod windows_impl {
                 }
                 Err(err) => return Err(err),
             };
-            let (pipe_write, mut pipe_read) = transport.into_files();
-            let cancel_writer = spawn_cancel_writer(&pipe_write, cancellation)?;
+            let (mut pipe_write, mut pipe_read) = transport.into_files();
+            let mut stdin_bytes = stdin_bytes;
+            let mut cancellation = cancellation;
+            let mut cancel_writer = if stdin_bytes.is_none() {
+                spawn_cancel_writer(&pipe_write, cancellation.take())?
+            } else {
+                None
+            };
 
             let mut stdout = Vec::new();
             let mut stderr = Vec::new();
@@ -237,7 +273,14 @@ mod windows_impl {
                     Err(err) => break Err(err),
                 };
                 match msg.message {
-                    Message::SpawnReady { .. } => {}
+                    Message::SpawnReady { .. } => {
+                        if let Some(bytes) = stdin_bytes.take() {
+                            write_stdin_and_close(&mut pipe_write, &bytes)?;
+                        }
+                        if cancel_writer.is_none() {
+                            cancel_writer = spawn_cancel_writer(&pipe_write, cancellation.take())?;
+                        }
+                    }
                     Message::Output { payload } => match decode_bytes(&payload.data_b64) {
                         Ok(bytes) => match payload.stream {
                             OutputStream::Stdout => stdout.extend_from_slice(&bytes),
@@ -279,6 +322,34 @@ mod windows_impl {
                 timed_out,
             })
         })()
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::io::{Seek, SeekFrom};
+
+        #[test]
+        fn write_stdin_and_close_emits_stdin_then_close_frames() -> Result<()> {
+            let mut file = tempfile::tempfile()?;
+            write_stdin_and_close(&mut file, b"hello")?;
+            file.seek(SeekFrom::Start(0))?;
+
+            let stdin_frame = read_frame(&mut file)?.expect("stdin frame");
+            assert_eq!(stdin_frame.version, IPC_PROTOCOL_VERSION);
+            match stdin_frame.message {
+                Message::Stdin { payload } => {
+                    assert_eq!(decode_bytes(&payload.data_b64)?, b"hello");
+                }
+                other => panic!("expected stdin frame, got {other:?}"),
+            }
+
+            let close_frame = read_frame(&mut file)?.expect("close stdin frame");
+            assert_eq!(close_frame.version, IPC_PROTOCOL_VERSION);
+            assert!(matches!(close_frame.message, Message::CloseStdin { .. }));
+            assert!(read_frame(&mut file)?.is_none());
+            Ok(())
+        }
     }
 }
 

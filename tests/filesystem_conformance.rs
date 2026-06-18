@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use std::env;
 use std::fs;
@@ -95,6 +96,10 @@ fn execute_with_network(
             "policy": policy
         })
     };
+    execute_params(params)
+}
+
+fn execute_params(params: Value) -> Result<Value> {
     let output = run_rpc(&rpc_request("execute", params))?;
 
     assert!(
@@ -460,6 +465,48 @@ fn runtime_environment_roots_are_per_execution_when_supported_or_fails_closed() 
             .trim(),
     )?;
     assert_eq!(leaked, json!([]));
+    Ok(())
+}
+
+#[test]
+fn workspace_write_accepts_bytes_stdin_when_supported_or_fails_closed() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let workspace = tmp.path().join("workspace");
+    fs::create_dir_all(&workspace)?;
+    let stdin_text = "runseal sandbox stdin bytes";
+    let encoded = STANDARD.encode(stdin_text.as_bytes());
+    let response = execute_params(json!({
+        "command": [
+            python_bin(),
+            "-c",
+            "import sys; print(sys.stdin.buffer.read().decode('utf-8'), end='')"
+        ],
+        "cwd": workspace,
+        "policy": "workspace-write",
+        "network": {"mode": "disabled"},
+        "stdin": {
+            "mode": "bytes",
+            "data": format!("base64:{encoded}"),
+            "encoding": "base64"
+        }
+    }))?;
+
+    if is_backend_missing(&response) {
+        let expected_features = expected_missing_features(&["network_disabled"]);
+        assert_backend_missing_features(&response, &workspace, &expected_features)?;
+        return Ok(());
+    }
+    if is_backend_unavailable(&response) {
+        assert_backend_unavailable(&response, &workspace)?;
+        return Ok(());
+    }
+
+    assert_eq!(response["result"]["status"], "finished");
+    assert_eq!(response["result"]["exit_code"], 0);
+    assert_eq!(
+        response["result"]["stdout"].as_str().unwrap_or_default(),
+        stdin_text
+    );
     Ok(())
 }
 

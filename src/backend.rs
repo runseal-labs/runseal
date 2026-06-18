@@ -1171,15 +1171,12 @@ fn execute_windows_sandbox_plan(
     env: &ExecutionEnv,
     timeout: Option<Duration>,
 ) -> io::Result<BackendExecutionOutput> {
-    if !matches!(stdin, ExecutionStdin::Empty) {
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "sandboxed Windows execution does not support stdin bytes yet",
-        ));
-    }
-
     let _execution_guard = windows_sandbox_execution_gate(plan)?;
     let _runtime_root = required_plan_path(plan.runtime_root.as_deref(), "runtime_root")?;
+    let stdin_bytes = match stdin {
+        ExecutionStdin::Empty => None,
+        ExecutionStdin::Bytes(bytes) => Some(bytes),
+    };
     let vendor_sandbox_home = vendor_sandbox_home(cwd);
     let workspace_roots = windows_sandbox_workspace_roots_for_plan(cwd, plan)?;
     let permission_profile = plan.vendor_permission_profile()?;
@@ -1213,6 +1210,7 @@ fn execute_windows_sandbox_plan(
                 command: sandbox_command,
                 cwd,
                 env_map,
+                stdin_bytes,
                 timeout_ms: timeout.map(duration_millis_u64),
                 cancellation: None,
                 use_private_desktop: false,
