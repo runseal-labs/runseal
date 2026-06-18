@@ -18,6 +18,9 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 const PROTOCOL_VERSION: &str = "runseal.protocol/v1";
 const MAX_METADATA_BYTES: usize = 4096;
+const STDIN_BASE64_PREFIX: &str = "base64:";
+const MAX_STDIN_BYTES: usize = 64 * 1024;
+const MAX_STDIN_DATA_BYTES: usize = STDIN_BASE64_PREFIX.len() + 4 * MAX_STDIN_BYTES.div_ceil(3);
 const MAX_ENV_ENTRIES: usize = 64;
 const MAX_ENV_KEY_BYTES: usize = 128;
 const MAX_ENV_VALUE_BYTES: usize = 4096;
@@ -493,15 +496,18 @@ fn stdin_from_params(params: &Map<String, Value>) -> Result<ExecutionStdin, RunS
     let stdin = value
         .as_object()
         .ok_or_else(|| RunSealError::new("INVALID_REQUEST", "params.stdin must be an object"))?;
-    validate_param_keys(stdin, "execute stdin", &["mode"])?;
     let mode = stdin
         .get("mode")
         .and_then(Value::as_str)
         .ok_or_else(|| RunSealError::new("INVALID_REQUEST", "params.stdin.mode is required"))?;
 
     match mode {
-        "empty" => Ok(ExecutionStdin::Empty),
-        "inherit" | "bytes" | "stream" => Err(RunSealError::new(
+        "empty" => {
+            validate_param_keys(stdin, "execute stdin", &["mode"])?;
+            Ok(ExecutionStdin::Empty)
+        }
+        "bytes" => stdin_bytes_from_params(stdin),
+        "inherit" | "stream" => Err(RunSealError::new(
             "INVALID_REQUEST",
             format!("params.stdin.mode={mode} is not supported by execute"),
         )),
@@ -509,6 +515,63 @@ fn stdin_from_params(params: &Map<String, Value>) -> Result<ExecutionStdin, RunS
             "INVALID_REQUEST",
             format!("params.stdin.mode must be empty, got {mode}"),
         )),
+    }
+}
+
+fn stdin_bytes_from_params(stdin: &Map<String, Value>) -> Result<ExecutionStdin, RunSealError> {
+    validate_param_keys(stdin, "execute stdin", &["mode", "data", "encoding"])?;
+    let encoding = stdin
+        .get("encoding")
+        .and_then(Value::as_str)
+        .ok_or_else(|| RunSealError::new("INVALID_REQUEST", "params.stdin.encoding is required"))?;
+    if encoding != "base64" {
+        return Err(RunSealError::new(
+            "INVALID_REQUEST",
+            "params.stdin.encoding must be base64",
+        ));
+    }
+    let data = stdin
+        .get("data")
+        .and_then(Value::as_str)
+        .ok_or_else(|| RunSealError::new("INVALID_REQUEST", "params.stdin.data is required"))?;
+    if data.len() > MAX_STDIN_DATA_BYTES {
+        return Err(RunSealError::new(
+            "INVALID_REQUEST",
+            format!("params.stdin.data must decode to at most {MAX_STDIN_BYTES} bytes"),
+        ));
+    }
+    let encoded = data.strip_prefix(STDIN_BASE64_PREFIX).ok_or_else(|| {
+        RunSealError::new(
+            "INVALID_REQUEST",
+            "params.stdin.data must use base64: prefix",
+        )
+    })?;
+    let bytes = STANDARD.decode(encoded).map_err(|err| {
+        RunSealError::new(
+            "INVALID_REQUEST",
+            format!("params.stdin.data must be valid base64: {err}"),
+        )
+    })?;
+    if bytes.len() > MAX_STDIN_BYTES {
+        return Err(RunSealError::new(
+            "INVALID_REQUEST",
+            format!("params.stdin.data must decode to at most {MAX_STDIN_BYTES} bytes"),
+        ));
+    }
+
+    Ok(ExecutionStdin::Bytes(bytes))
+}
+
+fn stdin_audit_json(stdin: &ExecutionStdin) -> Value {
+    match stdin {
+        ExecutionStdin::Empty => json!({
+            "mode": "empty",
+            "byte_count": 0,
+        }),
+        ExecutionStdin::Bytes(bytes) => json!({
+            "mode": "bytes",
+            "byte_count": bytes.len(),
+        }),
     }
 }
 
@@ -634,6 +697,7 @@ fn execute_command(
     let ids = new_execution_ids();
     let policy_id = policy.id.clone();
     let policy_hash = policy.hash();
+    let stdin_audit = stdin_audit_json(&stdin);
     let env_keys = env.keys();
     let mut audit = create_audit_writer(cwd, &ids.session_id)?;
     let audit_path = audit.relative_path().to_string();
@@ -837,6 +901,7 @@ fn execute_command(
                 "platform": plan.platform,
             },
             "platform_plan": plan.json(),
+            "stdin": stdin_audit,
             "environment": {
                 "requested_keys": env_keys,
             },

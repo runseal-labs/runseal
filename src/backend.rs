@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 use std::env;
 use std::ffi::OsString;
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::thread;
@@ -71,9 +71,10 @@ pub trait SandboxBackend {
     fn capabilities_json(&self) -> Value;
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ExecutionStdin {
     Empty,
+    Bytes(Vec<u8>),
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -639,21 +640,41 @@ fn spawn_local_command(
         .env_clear()
         .envs(minimal_environment(plan))
         .envs(env.entries.iter().map(|(key, value)| (key, value)));
-    match stdin {
+    match &stdin {
         ExecutionStdin::Empty => {
             process.stdin(Stdio::null());
+        }
+        ExecutionStdin::Bytes(_) => {
+            process.stdin(Stdio::piped());
         }
     }
 
     let Some(timeout) = timeout else {
+        if let ExecutionStdin::Bytes(bytes) = stdin {
+            process.stdout(Stdio::piped()).stderr(Stdio::piped());
+            let mut child = process.spawn()?;
+            write_child_stdin(&mut child, bytes)?;
+            return child
+                .wait_with_output()
+                .map(|output| BackendExecutionOutput {
+                    output,
+                    timed_out: false,
+                });
+        }
         return process.output().map(|output| BackendExecutionOutput {
             output,
             timed_out: false,
         });
     };
 
+    if matches!(stdin, ExecutionStdin::Bytes(_)) {
+        process.stdout(Stdio::piped()).stderr(Stdio::piped());
+    }
     let start = Instant::now();
     let mut child = process.spawn()?;
+    if let ExecutionStdin::Bytes(bytes) = stdin {
+        write_child_stdin(&mut child, bytes)?;
+    }
     loop {
         if child.try_wait()?.is_some() {
             return child
@@ -684,6 +705,13 @@ fn spawn_local_command(
                 .min(Duration::from_millis(10)),
         );
     }
+}
+
+fn write_child_stdin(child: &mut std::process::Child, bytes: Vec<u8>) -> io::Result<()> {
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(&bytes)?;
+    }
+    Ok(())
 }
 
 fn minimal_environment(plan: &PlatformSandboxPlan) -> Vec<(OsString, OsString)> {

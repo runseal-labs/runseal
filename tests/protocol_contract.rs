@@ -527,9 +527,138 @@ fn execute_accepts_empty_stdin() -> Result<()> {
 }
 
 #[test]
+fn execute_accepts_bytes_stdin_and_audits_metadata_only() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let stdin_bytes = b"stdin-secret payload";
+    let encoded = STANDARD.encode(stdin_bytes);
+    let output = run_rpc(&rpc_request(
+        "execute",
+        json!({
+            "command": [
+                "python3",
+                "-c",
+                "import sys; data = sys.stdin.buffer.read(); print(f'stdin_bytes={len(data)}')"
+            ],
+            "cwd": tmp.path(),
+            "policy": "danger-full-access",
+            "stdin": {
+                "mode": "bytes",
+                "data": format!("base64:{encoded}"),
+                "encoding": "base64"
+            }
+        }),
+    ))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = messages
+        .iter()
+        .find(|message| message.get("id") == Some(&json!(1)))
+        .unwrap();
+
+    assert_eq!(response["result"]["status"], "finished");
+    assert_eq!(response["result"]["exit_code"], 0);
+    assert!(
+        response["result"]["stdout"]
+            .as_str()
+            .unwrap_or_default()
+            .contains(&format!("stdin_bytes={}", stdin_bytes.len()))
+    );
+
+    let audit_path = response["result"]["audit_path"]
+        .as_str()
+        .expect("execution result must include audit_path");
+    let audit_events = read_audit_events(tmp.path(), audit_path)?;
+    let started = audit_events
+        .iter()
+        .find(|event| event["type"] == "execution.started")
+        .context("execution.started audit event must exist")?;
+    assert_eq!(started["stdin"]["mode"], "bytes");
+    assert_eq!(started["stdin"]["byte_count"], stdin_bytes.len());
+
+    let audit_jsonl = fs::read_to_string(tmp.path().join(audit_path))?;
+    assert!(!audit_jsonl.contains("stdin-secret"));
+    assert!(!audit_jsonl.contains(&encoded));
+    Ok(())
+}
+
+#[test]
+fn execute_rejects_invalid_bytes_stdin() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let cases = [
+        (
+            json!({
+                "mode": "bytes",
+                "data": "base64:aGVsbG8=",
+                "encoding": "utf8"
+            }),
+            "params.stdin.encoding must be base64",
+        ),
+        (
+            json!({
+                "mode": "bytes",
+                "data": "aGVsbG8=",
+                "encoding": "base64"
+            }),
+            "params.stdin.data must use base64: prefix",
+        ),
+        (
+            json!({
+                "mode": "bytes",
+                "data": "base64:not-valid-base64",
+                "encoding": "base64"
+            }),
+            "params.stdin.data must be valid base64",
+        ),
+        (
+            json!({
+                "mode": "bytes",
+                "data": "base64:aGVsbG8=",
+                "encoding": "base64",
+                "extra": true
+            }),
+            "params.extra is not supported by execute stdin",
+        ),
+    ];
+
+    for (stdin, expected_reason) in cases {
+        let output = run_rpc(&rpc_request(
+            "execute",
+            json!({
+                "command": ["python3", "-c", "print('must not run')"],
+                "cwd": tmp.path(),
+                "policy": "danger-full-access",
+                "stdin": stdin
+            }),
+        ))?;
+
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let messages = stdout_json_lines(&output)?;
+        let response = &messages[0];
+
+        assert_eq!(response["error"]["data"]["code"], "INVALID_REQUEST");
+        assert!(
+            response["error"]["data"]["reason"]
+                .as_str()
+                .unwrap_or_default()
+                .contains(expected_reason)
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn execute_rejects_unimplemented_stdin_modes() -> Result<()> {
     let tmp = TempDir::new()?;
-    for mode in ["inherit", "bytes", "stream"] {
+    for mode in ["inherit", "stream"] {
         let output = run_rpc(&rpc_request(
             "execute",
             json!({
