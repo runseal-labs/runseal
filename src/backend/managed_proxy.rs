@@ -189,10 +189,8 @@ fn rewrite_plain_http_request(
 }
 
 fn strip_http_scheme(target: &str) -> Option<&str> {
-    if target.len() < "http://".len() {
-        return None;
-    }
-    let (scheme, rest) = target.split_at("http://".len());
+    let scheme = target.get(.."http://".len())?;
+    let rest = target.get("http://".len()..)?;
     scheme.eq_ignore_ascii_case("http://").then_some(rest)
 }
 
@@ -324,6 +322,7 @@ mod tests {
         .expect("rewrite query-only absolute URI");
         assert_eq!(upstream, "example.test:80");
         assert!(rewritten.starts_with("GET /?only=query HTTP/1.1\r\n"));
+        assert_eq!(strip_http_scheme("\u{00e9}\u{00e9}\u{00e9}\u{00e9}"), None);
     }
 
     #[test]
