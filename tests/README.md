@@ -11,9 +11,11 @@ RUNSEAL_BIN=/path/to/runseal cargo test --test cli_contract --test protocol_cont
 The tests are black-box by design:
 
 - CLI behavior through `runseal exec`.
+- Policy explanation through `runseal explain-policy`.
 - JSON-RPC behavior through `runseal rpc --stdio`.
 - Protocol vocabulary uses `Execution`, not raw process objects.
 - Policy denials use stable error codes.
+- Standard profiles materialize to canonical policy JSON and stable hashes.
 - Events are structured and align with the RFC event model.
 - `danger-full-access` is explicit local execution with no sandbox guarantee.
 - Sandboxed policies fail closed unless a backend can enforce them.

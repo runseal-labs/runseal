@@ -81,6 +81,42 @@ fn version_reports_protocol_and_runtime_versions() -> Result<()> {
 }
 
 #[test]
+fn explain_policy_cli_materializes_standard_profile() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let cwd = tmp.path().to_string_lossy().to_string();
+    let output = run_cli(&[
+        "explain-policy",
+        "--policy",
+        "workspace-write",
+        "--network",
+        "disabled",
+        "--cwd",
+        &cwd,
+    ])?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload = stdout_json(&output)?;
+    assert_eq!(payload["policy_id"], "workspace-write");
+    assert_eq!(payload["sandbox_level"], "workspace-write");
+    assert_eq!(payload["network"]["mode"], "disabled");
+    assert_eq!(payload["environment"]["inherit"], "minimal");
+    assert_eq!(payload["backend_requirement"], "sandbox-backend");
+    assert_eq!(
+        payload["canonical_policy"]["filesystem"]["protect_vcs"],
+        true
+    );
+    assert!(payload["policy_hash"]
+        .as_str()
+        .unwrap_or_default()
+        .starts_with("sha256:"));
+    Ok(())
+}
+
+#[test]
 fn exec_events_stream_uses_execution_vocabulary() -> Result<()> {
     let tmp = TempDir::new()?;
     let cwd = tmp.path().to_string_lossy().to_string();

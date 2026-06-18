@@ -104,7 +104,7 @@ fn explain_policy_returns_effective_hash_and_network_mode() -> Result<()> {
     let cwd = tmp.path().to_string_lossy().to_string();
     let output = run_rpc(&rpc_request(
         "explainPolicy",
-        json!({"policy": "workspace-proxy", "cwd": cwd}),
+        json!({"policy": "workspace-write", "cwd": cwd}),
     ))?;
 
     assert!(
@@ -114,17 +114,58 @@ fn explain_policy_returns_effective_hash_and_network_mode() -> Result<()> {
     );
     let messages = stdout_json_lines(&output)?;
     let payload = &messages[0]["result"];
-    assert_eq!(payload["policy_id"], "workspace-proxy");
+    assert_eq!(payload["policy_id"], "workspace-write");
+    assert_eq!(payload["sandbox_level"], "workspace-write");
     assert!(payload["policy_hash"]
         .as_str()
         .unwrap_or_default()
         .starts_with("sha256:"));
     assert_eq!(payload["network"]["mode"], "proxy");
+    assert_eq!(payload["environment"]["inherit"], "minimal");
+    assert_eq!(payload["backend_requirement"], "sandbox-backend");
+    assert_eq!(payload["support"], "unsupported");
     assert!(payload["filesystem"]["write"]
         .as_array()
         .expect("filesystem.write must be an array")
         .iter()
         .any(|path| path == tmp.path().to_string_lossy().as_ref()));
+    assert!(payload["canonical_policy"]["filesystem"]["deny"]
+        .as_array()
+        .expect("canonical filesystem.deny must be an array")
+        .iter()
+        .any(|path| path.as_str().unwrap_or_default().ends_with(".git")));
+    Ok(())
+}
+
+#[test]
+fn explain_policy_hash_tracks_network_override() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let proxy = run_rpc(&rpc_request(
+        "explainPolicy",
+        json!({"policy": "workspace-write", "cwd": tmp.path(), "network": {"mode": "proxy"}}),
+    ))?;
+    let disabled = run_rpc(&rpc_request(
+        "explainPolicy",
+        json!({"policy": "workspace-write", "cwd": tmp.path(), "network": {"mode": "disabled"}}),
+    ))?;
+
+    assert!(proxy.status.success());
+    assert!(disabled.status.success());
+    let proxy_messages = stdout_json_lines(&proxy)?;
+    let disabled_messages = stdout_json_lines(&disabled)?;
+    let proxy_payload = &proxy_messages[0]["result"];
+    let disabled_payload = &disabled_messages[0]["result"];
+
+    assert_eq!(proxy_payload["network"]["mode"], "proxy");
+    assert_eq!(disabled_payload["network"]["mode"], "disabled");
+    assert_ne!(
+        proxy_payload["policy_hash"],
+        disabled_payload["policy_hash"]
+    );
+    assert_ne!(
+        proxy_payload["canonical_policy"],
+        disabled_payload["canonical_policy"]
+    );
     Ok(())
 }
 
