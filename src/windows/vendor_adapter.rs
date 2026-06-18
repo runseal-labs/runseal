@@ -7,7 +7,6 @@ pub(crate) enum WindowsVendorSandboxProfile {
         filesystem: WindowsVendorFilesystemPolicy,
         network: WindowsVendorNetworkPolicy,
         sandbox_user_model: WindowsVendorSandboxUserModel,
-        managed_proxy_required: bool,
     },
 }
 
@@ -31,7 +30,8 @@ pub(crate) enum WindowsVendorFilesystemAccess {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WindowsVendorNetworkPolicy {
-    Restricted,
+    Disabled,
+    Proxy,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -55,9 +55,11 @@ impl WindowsVendorSandboxProfile {
             filesystem: WindowsVendorFilesystemPolicy {
                 entries: filesystem_entries(policy),
             },
-            network: WindowsVendorNetworkPolicy::Restricted,
+            network: match policy.network.mode {
+                NetworkMode::Disabled => WindowsVendorNetworkPolicy::Disabled,
+                NetworkMode::Proxy => WindowsVendorNetworkPolicy::Proxy,
+            },
             sandbox_user_model: WindowsVendorSandboxUserModel::SingleSandboxUser,
-            managed_proxy_required: policy.network.mode == NetworkMode::Proxy,
         }
     }
 
@@ -86,16 +88,6 @@ impl WindowsVendorSandboxProfile {
 
     pub(crate) fn deny_roots(&self) -> Vec<String> {
         self.entries_with_access(WindowsVendorFilesystemAccess::Deny)
-    }
-
-    pub(crate) fn managed_proxy_required(&self) -> bool {
-        match self {
-            Self::Disabled => false,
-            Self::Managed {
-                managed_proxy_required,
-                ..
-            } => *managed_proxy_required,
-        }
     }
 
     pub(crate) fn network_policy(&self) -> Option<WindowsVendorNetworkPolicy> {
@@ -214,9 +206,8 @@ mod tests {
                         },
                     ],
                 },
-                network: WindowsVendorNetworkPolicy::Restricted,
+                network: WindowsVendorNetworkPolicy::Proxy,
                 sandbox_user_model: WindowsVendorSandboxUserModel::SingleSandboxUser,
-                managed_proxy_required: true,
             }
         );
         assert_eq!(
@@ -229,7 +220,7 @@ mod tests {
         );
         assert_eq!(
             profile.network_policy(),
-            Some(WindowsVendorNetworkPolicy::Restricted)
+            Some(WindowsVendorNetworkPolicy::Proxy)
         );
         assert_eq!(
             profile.read_roots(),
@@ -246,7 +237,6 @@ mod tests {
                 .map(|path| cwd.join(path).to_string_lossy().to_string())
                 .collect::<Vec<_>>()
         );
-        assert!(profile.managed_proxy_required());
     }
 
     #[test]
@@ -262,6 +252,5 @@ mod tests {
         assert!(profile.read_roots().is_empty());
         assert!(profile.write_roots().is_empty());
         assert!(profile.deny_roots().is_empty());
-        assert!(!profile.managed_proxy_required());
     }
 }

@@ -430,12 +430,8 @@ impl WindowsPolicyPlan {
             }
         };
         let guard = match vendor_profile.network_policy() {
-            Some(WindowsVendorNetworkPolicy::Restricted)
-                if vendor_profile.managed_proxy_required() =>
-            {
-                WindowsNetworkGuard::Proxy
-            }
-            Some(WindowsVendorNetworkPolicy::Restricted) | None => WindowsNetworkGuard::Disabled,
+            Some(WindowsVendorNetworkPolicy::Proxy) => WindowsNetworkGuard::Proxy,
+            Some(WindowsVendorNetworkPolicy::Disabled) | None => WindowsNetworkGuard::Disabled,
         };
         let managed_proxy = match guard {
             WindowsNetworkGuard::Disabled => WindowsManagedProxy::None,
