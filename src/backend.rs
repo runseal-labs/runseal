@@ -477,7 +477,8 @@ impl PlatformSandboxPlan {
     }
 
     fn validate_runtime_root_path_for_setup(&self, root: &Path, expected: &Path) -> io::Result<()> {
-        if !normalize_lexical(root).starts_with(expected) {
+        let root = normalize_lexical(root);
+        if !root.starts_with(expected) {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 format!(
@@ -486,14 +487,11 @@ impl PlatformSandboxPlan {
                 ),
             ));
         }
-        if root.exists() && fs::symlink_metadata(root)?.file_type().is_symlink() {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                format!(
-                    "refusing to prepare symlinked runtime root: {}",
-                    root.display()
-                ),
-            ));
+        for ancestor in root.ancestors() {
+            if !ancestor.starts_with(expected) {
+                break;
+            }
+            validate_runtime_root_not_symlink(ancestor)?;
         }
         Ok(())
     }
@@ -552,6 +550,21 @@ impl PlatformSandboxPlan {
             .join(".runseal")
             .join("runtime")
             .join(&self.execution_id))
+    }
+}
+
+fn validate_runtime_root_not_symlink(root: &Path) -> io::Result<()> {
+    match fs::symlink_metadata(root) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "refusing to prepare symlinked runtime root: {}",
+                root.display()
+            ),
+        )),
+        Ok(_) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
     }
 }
 
@@ -1593,6 +1606,16 @@ mod tests {
     use std::io;
     use std::path::{Path, PathBuf};
     use tempfile::TempDir;
+
+    #[cfg(unix)]
+    fn symlink_dir_for_test(target: &Path, link: &Path) -> io::Result<()> {
+        std::os::unix::fs::symlink(target, link)
+    }
+
+    #[cfg(windows)]
+    fn symlink_dir_for_test(target: &Path, link: &Path) -> io::Result<()> {
+        std::os::windows::fs::symlink_dir(target, link)
+    }
 
     #[derive(Default)]
     struct RecordingAclDriver {
@@ -2648,6 +2671,38 @@ mod tests {
 
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
         assert!(!outside.exists());
+        Ok(())
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn runtime_setup_refuses_symlink_ancestor_before_creating_runtime_tree() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&cwd)?;
+        let outside = tmp.path().join("outside-env");
+        fs::create_dir_all(&outside)?;
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+        let mut plan =
+            WindowsReferenceBackend.fail_closed_plan("exec_symlink_env_setup", &cwd, &policy);
+        let runtime_root = PathBuf::from(plan.runtime_root.as_ref().unwrap());
+        fs::create_dir_all(&runtime_root)?;
+        let link = runtime_root.join("link");
+        if let Err(err) = symlink_dir_for_test(&outside, &link) {
+            if err.kind() == io::ErrorKind::PermissionDenied {
+                return Ok(());
+            }
+            return Err(err);
+        }
+        plan.environment_runtime.push((
+            "RUNSEAL_LINKED".to_string(),
+            path_string(&link.join("child")),
+        ));
+
+        let err = plan.prepare_runtime_roots().unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        assert!(!outside.join("child").exists());
         Ok(())
     }
 
