@@ -1099,13 +1099,7 @@ fn execute_windows_sandbox_plan(
 
     let _runtime_root = required_plan_path(plan.runtime_root.as_deref(), "runtime_root")?;
     let vendor_sandbox_home = vendor_sandbox_home(cwd);
-    let workspace_root = AbsolutePathBuf::from_absolute_path_checked(cwd).map_err(|err| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("invalid workspace root: {err}"),
-        )
-    })?;
-    let workspace_roots = [workspace_root];
+    let workspace_roots = windows_sandbox_workspace_roots_for_plan(cwd, plan)?;
     let permission_profile = plan.vendor_permission_profile()?;
     plan.prepare_runtime_roots()?;
     prepare_vendor_sandbox_home(cwd, &vendor_sandbox_home)?;
@@ -1177,6 +1171,41 @@ fn execute_windows_sandbox_plan(
         },
         timed_out: capture.timed_out,
     })
+}
+
+#[cfg(windows)]
+fn windows_sandbox_workspace_roots_for_plan(
+    cwd: &Path,
+    plan: &PlatformSandboxPlan,
+) -> io::Result<Vec<AbsolutePathBuf>> {
+    let mut roots = Vec::new();
+    let mut seen = HashSet::new();
+    for root in [
+        Some(cwd.to_path_buf()),
+        plan.runtime_root.as_deref().map(PathBuf::from),
+        plan.profile_root.as_deref().map(PathBuf::from),
+        plan.synthetic_home.as_deref().map(PathBuf::from),
+        plan.temp_root.as_deref().map(PathBuf::from),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if !seen.insert(windows_sandbox_path_key(&root)) {
+            continue;
+        }
+        roots.push(
+            AbsolutePathBuf::from_absolute_path_checked(&root).map_err(|err| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "invalid Windows sandbox workspace root {}: {err}",
+                        root.display()
+                    ),
+                )
+            })?,
+        );
+    }
+    Ok(roots)
 }
 
 #[cfg(windows)]
@@ -2159,6 +2188,34 @@ mod tests {
             WindowsReferenceBackend.supported_features(),
             expected_windows_reference_supported_features()
         );
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_sandbox_workspace_roots_include_runtime_roots() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&cwd)?;
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+        let plan = WindowsReferenceBackend.fail_closed_plan("exec_vendor_roots", &cwd, &policy);
+
+        let roots = windows_sandbox_workspace_roots_for_plan(&cwd, &plan)?;
+        let root_keys = roots
+            .iter()
+            .map(|root| windows_sandbox_path_key(root.as_path()))
+            .collect::<HashSet<_>>();
+
+        assert_eq!(roots.len(), 5);
+        for root in [
+            path_string(&cwd),
+            plan.runtime_root.clone().unwrap(),
+            plan.profile_root.clone().unwrap(),
+            plan.synthetic_home.clone().unwrap(),
+            plan.temp_root.unwrap(),
+        ] {
+            assert!(root_keys.contains(&windows_sandbox_path_key(Path::new(&root))));
+        }
         Ok(())
     }
 
