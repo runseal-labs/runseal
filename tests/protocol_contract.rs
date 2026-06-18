@@ -998,6 +998,9 @@ fn sandboxed_policy_without_backend_fails_closed() -> Result<()> {
         let plan = &response["error"]["data"]["platform_plan"];
         assert_eq!(plan["enforcement"], "fail-closed-preview");
         assert_eq!(plan["sandbox_level"], "read-only");
+        assert_eq!(plan["network"]["mode"], "disabled");
+        assert_eq!(plan["network"]["direct_egress"], "deny");
+        assert_eq!(plan["network"]["managed_proxy"], "none");
         assert_eq!(
             plan["required_backend_features"],
             json!(["filesystem_policy", "network_disabled"])

@@ -25,6 +25,8 @@ pub(crate) enum WindowsFilesystemMode {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct WindowsNetworkPlan {
     pub(crate) guard: WindowsNetworkGuard,
+    pub(crate) direct_egress: WindowsDirectEgress,
+    pub(crate) managed_proxy: WindowsManagedProxy,
     pub(crate) inject_proxy_environment: bool,
 }
 
@@ -32,6 +34,17 @@ pub(crate) struct WindowsNetworkPlan {
 pub(crate) enum WindowsNetworkGuard {
     Disabled,
     Proxy,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WindowsDirectEgress {
+    Deny,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WindowsManagedProxy {
+    None,
+    Required,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -52,6 +65,23 @@ impl WindowsNetworkGuard {
         match self {
             Self::Disabled => "disabled",
             Self::Proxy => "proxy",
+        }
+    }
+}
+
+impl WindowsDirectEgress {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Deny => "deny",
+        }
+    }
+}
+
+impl WindowsManagedProxy {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Required => "required",
         }
     }
 }
@@ -78,6 +108,10 @@ impl WindowsPolicyPlan {
             NetworkMode::Disabled => WindowsNetworkGuard::Disabled,
             NetworkMode::Proxy => WindowsNetworkGuard::Proxy,
         };
+        let managed_proxy = match guard {
+            WindowsNetworkGuard::Disabled => WindowsManagedProxy::None,
+            WindowsNetworkGuard::Proxy => WindowsManagedProxy::Required,
+        };
 
         Self {
             filesystem: WindowsFilesystemPlan {
@@ -89,6 +123,8 @@ impl WindowsPolicyPlan {
             },
             network: WindowsNetworkPlan {
                 guard,
+                direct_egress: WindowsDirectEgress::Deny,
+                managed_proxy,
                 inject_proxy_environment: guard == WindowsNetworkGuard::Proxy
                     && policy.environment.proxy,
             },
@@ -198,6 +234,8 @@ mod tests {
         assert!(plan.filesystem.effective_write_roots().is_empty());
         assert!(plan.filesystem.protected_roots.is_empty());
         assert_eq!(plan.network.guard, WindowsNetworkGuard::Disabled);
+        assert_eq!(plan.network.direct_egress, WindowsDirectEgress::Deny);
+        assert_eq!(plan.network.managed_proxy, WindowsManagedProxy::None);
         assert!(!plan.network.inject_proxy_environment);
         assert!(plan.environment.runtime.is_empty());
     }
@@ -223,6 +261,8 @@ mod tests {
         assert_eq!(plan.filesystem.effective_write_roots(), vec!["/workspace"]);
         assert_eq!(plan.filesystem.protected_roots, protected_roots);
         assert_eq!(plan.network.guard, WindowsNetworkGuard::Proxy);
+        assert_eq!(plan.network.direct_egress, WindowsDirectEgress::Deny);
+        assert_eq!(plan.network.managed_proxy, WindowsManagedProxy::Required);
         assert!(plan.network.inject_proxy_environment);
         assert!(plan.environment.runtime.is_empty());
     }
@@ -340,6 +380,8 @@ mod tests {
             WindowsFilesystemMode::WritableRootsCapability
         );
         assert_eq!(plan.network.guard, WindowsNetworkGuard::Disabled);
+        assert_eq!(plan.network.direct_egress, WindowsDirectEgress::Deny);
+        assert_eq!(plan.network.managed_proxy, WindowsManagedProxy::None);
         assert!(!plan.network.inject_proxy_environment);
         assert!(plan.environment.runtime.is_empty());
     }

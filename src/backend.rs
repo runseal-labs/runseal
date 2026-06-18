@@ -180,6 +180,8 @@ pub struct PlatformSandboxPlan {
     pub filesystem_write: Vec<String>,
     pub filesystem_deny: Vec<String>,
     pub network_mode: &'static str,
+    pub network_direct_egress: &'static str,
+    pub network_managed_proxy: &'static str,
     pub environment_inherit: String,
     pub environment_scrub: Vec<String>,
     pub environment_proxy: bool,
@@ -212,6 +214,8 @@ impl PlatformSandboxPlan {
             filesystem_write: policy.filesystem.write.clone(),
             filesystem_deny: policy.filesystem.deny.clone(),
             network_mode: policy.network.mode.as_str(),
+            network_direct_egress: "unmanaged",
+            network_managed_proxy: "none",
             environment_inherit: policy.environment.inherit.clone(),
             environment_scrub: policy.environment.scrub.clone(),
             environment_proxy: policy.environment.proxy,
@@ -244,6 +248,8 @@ impl PlatformSandboxPlan {
             },
             "network": {
                 "mode": self.network_mode,
+                "direct_egress": self.network_direct_egress,
+                "managed_proxy": self.network_managed_proxy,
             },
             "environment": {
                 "inherit": self.environment_inherit.clone(),
@@ -526,6 +532,8 @@ impl WindowsReferenceBackend {
             filesystem_write,
             filesystem_deny: windows_policy.filesystem.protected_roots,
             network_mode: windows_policy.network.guard.as_str(),
+            network_direct_egress: windows_policy.network.direct_egress.as_str(),
+            network_managed_proxy: windows_policy.network.managed_proxy.as_str(),
             environment_inherit: policy.environment.inherit.clone(),
             environment_scrub: policy.environment.scrub.clone(),
             environment_proxy: windows_policy.network.inject_proxy_environment,
@@ -1062,6 +1070,23 @@ mod tests {
                 .unwrap_or_default()
                 .contains("AppData")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn windows_fail_closed_preview_includes_proxy_network_guard() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&cwd)?;
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+
+        let plan = WindowsReferenceBackend.fail_closed_plan("exec_proxy", &cwd, &policy);
+
+        assert_eq!(plan.network_mode, "proxy");
+        assert_eq!(plan.network_direct_egress, "deny");
+        assert_eq!(plan.network_managed_proxy, "required");
+        assert!(plan.environment_proxy);
+        assert_eq!(WindowsReferenceBackend.supported_features(), &[]);
         Ok(())
     }
 
