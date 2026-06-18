@@ -343,6 +343,7 @@ impl PlatformSandboxPlan {
     }
 
     pub fn prepare_runtime_roots(&self) -> io::Result<Vec<String>> {
+        self.validate_runtime_roots_for_setup()?;
         let mut prepared = Vec::new();
         for root in [
             self.runtime_root.as_ref(),
@@ -443,6 +444,33 @@ impl PlatformSandboxPlan {
         self.enforcement != "local-execution"
     }
 
+    fn validate_runtime_roots_for_setup(&self) -> io::Result<()> {
+        let Some(runtime_root) = &self.runtime_root else {
+            return Ok(());
+        };
+        let runtime_root = Path::new(runtime_root);
+        let expected = self.expected_runtime_root()?;
+        if normalize_lexical(runtime_root) != normalize_lexical(&expected) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "refusing to prepare runtime root outside planned workspace runtime directory: {}",
+                    runtime_root.display()
+                ),
+            ));
+        }
+        if runtime_root.exists() && fs::symlink_metadata(runtime_root)?.file_type().is_symlink() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "refusing to prepare symlinked runtime root: {}",
+                    runtime_root.display()
+                ),
+            ));
+        }
+        Ok(())
+    }
+
     fn validate_runtime_root_for_cleanup(&self, runtime_root: &Path) -> io::Result<()> {
         let expected = self.expected_runtime_root()?;
         if normalize_lexical(runtime_root) != normalize_lexical(&expected) {
@@ -488,7 +516,7 @@ impl PlatformSandboxPlan {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!(
-                    "invalid execution id for runtime cleanup: {}",
+                    "invalid execution id for runtime root: {}",
                     self.execution_id
                 ),
             ));
@@ -2523,6 +2551,39 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
         assert!(err.to_string().contains("restricted process boundary"));
         assert!(!runtime_root.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_setup_refuses_invalid_execution_id_before_creating_runtime_tree() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&cwd)?;
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+        let plan = WindowsReferenceBackend.fail_closed_plan("../outside", &cwd, &policy);
+
+        let err = plan.prepare_runtime_roots().unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(!cwd.join(".runseal").join("outside").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_setup_refuses_plan_outside_workspace_runtime_dir() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&cwd)?;
+        let outside = tmp.path().join("outside-runtime");
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+        let mut plan =
+            WindowsReferenceBackend.fail_closed_plan("exec_outside_setup", &cwd, &policy);
+        plan.runtime_root = Some(path_string(&outside));
+
+        let err = plan.prepare_runtime_roots().unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        assert!(!outside.exists());
         Ok(())
     }
 
