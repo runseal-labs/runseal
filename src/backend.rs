@@ -1,7 +1,8 @@
 use crate::policy::{BackendFeature, SandboxLevel, SandboxPolicy};
 use crate::windows_plan::{
     WindowsFilesystemAclEntry, WindowsFilesystemAclPlan, WindowsFilesystemAclTransactionPlan,
-    WindowsFilesystemRule, WindowsHostRoots, WindowsPolicyPlan, WindowsRuntimeRoots,
+    WindowsFilesystemAclTransactionStep, WindowsFilesystemRule, WindowsHostRoots,
+    WindowsPolicyPlan, WindowsRuntimeRoots,
 };
 use serde_json::Map;
 use serde_json::{Value, json};
@@ -337,9 +338,14 @@ impl PlatformSandboxPlan {
         let acl_plan = WindowsFilesystemAclPlan::from_rules(&self.private_filesystem_rules);
         let transaction = WindowsFilesystemAclTransactionPlan::from_acl_plan(&acl_plan);
         validate_private_filesystem_acl_transaction(&transaction)?;
+        validate_private_filesystem_acl_entries(&transaction)?;
+        apply_private_filesystem_acl_transaction(
+            &transaction,
+            &mut ValidateOnlyWindowsFilesystemAclDriver,
+        )?;
+
         let mut prepared = Vec::new();
         for entry in transaction.apply_entries() {
-            validate_private_filesystem_acl_entry(entry)?;
             if !prepared.iter().any(|root| root == entry.root()) {
                 prepared.push(entry.root().to_string());
             }
@@ -441,6 +447,57 @@ fn validate_private_filesystem_acl_transaction(
     }
     for root in transaction.rollback_roots() {
         validate_private_filesystem_rule_root(root)?;
+    }
+    Ok(())
+}
+
+fn validate_private_filesystem_acl_entries(
+    transaction: &WindowsFilesystemAclTransactionPlan,
+) -> io::Result<()> {
+    for entry in transaction.apply_entries() {
+        validate_private_filesystem_acl_entry(entry)?;
+    }
+    Ok(())
+}
+
+trait WindowsFilesystemAclDriver {
+    fn capture_rollback(&mut self, root: &str) -> io::Result<()>;
+    fn apply_entry(&mut self, entry: &WindowsFilesystemAclEntry) -> io::Result<()>;
+    fn rollback(&mut self) -> io::Result<()>;
+}
+
+#[derive(Default)]
+struct ValidateOnlyWindowsFilesystemAclDriver;
+
+impl WindowsFilesystemAclDriver for ValidateOnlyWindowsFilesystemAclDriver {
+    fn capture_rollback(&mut self, _root: &str) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn apply_entry(&mut self, _entry: &WindowsFilesystemAclEntry) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn rollback(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn apply_private_filesystem_acl_transaction(
+    transaction: &WindowsFilesystemAclTransactionPlan,
+    driver: &mut dyn WindowsFilesystemAclDriver,
+) -> io::Result<()> {
+    for step in transaction.steps() {
+        let result = match step {
+            WindowsFilesystemAclTransactionStep::CaptureRollback { root } => {
+                driver.capture_rollback(root)
+            }
+            WindowsFilesystemAclTransactionStep::ApplyEntry { entry } => driver.apply_entry(entry),
+        };
+        if let Err(apply_err) = result {
+            driver.rollback()?;
+            return Err(apply_err);
+        }
     }
     Ok(())
 }
@@ -1189,13 +1246,47 @@ mod tests {
     use super::*;
     use crate::policy::{NetworkMode, normalize_policy};
     use crate::windows_plan::{
-        WindowsFilesystemAccess, WindowsFilesystemRule, WindowsFilesystemRuleSource,
+        WindowsFilesystemAccess, WindowsFilesystemAclPlan, WindowsFilesystemAclTransactionPlan,
+        WindowsFilesystemRule, WindowsFilesystemRuleSource,
     };
     use serde_json::json;
     use std::fs;
     use std::io;
     use std::path::PathBuf;
     use tempfile::TempDir;
+
+    #[derive(Default)]
+    struct RecordingAclDriver {
+        events: Vec<String>,
+        fail_on_apply_root: Option<String>,
+    }
+
+    impl WindowsFilesystemAclDriver for RecordingAclDriver {
+        fn capture_rollback(&mut self, root: &str) -> io::Result<()> {
+            self.events.push(format!("capture:{root}"));
+            Ok(())
+        }
+
+        fn apply_entry(&mut self, entry: &WindowsFilesystemAclEntry) -> io::Result<()> {
+            self.events.push(format!("apply:{}", entry.root()));
+            if self
+                .fail_on_apply_root
+                .as_deref()
+                .is_some_and(|root| root == entry.root())
+            {
+                return Err(io::Error::other(format!(
+                    "apply failed for {}",
+                    entry.root()
+                )));
+            }
+            Ok(())
+        }
+
+        fn rollback(&mut self) -> io::Result<()> {
+            self.events.push("rollback".to_string());
+            Ok(())
+        }
+    }
 
     #[test]
     fn missing_features_excludes_supported_backend_features() {
@@ -1522,6 +1613,76 @@ mod tests {
 
         assert_eq!(prepared, vec![path_string(&missing)]);
         Ok(())
+    }
+
+    #[test]
+    fn filesystem_acl_transaction_executor_captures_before_apply() -> io::Result<()> {
+        let rules = vec![
+            WindowsFilesystemRule {
+                access: WindowsFilesystemAccess::Deny,
+                source: WindowsFilesystemRuleSource::ProtectedDeny,
+                root: "C:/Workspace/.git".to_string(),
+            },
+            WindowsFilesystemRule {
+                access: WindowsFilesystemAccess::ReadWrite,
+                source: WindowsFilesystemRuleSource::PolicyWrite,
+                root: "C:/Workspace".to_string(),
+            },
+        ];
+        let acl_plan = WindowsFilesystemAclPlan::from_rules(&rules);
+        let transaction = WindowsFilesystemAclTransactionPlan::from_acl_plan(&acl_plan);
+        let mut driver = RecordingAclDriver::default();
+
+        apply_private_filesystem_acl_transaction(&transaction, &mut driver)?;
+
+        assert_eq!(
+            driver.events,
+            vec![
+                "capture:C:/Workspace/.git",
+                "apply:C:/Workspace/.git",
+                "capture:C:/Workspace",
+                "apply:C:/Workspace",
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn filesystem_acl_transaction_executor_rolls_back_after_apply_failure() {
+        let rules = vec![
+            WindowsFilesystemRule {
+                access: WindowsFilesystemAccess::Deny,
+                source: WindowsFilesystemRuleSource::ProtectedDeny,
+                root: "C:/Workspace/.git".to_string(),
+            },
+            WindowsFilesystemRule {
+                access: WindowsFilesystemAccess::ReadWrite,
+                source: WindowsFilesystemRuleSource::PolicyWrite,
+                root: "C:/Workspace".to_string(),
+            },
+        ];
+        let acl_plan = WindowsFilesystemAclPlan::from_rules(&rules);
+        let transaction = WindowsFilesystemAclTransactionPlan::from_acl_plan(&acl_plan);
+        let mut driver = RecordingAclDriver {
+            events: Vec::new(),
+            fail_on_apply_root: Some("C:/Workspace".to_string()),
+        };
+
+        let err = apply_private_filesystem_acl_transaction(&transaction, &mut driver)
+            .expect_err("apply failure must be returned");
+
+        assert_eq!(err.kind(), io::ErrorKind::Other);
+        assert!(err.to_string().contains("apply failed for C:/Workspace"));
+        assert_eq!(
+            driver.events,
+            vec![
+                "capture:C:/Workspace/.git",
+                "apply:C:/Workspace/.git",
+                "capture:C:/Workspace",
+                "apply:C:/Workspace",
+                "rollback",
+            ]
+        );
     }
 
     #[test]

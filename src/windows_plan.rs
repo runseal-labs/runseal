@@ -120,6 +120,10 @@ impl WindowsFilesystemAclTransactionPlan {
         &self.rollback_roots
     }
 
+    pub(crate) fn steps(&self) -> &[WindowsFilesystemAclTransactionStep] {
+        &self.steps
+    }
+
     pub(crate) fn apply_entries(&self) -> impl Iterator<Item = &WindowsFilesystemAclEntry> {
         self.steps.iter().filter_map(|step| match step {
             WindowsFilesystemAclTransactionStep::CaptureRollback { .. } => None,
