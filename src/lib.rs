@@ -718,6 +718,8 @@ fn execute_command(
     let ids = new_execution_ids();
     let policy_id = policy.id.clone();
     let policy_hash = policy.hash();
+    // ponytail: stdio MVP has no mutable daemon epoch; promote to a real epoch store when concurrent policy transitions exist.
+    let policy_epoch = policy_hash.clone();
     let stdin_audit = stdin_audit_json(&stdin);
     let env_keys = env.keys();
     let mut audit = create_audit_writer(cwd, &ids.session_id)?;
@@ -727,6 +729,7 @@ fn execute_command(
         ids: &ids,
         policy_id: &policy_id,
         policy_hash: &policy_hash,
+        policy_epoch: &policy_epoch,
         audit_path: &audit_path,
         backend: backend_event_json(backend.name(), backend.status(), backend.platform()),
     };
@@ -1248,6 +1251,7 @@ fn execute_command(
         "finished_at": finished_at,
         "policy_id": policy_id,
         "policy_hash": policy_hash,
+        "policy_epoch": policy_epoch,
         "audit_path": audit_path,
         "sandbox": {
             "level": policy.sandbox_level.as_str(),

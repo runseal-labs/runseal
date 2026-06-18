@@ -125,6 +125,7 @@ fn assert_event_envelope(event: &Value) -> Result<()> {
             .unwrap_or_default()
             .starts_with("sha256:")
     );
+    assert!(event["policy_epoch"].as_str().is_some());
     assert!(event["runseal_version"].as_str().is_some());
     assert!(
         event["audit_path"]
@@ -1915,6 +1916,10 @@ fn execute_rpc_streams_events_and_final_result() -> Result<()> {
         assert_eq!(notification["params"]["execution_id"], execution_id);
         assert_eq!(notification["params"]["session_id"], session_id);
         assert_eq!(notification["params"]["seal_id"], seal_id);
+        assert_eq!(
+            notification["params"]["policy_epoch"],
+            response["result"]["policy_epoch"]
+        );
     }
     let stdout_event = notifications
         .iter()
@@ -1932,6 +1937,10 @@ fn execute_rpc_streams_events_and_final_result() -> Result<()> {
     assert_eq!(finished_event["status"], response["result"]["status"]);
     assert_eq!(finished_event["exit_code"], response["result"]["exit_code"]);
     assert_eq!(response["result"]["signal"], Value::Null);
+    assert_eq!(
+        response["result"]["policy_epoch"],
+        response["result"]["policy_hash"]
+    );
     assert_eq!(stdout_event["bytes"], response["result"]["stdout_bytes"]);
     assert!(
         response["result"]["stdout_bytes"]

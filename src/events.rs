@@ -18,6 +18,7 @@ pub(crate) struct ExecutionEventContext<'a> {
     pub(crate) ids: &'a ExecutionIds,
     pub(crate) policy_id: &'a str,
     pub(crate) policy_hash: &'a str,
+    pub(crate) policy_epoch: &'a str,
     pub(crate) audit_path: &'a str,
     pub(crate) backend: Value,
 }
@@ -84,6 +85,9 @@ pub(crate) fn execution_event_at(
         object
             .entry("policy_hash")
             .or_insert_with(|| json!(context.policy_hash));
+        object
+            .entry("policy_epoch")
+            .or_insert_with(|| json!(context.policy_epoch));
         object
             .entry("runseal_version")
             .or_insert_with(|| json!(env!("CARGO_PKG_VERSION")));
