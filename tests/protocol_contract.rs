@@ -1907,6 +1907,8 @@ fn execute_rpc_streams_events_and_final_result() -> Result<()> {
     assert!(session_id.starts_with("sess_"));
     assert!(seal_id.starts_with("seal_"));
     for notification in &notifications {
+        assert_eq!(notification["jsonrpc"], "2.0");
+        assert!(notification.get("id").is_none());
         assert_event_envelope(&notification["params"])?;
         assert_eq!(notification["params"]["execution_id"], execution_id);
         assert_eq!(notification["params"]["session_id"], session_id);
