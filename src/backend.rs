@@ -2163,7 +2163,7 @@ mod tests {
     }
 
     #[test]
-    fn sandbox_setup_rejects_dual_user_model_before_runtime_tree() -> io::Result<()> {
+    fn sandbox_setup_rejects_non_single_user_model_before_runtime_tree() -> io::Result<()> {
         let tmp = TempDir::new()?;
         let cwd = tmp.path().join("workspace");
         fs::create_dir_all(&cwd)?;
@@ -2171,10 +2171,10 @@ mod tests {
         let mut plan =
             WindowsReferenceBackend.fail_closed_plan("exec_bad_user_model", &cwd, &policy);
         let runtime_root = PathBuf::from(plan.runtime_root.as_ref().unwrap());
-        plan.private_process_sandbox_user_model = "dual-sandbox-users";
+        plan.private_process_sandbox_user_model = "multiple-sandbox-users";
 
         let Err(err) = plan.prepare_sandbox_setup() else {
-            panic!("dual sandbox user model must fail sandbox setup");
+            panic!("non-single sandbox user model must fail sandbox setup");
         };
 
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
@@ -2184,7 +2184,8 @@ mod tests {
     }
 
     #[test]
-    fn sandbox_setup_rejects_dual_user_setup_artifacts_before_runtime_tree() -> io::Result<()> {
+    fn sandbox_setup_rejects_non_single_user_setup_artifacts_before_runtime_tree() -> io::Result<()>
+    {
         let tmp = TempDir::new()?;
         let cwd = tmp.path().join("workspace");
         fs::create_dir_all(&cwd)?;
@@ -2192,10 +2193,10 @@ mod tests {
         let mut plan =
             WindowsReferenceBackend.fail_closed_plan("exec_bad_user_artifacts", &cwd, &policy);
         let runtime_root = PathBuf::from(plan.runtime_root.as_ref().unwrap());
-        plan.private_setup_identity_artifacts = "dual-sandbox-user-artifacts";
+        plan.private_setup_identity_artifacts = "multiple-sandbox-user-artifacts";
 
         let Err(err) = plan.prepare_sandbox_setup() else {
-            panic!("dual sandbox user setup artifacts must fail sandbox setup");
+            panic!("non-single sandbox user setup artifacts must fail sandbox setup");
         };
 
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
