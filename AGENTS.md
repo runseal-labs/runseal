@@ -10,8 +10,13 @@ The public contract lives in `runseal-labs/rfcs`. This repo implements that cont
 - When implementation needs to change public protocol, policy shape, event shape, error code, platform status, or conformance semantics, update `runseal-labs/rfcs` first or in the same change.
 - Implementation details that do not affect public behavior should stay in this repository.
 - Keep README and tests aligned with the current accepted RFCs.
-- Treat the current MVP implementation as greenfield. There is no legacy compatibility obligation for early scaffold behavior, field names, aliases, fixtures, or test expectations.
-- Prefer replacing incorrect provisional behavior over adding adapters, compatibility shims, silent fallbacks, or deprecated aliases. Add compatibility behavior only when an accepted RFC explicitly requires it.
+
+## Compatibility Stance
+
+- Treat the current implementation as greenfield until an accepted public compatibility RFC says otherwise.
+- There is no backward-compatibility obligation for early scaffold behavior, provisional field names, aliases, fixtures, audit shapes, CLI details, JSON-RPC details, or test expectations.
+- Prefer replacing incorrect provisional behavior over adding adapters, compatibility shims, version gates, silent fallbacks, deprecated aliases, or migration paths.
+- Add compatibility behavior only when an accepted RFC explicitly requires it.
 
 ## Public Terminology And Redaction
 
@@ -66,7 +71,7 @@ Work in this order unless an accepted RFC changes it:
 ## Tests First
 
 - Preserve the black-box contract tests unless the RFC changes first.
-- Because the implementation is greenfield, update tests and protocol fixtures to match the correct MVP contract instead of maintaining compatibility with earlier temporary behavior.
+- Because the implementation is greenfield, update tests and protocol fixtures to match the correct contract instead of maintaining compatibility with earlier temporary behavior.
 - Do not keep tests for obsolete local behavior unless they document a current RFC requirement.
 - Add conformance tests before broadening backend capability claims.
 - Tests should distinguish `supported`, `unsupported`, `experimental`, `denied`, `failed`, and `skipped`.
