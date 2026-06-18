@@ -191,6 +191,7 @@ pub struct PlatformSandboxPlan {
     pub process_boundary: &'static str,
     pub process_identity: &'static str,
     pub process_cleanup: &'static str,
+    private_process_sandbox_user_model: &'static str,
     private_process_token: &'static str,
     private_process_job: &'static str,
     pub network_mode: &'static str,
@@ -233,6 +234,7 @@ impl PlatformSandboxPlan {
             process_boundary: "local-process",
             process_identity: "current-user",
             process_cleanup: "direct-child",
+            private_process_sandbox_user_model: "current-user",
             private_process_token: "none",
             private_process_job: "none",
             network_mode: policy.network.mode.as_str(),
@@ -332,6 +334,7 @@ impl PlatformSandboxPlan {
         if self.process_boundary == "restricted-local-process"
             && self.process_identity == "low-privilege"
             && self.process_cleanup == "process-tree"
+            && self.private_process_sandbox_user_model == "single-sandbox-user"
             && self.private_process_token == "restricted-token"
             && self.private_process_job == "kill-on-close-job"
         {
@@ -340,7 +343,7 @@ impl PlatformSandboxPlan {
 
         Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "sandboxed plan requires a restricted process boundary",
+            "sandboxed plan requires a single sandbox user restricted process boundary",
         ))
     }
 
@@ -397,8 +400,12 @@ impl PlatformSandboxPlan {
         if transaction.apply_entries().next().is_none() {
             return Ok(None);
         }
-        WindowsFilesystemAclSubject::from_plan(self.process_identity, self.private_process_token)
-            .map(Some)
+        WindowsFilesystemAclSubject::from_plan(
+            self.process_identity,
+            self.private_process_sandbox_user_model,
+            self.private_process_token,
+        )
+        .map(Some)
     }
 
     fn cleanup_sandbox_setup_with_driver(
@@ -760,6 +767,7 @@ impl WindowsReferenceBackend {
         );
         let private_filesystem_deny = windows_policy.filesystem.private_protected_roots.clone();
         let private_filesystem_rules = windows_policy.filesystem.enforcement_rules();
+        let private_process_sandbox_user_model = windows_policy.process.sandbox_user_model.as_str();
         let private_process_token = windows_policy.process.token.as_str();
         let private_process_job = windows_policy.process.job.as_str();
         let filesystem_write = windows_policy.filesystem.effective_write_roots();
@@ -787,6 +795,7 @@ impl WindowsReferenceBackend {
             process_boundary: windows_policy.process.boundary.as_str(),
             process_identity: windows_policy.process.identity.as_str(),
             process_cleanup: windows_policy.process.cleanup.as_str(),
+            private_process_sandbox_user_model,
             private_process_token,
             private_process_job,
             network_mode: windows_policy.network.guard.as_str(),
@@ -1404,11 +1413,16 @@ mod tests {
         assert_eq!(plan.process_boundary, "restricted-local-process");
         assert_eq!(plan.process_identity, "low-privilege");
         assert_eq!(plan.process_cleanup, "process-tree");
+        assert_eq!(
+            plan.private_process_sandbox_user_model,
+            "single-sandbox-user"
+        );
         assert_eq!(plan.private_process_token, "restricted-token");
         assert_eq!(plan.private_process_job, "kill-on-close-job");
         assert_eq!(plan.filesystem_protected, vec!["workspace_metadata"]);
         let plan_json = plan.json();
         let public_plan = plan_json.to_string();
+        assert!(!public_plan.contains("single-sandbox-user"));
         assert!(!public_plan.contains("restricted-token"));
         assert!(!public_plan.contains("kill-on-close-job"));
         assert_eq!(
@@ -1652,7 +1666,10 @@ mod tests {
                 format!("apply:{}", path_string(&cwd)),
             ]
         );
-        assert_eq!(driver.subjects, vec!["restricted-token"]);
+        assert_eq!(
+            driver.subjects,
+            vec!["single-sandbox-user-restricted-token"]
+        );
         Ok(())
     }
 
@@ -1675,7 +1692,7 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
         assert!(
             err.to_string()
-                .contains("require a restricted process identity")
+                .contains("require a single sandbox user restricted process identity")
         );
         Ok(())
     }
@@ -1715,7 +1732,10 @@ mod tests {
         );
         assert_eq!(
             driver.subjects,
-            vec!["restricted-token", "restricted-token"]
+            vec![
+                "single-sandbox-user-restricted-token",
+                "single-sandbox-user-restricted-token"
+            ]
         );
         Ok(())
     }
@@ -1917,7 +1937,7 @@ mod tests {
 
         apply_private_filesystem_acl_transaction(
             &transaction,
-            Some(WindowsFilesystemAclSubject::RestrictedToken),
+            Some(WindowsFilesystemAclSubject::SingleSandboxUserRestrictedToken),
             &mut driver,
         )?;
 
@@ -1957,7 +1977,7 @@ mod tests {
 
         let err = apply_private_filesystem_acl_transaction(
             &transaction,
-            Some(WindowsFilesystemAclSubject::RestrictedToken),
+            Some(WindowsFilesystemAclSubject::SingleSandboxUserRestrictedToken),
             &mut driver,
         )
         .expect_err("apply failure must be returned");
@@ -1999,7 +2019,7 @@ mod tests {
 
         let err = apply_private_filesystem_acl_transaction(
             &transaction,
-            Some(WindowsFilesystemAclSubject::RestrictedToken),
+            Some(WindowsFilesystemAclSubject::SingleSandboxUserRestrictedToken),
             &mut driver,
         )
         .expect_err("capture failure must be returned");
@@ -2036,7 +2056,7 @@ mod tests {
 
         let err = apply_private_filesystem_acl_transaction(
             &transaction,
-            Some(WindowsFilesystemAclSubject::RestrictedToken),
+            Some(WindowsFilesystemAclSubject::SingleSandboxUserRestrictedToken),
             &mut driver,
         )
         .expect_err("rollback failure must be returned");
@@ -2125,6 +2145,27 @@ mod tests {
 
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
         assert!(err.to_string().contains("restricted process boundary"));
+        assert!(!runtime_root.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn sandbox_setup_rejects_dual_user_model_before_runtime_tree() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&cwd)?;
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+        let mut plan =
+            WindowsReferenceBackend.fail_closed_plan("exec_bad_user_model", &cwd, &policy);
+        let runtime_root = PathBuf::from(plan.runtime_root.as_ref().unwrap());
+        plan.private_process_sandbox_user_model = "dual-sandbox-users";
+
+        let Err(err) = plan.prepare_sandbox_setup() else {
+            panic!("dual sandbox user model must fail sandbox setup");
+        };
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains("single sandbox user"));
         assert!(!runtime_root.exists());
         Ok(())
     }

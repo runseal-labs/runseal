@@ -1,4 +1,6 @@
-use super::vendor_adapter::{WindowsVendorSandboxProfile, WindowsVendorTokenMode};
+use super::vendor_adapter::{
+    WindowsVendorSandboxProfile, WindowsVendorSandboxUserModel, WindowsVendorTokenMode,
+};
 use crate::policy::{SandboxLevel, SandboxPolicy};
 use std::env;
 use std::path::Path;
@@ -265,6 +267,7 @@ pub(crate) struct WindowsProcessPlan {
     pub(crate) cleanup: WindowsProcessCleanup,
     pub(crate) token: WindowsProcessToken,
     pub(crate) job: WindowsProcessJob,
+    pub(crate) sandbox_user_model: WindowsVendorSandboxUserModel,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -334,13 +337,14 @@ impl WindowsManagedProxy {
 }
 
 impl WindowsProcessPlan {
-    fn sandboxed() -> Self {
+    fn sandboxed(sandbox_user_model: WindowsVendorSandboxUserModel) -> Self {
         Self {
             boundary: WindowsProcessBoundary::RestrictedLocalProcess,
             identity: WindowsProcessIdentity::LowPrivilegeSandbox,
             cleanup: WindowsProcessCleanup::ProcessTree,
             token: WindowsProcessToken::Restricted,
             job: WindowsProcessJob::KillOnClose,
+            sandbox_user_model,
         }
     }
 }
@@ -408,6 +412,9 @@ impl WindowsPolicyPlan {
             .map(WindowsRuntimeRoots::environment)
             .unwrap_or_default();
         let vendor_profile = WindowsVendorSandboxProfile::from_policy(policy);
+        let sandbox_user_model = vendor_profile
+            .sandbox_user_model()
+            .unwrap_or(WindowsVendorSandboxUserModel::SingleSandboxUser);
         let mode = match vendor_profile.token_mode() {
             Some(WindowsVendorTokenMode::ReadOnlyCapability) | None => {
                 WindowsFilesystemMode::ReadOnlyCapability
@@ -445,7 +452,7 @@ impl WindowsPolicyPlan {
             environment: WindowsEnvironmentPlan {
                 runtime: runtime_environment,
             },
-            process: WindowsProcessPlan::sandboxed(),
+            process: WindowsProcessPlan::sandboxed(sandbox_user_model),
         }
     }
 }
@@ -746,6 +753,10 @@ mod tests {
         assert_eq!(plan.process.cleanup, WindowsProcessCleanup::ProcessTree);
         assert_eq!(plan.process.token, WindowsProcessToken::Restricted);
         assert_eq!(plan.process.job, WindowsProcessJob::KillOnClose);
+        assert_eq!(
+            plan.process.sandbox_user_model,
+            WindowsVendorSandboxUserModel::SingleSandboxUser
+        );
     }
 
     #[test]

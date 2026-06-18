@@ -11,3 +11,9 @@ vendored crate into the build when the adapter is ready.
 
 Keep local RunSeal changes outside `upstream/` unless they are deliberately
 tracked as vendor patches.
+
+Integration constraint: the upstream setup helper currently models separate
+offline and online sandbox users. RunSeal's Windows backend is specified around
+one dedicated sandbox user. Adapter code must preserve the public RunSeal policy
+shape while replacing or hiding upstream dual-user assumptions at the vendored
+boundary.

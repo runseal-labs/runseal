@@ -6,6 +6,7 @@ pub(crate) enum WindowsVendorSandboxProfile {
     Managed {
         filesystem: WindowsVendorFilesystemPolicy,
         network: WindowsVendorNetworkPolicy,
+        sandbox_user_model: WindowsVendorSandboxUserModel,
         managed_proxy_required: bool,
     },
 }
@@ -34,6 +35,11 @@ pub(crate) enum WindowsVendorNetworkPolicy {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WindowsVendorSandboxUserModel {
+    SingleSandboxUser,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WindowsVendorTokenMode {
     ReadOnlyCapability,
     WritableRootsCapability,
@@ -50,6 +56,7 @@ impl WindowsVendorSandboxProfile {
                 entries: filesystem_entries(policy),
             },
             network: WindowsVendorNetworkPolicy::Restricted,
+            sandbox_user_model: WindowsVendorSandboxUserModel::SingleSandboxUser,
             managed_proxy_required: policy.network.mode == NetworkMode::Proxy,
         }
     }
@@ -91,6 +98,15 @@ impl WindowsVendorSandboxProfile {
         }
     }
 
+    pub(crate) fn sandbox_user_model(&self) -> Option<WindowsVendorSandboxUserModel> {
+        match self {
+            Self::Disabled => None,
+            Self::Managed {
+                sandbox_user_model, ..
+            } => Some(*sandbox_user_model),
+        }
+    }
+
     fn entries_with_access(&self, access: WindowsVendorFilesystemAccess) -> Vec<String> {
         match self {
             Self::Disabled => Vec::new(),
@@ -100,6 +116,14 @@ impl WindowsVendorSandboxProfile {
                 .filter(|entry| entry.access == access)
                 .map(|entry| entry.path.clone())
                 .collect(),
+        }
+    }
+}
+
+impl WindowsVendorSandboxUserModel {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::SingleSandboxUser => "single-sandbox-user",
         }
     }
 }
@@ -178,12 +202,17 @@ mod tests {
                     ],
                 },
                 network: WindowsVendorNetworkPolicy::Restricted,
+                sandbox_user_model: WindowsVendorSandboxUserModel::SingleSandboxUser,
                 managed_proxy_required: true,
             }
         );
         assert_eq!(
             profile.token_mode(),
             Some(WindowsVendorTokenMode::WritableRootsCapability)
+        );
+        assert_eq!(
+            profile.sandbox_user_model(),
+            Some(WindowsVendorSandboxUserModel::SingleSandboxUser)
         );
         assert_eq!(
             profile.read_roots(),
@@ -211,6 +240,7 @@ mod tests {
 
         assert_eq!(profile, WindowsVendorSandboxProfile::Disabled);
         assert_eq!(profile.token_mode(), None);
+        assert_eq!(profile.sandbox_user_model(), None);
         assert!(profile.read_roots().is_empty());
         assert!(profile.write_roots().is_empty());
         assert!(profile.deny_roots().is_empty());

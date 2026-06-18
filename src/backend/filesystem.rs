@@ -18,27 +18,31 @@ pub(super) trait WindowsFilesystemAclDriver {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum WindowsFilesystemAclSubject {
-    RestrictedToken,
+    SingleSandboxUserRestrictedToken,
 }
 
 impl WindowsFilesystemAclSubject {
     pub(super) fn from_plan(
         process_identity: &str,
+        private_process_sandbox_user_model: &str,
         private_process_token: &str,
     ) -> io::Result<Self> {
-        if process_identity == "low-privilege" && private_process_token == "restricted-token" {
-            return Ok(Self::RestrictedToken);
+        if process_identity == "low-privilege"
+            && private_process_sandbox_user_model == "single-sandbox-user"
+            && private_process_token == "restricted-token"
+        {
+            return Ok(Self::SingleSandboxUserRestrictedToken);
         }
         Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "private filesystem ACL rules require a restricted process identity",
+            "private filesystem ACL rules require a single sandbox user restricted process identity",
         ))
     }
 
     #[cfg(test)]
     pub(super) fn as_str(self) -> &'static str {
         match self {
-            Self::RestrictedToken => "restricted-token",
+            Self::SingleSandboxUserRestrictedToken => "single-sandbox-user-restricted-token",
         }
     }
 }
@@ -106,7 +110,7 @@ pub(super) fn apply_private_filesystem_acl_transaction(
                 let Some(subject) = subject else {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidInput,
-                        "private filesystem ACL entry requires a restricted process identity",
+                        "private filesystem ACL entry requires a single sandbox user restricted process identity",
                     ));
                 };
                 if let Err(apply_err) = driver.apply_entry(subject, entry) {

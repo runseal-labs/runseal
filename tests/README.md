@@ -20,7 +20,7 @@ The tests are black-box by design:
 - Windows fail-closed setup creates and cleans planned runtime roots before returning unsupported.
 - Windows fail-closed cleanup goes through a single sandbox setup cleanup path so future filesystem rollback cannot be skipped.
 - Windows sandbox setup cleanup carries the setup-time filesystem rollback state through cleanup.
-- Windows filesystem ACL setup must bind rules to a restricted process identity before any rule can be applied.
+- Windows filesystem ACL setup must bind rules to a single sandbox user restricted process identity before any rule can be applied.
 - Windows runtime roots can be reported as a verified single capability without making any sandbox level supported by itself.
 - Windows runtime environment redirects can be reported as a verified single capability without making any sandbox level supported by itself.
 - Windows process cleanup can be reported as a verified single capability without making any sandbox level supported by itself.

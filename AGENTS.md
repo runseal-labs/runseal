@@ -63,6 +63,8 @@ Work in this order unless an accepted RFC changes it:
 - Implement public behavior through platform-neutral traits and RunSeal policy objects.
 - Keep low-level Windows sandbox enforcement in a vendored upstream sandbox crate; RunSeal code should adapt policy, protocol, plans, audit events, and conformance tests around that boundary.
 - Do not grow new in-tree implementations of ACL mutation, restricted tokens, WFP filters, helper account setup, or command-runner IPC unless the vendored boundary cannot cover a proven requirement.
+- The RunSeal Windows backend uses one dedicated sandbox user as the implementation model. Do not inherit an upstream offline/online dual-user split unless an RFC and conformance evidence explicitly require it.
+- Keep the sandbox user model private to the Windows backend. Public protocol, audit, README, and RFC vocabulary should expose generic process and sandbox boundary terms, not local account names or account counts.
 - Do not expose ACLs, SIDs, token attributes, integrity levels, Job Object handles, firewall rule names, WFP callouts, helper identities, or private profile names as public API.
 - Any unsupported or partially enforceable sandbox request must fail closed with a structured error.
 - Keep rollback/checkpoint behavior out of the MVP security boundary unless an RFC adds it.
