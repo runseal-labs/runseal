@@ -5,7 +5,7 @@ These Rust integration tests define the initial public behavior expected from a 
 They are black-box protocol tests. `cargo test` builds and runs the local binary; use `RUNSEAL_BIN` to point the suite at another candidate implementation:
 
 ```bash
-RUNSEAL_BIN=/path/to/runseal cargo test --test cli_contract --test protocol_contract
+RUNSEAL_BIN=/path/to/runseal cargo test --test cli_contract --test protocol_contract --test filesystem_conformance
 ```
 
 CI runs the suite on Linux and Windows so platform selection, fail-closed behavior, and the Windows reference backend scaffold stay buildable before any capability is promoted.
