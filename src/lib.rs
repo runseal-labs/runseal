@@ -1028,15 +1028,10 @@ fn execute_command(
     let execution_output = match backend.execute_plan(&plan, command, cwd, stdin, &env, timeout) {
         Ok(output) => output,
         Err(err) => {
-            let transition_busy_reason = policy_transition_busy_reason(&err).map(str::to_string);
-            let unavailable_reason = if sandbox_enforced {
-                backend_unavailable_reason(&err).map(str::to_string)
-            } else {
-                None
-            };
-            let failure_reason = transition_busy_reason
-                .as_deref()
-                .or(unavailable_reason.as_deref())
+            let backend_error = backend_execution_error(&err, sandbox_enforced);
+            let failure_reason = backend_error
+                .as_ref()
+                .map(|(_, reason)| reason.as_str())
                 .unwrap_or("execution failed to start");
             let failed = execution_event_now(
                 json!({
@@ -1053,28 +1048,9 @@ fn execute_command(
             );
             write_audit_event_with_metadata(&mut audit, &failed, &metadata)?;
 
-            if let Some(reason) = transition_busy_reason {
+            if let Some((code, reason)) = backend_error {
                 return Err(RunSealError::with_details(
-                    "POLICY_TRANSITION_BUSY",
-                    reason,
-                    json!({
-                        "execution_id": ids.execution_id,
-                        "session_id": ids.session_id,
-                        "seal_id": ids.seal_id,
-                        "audit_path": audit_path,
-                        "backend": {
-                            "name": plan.backend,
-                            "status": plan.backend_status,
-                            "platform": plan.platform,
-                        },
-                        "platform_plan": plan.json(),
-                    }),
-                ));
-            }
-
-            if let Some(reason) = unavailable_reason {
-                return Err(RunSealError::with_details(
-                    "BACKEND_UNAVAILABLE",
+                    code,
                     reason,
                     json!({
                         "execution_id": ids.execution_id,
@@ -1301,6 +1277,20 @@ fn execute_command(
     Ok((events, result))
 }
 
+fn backend_execution_error(
+    err: &io::Error,
+    sandbox_enforced: bool,
+) -> Option<(&'static str, String)> {
+    if let Some(reason) = policy_transition_busy_reason(err) {
+        return Some(("POLICY_TRANSITION_BUSY", reason.to_string()));
+    }
+    if sandbox_enforced {
+        return backend_unavailable_reason(err)
+            .map(|reason| ("BACKEND_UNAVAILABLE", reason.to_string()));
+    }
+    None
+}
+
 fn truncate_output(output: &mut Output, max_output_bytes: Option<u64>) -> bool {
     let Some(max_output_bytes) = max_output_bytes.and_then(|value| usize::try_from(value).ok())
     else {
@@ -1347,6 +1337,17 @@ fn current_dir() -> PathBuf {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    #[cfg(windows)]
+    #[test]
+    fn policy_transition_busy_maps_to_public_error_code() {
+        let err = backend::policy_transition_busy_error_for_test();
+        let (code, reason) =
+            backend_execution_error(&err, true).expect("busy error must map to public code");
+
+        assert_eq!(code, "POLICY_TRANSITION_BUSY");
+        assert!(reason.contains("policy transition busy"));
+    }
 
     #[test]
     fn execution_ids_are_unique_for_fast_local_requests() {

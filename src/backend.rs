@@ -101,6 +101,13 @@ pub(crate) fn policy_transition_busy_reason(err: &io::Error) -> Option<&str> {
     }
 }
 
+#[cfg(all(test, windows))]
+pub(crate) fn policy_transition_busy_error_for_test() -> io::Error {
+    io::Error::other(PolicyTransitionBusyError {
+        reason: POLICY_TRANSITION_BUSY_REASON,
+    })
+}
+
 #[cfg(windows)]
 fn public_windows_setup_unavailable_reason(_code: &str) -> String {
     "windows sandbox setup unavailable; run `runseal setup windows-sandbox` from an elevated shell"
