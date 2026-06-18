@@ -172,8 +172,18 @@ fn handle_rpc_request(request: &Value) -> Vec<Value> {
             }
             Err(err) => vec![rpc::error(id, err)],
         },
-        "getExecution" | "cancelExecution" | "subscribeEvents" => {
-            match execution_not_found_from_params(&params) {
+        "getExecution" => match execution_not_found_from_params(&params, "getExecution", &[]) {
+            Ok(result) => vec![rpc::result(id, result)],
+            Err(err) => vec![rpc::error(id, err)],
+        },
+        "cancelExecution" => {
+            match execution_not_found_from_params(&params, "cancelExecution", &["reason"]) {
+                Ok(result) => vec![rpc::result(id, result)],
+                Err(err) => vec![rpc::error(id, err)],
+            }
+        }
+        "subscribeEvents" => {
+            match execution_not_found_from_params(&params, "subscribeEvents", &["types"]) {
                 Ok(result) => vec![rpc::result(id, result)],
                 Err(err) => vec![rpc::error(id, err)],
             }
@@ -375,10 +385,17 @@ fn execute_from_params(params: &Value) -> Result<(Vec<Value>, Value), RunSealErr
     execute_command(&command, &cwd, &policy, stdin, env, metadata, timeout)
 }
 
-fn execution_not_found_from_params(params: &Value) -> Result<Value, RunSealError> {
-    let params = params_object(params, "execution lookup")?;
-    validate_param_keys(params, "execution lookup", &["execution_id"])?;
+fn execution_not_found_from_params(
+    params: &Value,
+    method: &'static str,
+    optional_keys: &[&'static str],
+) -> Result<Value, RunSealError> {
+    let params = params_object(params, method)?;
+    let mut allowed_keys = vec!["execution_id"];
+    allowed_keys.extend_from_slice(optional_keys);
+    validate_param_keys(params, method, &allowed_keys)?;
     let execution_id = required_string_param(params, "execution_id")?;
+    validate_optional_lookup_params(params)?;
 
     Err(RunSealError::with_details(
         "EXECUTION_NOT_FOUND",
@@ -387,6 +404,37 @@ fn execution_not_found_from_params(params: &Value) -> Result<Value, RunSealError
             "execution_id": execution_id,
         }),
     ))
+}
+
+fn validate_optional_lookup_params(params: &Map<String, Value>) -> Result<(), RunSealError> {
+    if let Some(reason) = params.get("reason") {
+        reason
+            .as_str()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                RunSealError::new(
+                    "INVALID_REQUEST",
+                    "params.reason must be a non-empty string",
+                )
+            })?;
+    }
+    if let Some(types) = params.get("types") {
+        let types = types
+            .as_array()
+            .ok_or_else(|| RunSealError::new("INVALID_REQUEST", "params.types must be an array"))?;
+        for event_type in types {
+            event_type
+                .as_str()
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    RunSealError::new(
+                        "INVALID_REQUEST",
+                        "params.types entries must be non-empty strings",
+                    )
+                })?;
+        }
+    }
+    Ok(())
 }
 
 fn dispose_session_from_params(params: &Value) -> Result<Value, RunSealError> {

@@ -343,11 +343,19 @@ fn get_capabilities_rpc_contract() -> Result<()> {
 
 #[test]
 fn execution_lookup_methods_return_stable_not_found() -> Result<()> {
-    for method in ["getExecution", "cancelExecution", "subscribeEvents"] {
-        let output = run_rpc(&rpc_request(
-            method,
-            json!({"execution_id": "exec_missing"}),
-        ))?;
+    let cases = [
+        ("getExecution", json!({"execution_id": "exec_missing"})),
+        (
+            "cancelExecution",
+            json!({"execution_id": "exec_missing", "reason": "user_requested"}),
+        ),
+        (
+            "subscribeEvents",
+            json!({"execution_id": "exec_missing", "types": ["execution.*", "policy.*"]}),
+        ),
+    ];
+    for (method, params) in cases {
+        let output = run_rpc(&rpc_request(method, params))?;
 
         assert!(
             output.status.success(),
