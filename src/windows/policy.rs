@@ -416,11 +416,16 @@ impl WindowsPolicyPlan {
             .sandbox_user_model()
             .unwrap_or(WindowsVendorSandboxUserModel::SingleSandboxUser);
         let mode = match vendor_profile.token_mode() {
-            Some(WindowsVendorTokenMode::ReadOnlyCapability) | None => {
-                WindowsFilesystemMode::ReadOnlyCapability
-            }
             Some(WindowsVendorTokenMode::WritableRootsCapability) => {
                 WindowsFilesystemMode::WritableRootsCapability
+            }
+            Some(WindowsVendorTokenMode::ReadOnlyCapability) | None
+                if !runtime_write_roots.is_empty() =>
+            {
+                WindowsFilesystemMode::WritableRootsCapability
+            }
+            Some(WindowsVendorTokenMode::ReadOnlyCapability) | None => {
+                WindowsFilesystemMode::ReadOnlyCapability
             }
         };
         let guard = if vendor_profile.managed_proxy_required() {
@@ -976,6 +981,10 @@ mod tests {
 
         let plan = WindowsPolicyPlan::from_policy_and_runtime_roots(&policy, Some(runtime_roots));
 
+        assert_eq!(
+            plan.filesystem.mode,
+            WindowsFilesystemMode::WritableRootsCapability
+        );
         assert!(plan.filesystem.write_roots.is_empty());
         assert_eq!(
             plan.filesystem.runtime_write_roots,
