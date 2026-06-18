@@ -85,6 +85,9 @@ pub(crate) fn execution_event_at(
             .entry("policy_hash")
             .or_insert_with(|| json!(context.policy_hash));
         object
+            .entry("runseal_version")
+            .or_insert_with(|| json!(env!("CARGO_PKG_VERSION")));
+        object
             .entry("audit_path")
             .or_insert_with(|| json!(context.audit_path));
         object

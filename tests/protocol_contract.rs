@@ -125,6 +125,7 @@ fn assert_event_envelope(event: &Value) -> Result<()> {
             .unwrap_or_default()
             .starts_with("sha256:")
     );
+    assert!(event["runseal_version"].as_str().is_some());
     assert!(
         event["audit_path"]
             .as_str()
