@@ -349,25 +349,62 @@ fn execute_command(
         return Err(RunSealError::new("INVALID_REQUEST", "command is empty"));
     }
 
+    let execution_id = new_execution_id();
+    let policy_id = policy.id.clone();
+    let policy_hash = policy.hash();
+    let mut audit = create_audit_writer(cwd, &execution_id)?;
+    let audit_path = audit.relative_path().to_string();
+
     if policy.denies_execution_without_backend() {
-        return Err(RunSealError::new(
+        let reason = "filesystem write denied by policy";
+        let event = json!({
+            "type": "policy.denied",
+            "execution_id": execution_id,
+            "policy_id": policy_id,
+            "policy_hash": policy_hash,
+            "audit_path": audit_path.clone(),
+            "decision": "denied",
+            "reason": reason,
+        });
+        write_audit_event(&mut audit, &event)?;
+
+        return Err(RunSealError::with_details(
             "POLICY_DENIED",
-            "filesystem write denied by policy",
+            reason,
+            json!({
+                "audit_path": audit_path,
+            }),
         ));
     }
 
-    let execution_id = new_execution_id();
     let backend = active_backend();
-    let plan = backend.compile_plan(&execution_id, cwd, policy)?;
-    let policy_id = policy.id.clone();
-    let policy_hash = policy.hash();
-    let mut audit = AuditWriter::create(cwd, &execution_id).map_err(|err| {
-        RunSealError::new(
-            "INTERNAL_ERROR",
-            format!("failed to create audit writer: {err}"),
-        )
-    })?;
-    let audit_path = audit.relative_path().to_string();
+    let plan = match backend.compile_plan(&execution_id, cwd, policy) {
+        Ok(plan) => plan,
+        Err(err) => {
+            let details = err.details_json();
+            let event = json!({
+                "type": "sandbox.backend_capability",
+                "execution_id": execution_id,
+                "policy_id": policy_id,
+                "policy_hash": policy_hash,
+                "audit_path": audit_path.clone(),
+                "decision": "unsupported",
+                "reason": err.reason.clone(),
+                "backend": details.get("backend").cloned().unwrap_or_else(|| json!({})),
+                "support": details.get("support").cloned().unwrap_or_else(|| json!("unsupported")),
+                "platform_plan": details.get("platform_plan").cloned().unwrap_or(Value::Null),
+            });
+            write_audit_event(&mut audit, &event)?;
+
+            let mut details = details;
+            if let Some(details) = details.as_object_mut() {
+                details.insert("audit_path".to_string(), json!(audit_path.clone()));
+            }
+
+            return Err(RunSealError::with_details(err.code, err.reason, details));
+        }
+    };
+
     let started = json!({
         "type": "execution.started",
         "execution_id": execution_id,
@@ -388,12 +425,7 @@ fn execute_command(
         },
         "platform_plan": plan.json(),
     });
-    audit.write_event(&started).map_err(|err| {
-        RunSealError::new(
-            "INTERNAL_ERROR",
-            format!("failed to write audit event: {err}"),
-        )
-    })?;
+    write_audit_event(&mut audit, &started)?;
 
     let timer = Instant::now();
     let output = spawn_command(command, cwd)?;
@@ -410,12 +442,7 @@ fn execute_command(
             "text": stdout,
             "bytes": output.stdout.len(),
         });
-        audit.write_event(&event).map_err(|err| {
-            RunSealError::new(
-                "INTERNAL_ERROR",
-                format!("failed to write audit event: {err}"),
-            )
-        })?;
+        write_audit_event(&mut audit, &event)?;
         events.push(event);
     }
     if !stderr.is_empty() {
@@ -425,12 +452,7 @@ fn execute_command(
             "text": stderr,
             "bytes": output.stderr.len(),
         });
-        audit.write_event(&event).map_err(|err| {
-            RunSealError::new(
-                "INTERNAL_ERROR",
-                format!("failed to write audit event: {err}"),
-            )
-        })?;
+        write_audit_event(&mut audit, &event)?;
         events.push(event);
     }
     let finished = json!({
@@ -439,12 +461,7 @@ fn execute_command(
         "exit_code": exit_code,
         "status": "finished",
     });
-    audit.write_event(&finished).map_err(|err| {
-        RunSealError::new(
-            "INTERNAL_ERROR",
-            format!("failed to write audit event: {err}"),
-        )
-    })?;
+    write_audit_event(&mut audit, &finished)?;
     events.push(finished);
 
     let result = json!({
@@ -477,6 +494,24 @@ fn execute_command(
     });
 
     Ok((events, result))
+}
+
+fn create_audit_writer(cwd: &PathBuf, execution_id: &str) -> Result<AuditWriter, RunSealError> {
+    AuditWriter::create(cwd, execution_id).map_err(|err| {
+        RunSealError::new(
+            "INTERNAL_ERROR",
+            format!("failed to create audit writer: {err}"),
+        )
+    })
+}
+
+fn write_audit_event(audit: &mut AuditWriter, event: &Value) -> Result<(), RunSealError> {
+    audit.write_event(event).map_err(|err| {
+        RunSealError::new(
+            "INTERNAL_ERROR",
+            format!("failed to write audit event: {err}"),
+        )
+    })
 }
 
 fn spawn_command(command: &[String], cwd: &PathBuf) -> Result<Output, RunSealError> {

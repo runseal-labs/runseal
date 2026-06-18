@@ -1,6 +1,7 @@
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 use std::env;
+use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
@@ -60,6 +61,16 @@ fn stdout_json_lines(output: &Output) -> Result<Vec<Value>> {
         .lines()
         .filter(|line| !line.trim().is_empty())
         .map(|line| serde_json::from_str(line).context("stdout line was not valid JSON"))
+        .collect()
+}
+
+fn read_audit_events(root: &std::path::Path, audit_path: &str) -> Result<Vec<Value>> {
+    let audit_file = root.join(audit_path);
+    let audit_jsonl = fs::read_to_string(&audit_file)
+        .with_context(|| format!("audit file must exist at {}", audit_file.display()))?;
+    audit_jsonl
+        .lines()
+        .map(|line| serde_json::from_str(line).context("audit line must be JSON"))
         .collect()
 }
 
@@ -236,6 +247,13 @@ fn policy_denial_uses_stable_error_code() -> Result<()> {
         .unwrap();
     assert_eq!(response["error"]["data"]["code"], "POLICY_DENIED");
     assert!(response["error"]["data"]["reason"].as_str().is_some());
+    let audit_path = response["error"]["data"]["audit_path"]
+        .as_str()
+        .expect("policy denial must return audit_path");
+    let audit_events = read_audit_events(tmp.path(), audit_path)?;
+    assert!(audit_events
+        .iter()
+        .any(|event| event["type"] == "policy.denied" && event["decision"] == "denied"));
     Ok(())
 }
 
@@ -270,6 +288,14 @@ fn sandboxed_policy_without_backend_fails_closed() -> Result<()> {
         expected_backend_name()
     );
     assert_eq!(response["error"]["data"]["support"], "unsupported");
+    let audit_path = response["error"]["data"]["audit_path"]
+        .as_str()
+        .expect("backend failure must return audit_path");
+    let audit_events = read_audit_events(tmp.path(), audit_path)?;
+    assert!(audit_events
+        .iter()
+        .any(|event| event["type"] == "sandbox.backend_capability"
+            && event["decision"] == "unsupported"));
     if cfg!(windows) {
         let plan = &response["error"]["data"]["platform_plan"];
         assert_eq!(plan["enforcement"], "fail-closed-preview");
