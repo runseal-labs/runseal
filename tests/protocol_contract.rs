@@ -1001,6 +1001,7 @@ fn sandboxed_policy_without_backend_fails_closed() -> Result<()> {
         assert_eq!(plan["network"]["mode"], "disabled");
         assert_eq!(plan["network"]["direct_egress"], "deny");
         assert_eq!(plan["network"]["managed_proxy"], "none");
+        assert_eq!(plan["filesystem"]["protected"], json!([]));
         assert_eq!(plan["setup"]["requires_runtime_roots"], true);
         assert_eq!(plan["setup"]["requires_runtime_environment"], true);
         assert_eq!(plan["setup"]["requires_runtime_cleanup"], true);
@@ -1085,6 +1086,50 @@ fn sandboxed_policy_without_backend_fails_closed() -> Result<()> {
             .iter()
             .all(|message| message.get("method") != Some(&json!("event")))
     );
+    Ok(())
+}
+
+#[test]
+fn workspace_contained_plan_reports_profile_protection_without_private_paths() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let output = run_rpc(&rpc_request(
+        "execute",
+        json!({
+            "command": ["python3", "-c", "print('must not run')"],
+            "cwd": tmp.path(),
+            "policy": "workspace-contained"
+        }),
+    ))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = messages
+        .iter()
+        .find(|message| message.get("id") == Some(&json!(1)))
+        .unwrap();
+    assert_eq!(
+        response["error"]["data"]["code"],
+        "BACKEND_CAPABILITY_MISSING"
+    );
+
+    if cfg!(windows) {
+        let protected = &response["error"]["data"]["platform_plan"]["filesystem"]["protected"];
+        assert_eq!(
+            protected,
+            &json!(["workspace_metadata", "host_profile", "credential_roots"])
+        );
+        assert!(
+            protected
+                .as_array()
+                .expect("protected labels must be an array")
+                .iter()
+                .all(Value::is_string)
+        );
+    }
     Ok(())
 }
 

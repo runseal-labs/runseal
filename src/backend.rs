@@ -1,4 +1,4 @@
-use crate::policy::{BackendFeature, SandboxPolicy};
+use crate::policy::{BackendFeature, SandboxLevel, SandboxPolicy};
 use crate::windows_plan::{WindowsPolicyPlan, WindowsRuntimeRoots};
 use serde_json::Map;
 use serde_json::{Value, json};
@@ -179,6 +179,7 @@ pub struct PlatformSandboxPlan {
     pub filesystem_read: Vec<String>,
     pub filesystem_write: Vec<String>,
     pub filesystem_deny: Vec<String>,
+    pub filesystem_protected: Vec<&'static str>,
     pub network_mode: &'static str,
     pub network_direct_egress: &'static str,
     pub network_managed_proxy: &'static str,
@@ -213,6 +214,7 @@ impl PlatformSandboxPlan {
             filesystem_read: policy.filesystem.read.clone(),
             filesystem_write: policy.filesystem.write.clone(),
             filesystem_deny: policy.filesystem.deny.clone(),
+            filesystem_protected: protected_filesystem_labels(policy),
             network_mode: policy.network.mode.as_str(),
             network_direct_egress: "unmanaged",
             network_managed_proxy: "none",
@@ -245,6 +247,7 @@ impl PlatformSandboxPlan {
                 "read": self.filesystem_read.clone(),
                 "write": self.filesystem_write.clone(),
                 "deny": self.filesystem_deny.clone(),
+                "protected": self.filesystem_protected.clone(),
             },
             "network": {
                 "mode": self.network_mode,
@@ -543,6 +546,7 @@ impl WindowsReferenceBackend {
             filesystem_read: windows_policy.filesystem.read_roots,
             filesystem_write,
             filesystem_deny: windows_policy.filesystem.protected_roots,
+            filesystem_protected: protected_filesystem_labels(policy),
             network_mode: windows_policy.network.guard.as_str(),
             network_direct_egress: windows_policy.network.direct_egress.as_str(),
             network_managed_proxy: windows_policy.network.managed_proxy.as_str(),
@@ -561,6 +565,18 @@ fn environment_runtime_json(entries: &[(String, String)]) -> Value {
         object.insert(key.clone(), json!(value));
     }
     Value::Object(object)
+}
+
+fn protected_filesystem_labels(policy: &SandboxPolicy) -> Vec<&'static str> {
+    let mut labels = Vec::new();
+    if !policy.filesystem.deny.is_empty() {
+        labels.push("workspace_metadata");
+    }
+    if policy.sandbox_level == SandboxLevel::WorkspaceContained {
+        labels.push("host_profile");
+        labels.push("credential_roots");
+    }
+    labels
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -1098,7 +1114,12 @@ mod tests {
         assert_eq!(plan.network_direct_egress, "deny");
         assert_eq!(plan.network_managed_proxy, "required");
         assert!(plan.environment_proxy);
+        assert_eq!(plan.filesystem_protected, vec!["workspace_metadata"]);
         let plan_json = plan.json();
+        assert_eq!(
+            plan_json["filesystem"]["protected"],
+            json!(["workspace_metadata"])
+        );
         assert_eq!(plan_json["setup"]["requires_runtime_roots"], true);
         assert_eq!(plan_json["setup"]["requires_runtime_environment"], true);
         assert_eq!(plan_json["setup"]["requires_runtime_cleanup"], true);
@@ -1106,6 +1127,34 @@ mod tests {
         assert_eq!(plan_json["setup"]["requires_managed_proxy"], true);
         assert_eq!(plan_json["setup"]["fail_closed_on_setup_error"], true);
         assert_eq!(WindowsReferenceBackend.supported_features(), &[]);
+        Ok(())
+    }
+
+    #[test]
+    fn windows_fail_closed_preview_includes_workspace_containment_protection() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&cwd)?;
+        let policy = normalize_policy(&json!("workspace-contained"), &cwd, None).unwrap();
+
+        let plan = WindowsReferenceBackend.fail_closed_plan("exec_contained", &cwd, &policy);
+        let plan_json = plan.json();
+
+        assert_eq!(
+            plan.filesystem_protected,
+            vec!["workspace_metadata", "host_profile", "credential_roots"]
+        );
+        assert_eq!(
+            plan_json["filesystem"]["protected"],
+            json!(["workspace_metadata", "host_profile", "credential_roots"])
+        );
+        assert!(
+            plan_json["filesystem"]["protected"]
+                .as_array()
+                .expect("protected labels must be an array")
+                .iter()
+                .all(Value::is_string)
+        );
         Ok(())
     }
 

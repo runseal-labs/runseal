@@ -14,7 +14,7 @@ The tests are black-box by design:
 - Capability reporting through `runseal capabilities` and `getCapabilities`.
 - Windows hosts select the Windows reference backend scaffold and still fail closed for unsupported sandbox levels.
 - macOS and Linux hosts select explicit experimental/community skeleton backends and still fail closed for unsupported sandbox levels.
-- Windows fail-closed errors include a `PlatformSandboxPlan` preview for runtime root, synthetic home, setup requirements, and network guard planning.
+- Windows fail-closed errors include a `PlatformSandboxPlan` preview for runtime root, synthetic home, setup requirements, protected filesystem categories, and network guard planning.
 - Windows fail-closed setup creates and cleans planned runtime roots before returning unsupported.
 - Execution results include a `PlatformSandboxPlan` summary for the selected backend.
 - Policy explanation through `runseal explain-policy`.
