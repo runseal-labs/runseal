@@ -308,6 +308,7 @@ impl PlatformSandboxPlan {
         &self,
         mut filesystem_driver: Box<dyn WindowsFilesystemAclDriver>,
     ) -> io::Result<PreparedSandboxSetup> {
+        self.validate_private_process_setup()?;
         let mut prepared_roots = self.prepare_runtime_roots()?;
         match self.prepare_filesystem_rules_with_driver(filesystem_driver.as_mut()) {
             Ok(filesystem_roots) => extend_unique(&mut prepared_roots, filesystem_roots),
@@ -320,6 +321,25 @@ impl PlatformSandboxPlan {
             prepared_roots,
             filesystem_driver,
         })
+    }
+
+    fn validate_private_process_setup(&self) -> io::Result<()> {
+        if !self.is_sandbox_enforced() {
+            return Ok(());
+        }
+        if self.process_boundary == "restricted-local-process"
+            && self.process_identity == "low-privilege"
+            && self.process_cleanup == "process-tree"
+            && self.private_process_token == "restricted-token"
+            && self.private_process_job == "kill-on-close-job"
+        {
+            return Ok(());
+        }
+
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "sandboxed plan requires a restricted process boundary",
+        ))
     }
 
     pub fn prepare_runtime_roots(&self) -> io::Result<Vec<String>> {
@@ -2480,6 +2500,28 @@ mod tests {
         };
 
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(!runtime_root.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn sandbox_setup_rejects_incomplete_process_boundary_before_creating_runtime_tree()
+    -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&cwd)?;
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+        let mut plan =
+            WindowsReferenceBackend.fail_closed_plan("exec_bad_process_boundary", &cwd, &policy);
+        let runtime_root = PathBuf::from(plan.runtime_root.as_ref().unwrap());
+        plan.private_process_token = "none";
+
+        let Err(err) = plan.prepare_sandbox_setup() else {
+            panic!("incomplete process boundary must fail sandbox setup");
+        };
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains("restricted process boundary"));
         assert!(!runtime_root.exists());
         Ok(())
     }
