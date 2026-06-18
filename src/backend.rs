@@ -298,6 +298,15 @@ impl PlatformSandboxPlan {
         })
     }
 
+    pub fn prepare_sandbox_setup(&self) -> io::Result<Vec<String>> {
+        let prepared_roots = self.prepare_runtime_roots()?;
+        if let Err(setup_err) = self.prepare_filesystem_rules() {
+            self.cleanup_runtime_roots()?;
+            return Err(setup_err);
+        }
+        Ok(prepared_roots)
+    }
+
     pub fn prepare_runtime_roots(&self) -> io::Result<Vec<String>> {
         let mut prepared = Vec::new();
         for root in [
@@ -319,6 +328,17 @@ impl PlatformSandboxPlan {
                 Path::new(runtime_root).join(RUNTIME_ROOT_MARKER),
                 self.execution_id.as_bytes(),
             )?;
+        }
+        Ok(prepared)
+    }
+
+    pub fn prepare_filesystem_rules(&self) -> io::Result<Vec<String>> {
+        let mut prepared = Vec::new();
+        for rule in &self.private_filesystem_rules {
+            validate_private_filesystem_rule_root(&rule.root)?;
+            if !prepared.iter().any(|root| root == &rule.root) {
+                prepared.push(rule.root.clone());
+            }
         }
         Ok(prepared)
     }
@@ -404,6 +424,58 @@ fn prepare_unique_runtime_root(prepared: &mut Vec<String>, root: &str) -> io::Re
         prepared.push(root.to_string());
     }
     Ok(())
+}
+
+fn validate_private_filesystem_rule_root(root: &str) -> io::Result<()> {
+    if root.is_empty() || root == "*" {
+        return Err(invalid_filesystem_rule_root(root));
+    }
+    if contains_parent_traversal(root)
+        || is_broad_filesystem_rule_root(root)
+        || is_windows_drive_relative(root)
+        || !is_concrete_filesystem_rule_root(root)
+    {
+        return Err(invalid_filesystem_rule_root(root));
+    }
+    Ok(())
+}
+
+fn invalid_filesystem_rule_root(root: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!("invalid private filesystem rule root: {root}"),
+    )
+}
+
+fn contains_parent_traversal(path: &str) -> bool {
+    Path::new(path)
+        .components()
+        .any(|component| component == Component::ParentDir)
+        || path.split(['/', '\\']).any(|component| component == "..")
+}
+
+fn is_broad_filesystem_rule_root(root: &str) -> bool {
+    let trimmed = root.trim_end_matches(['/', '\\']);
+    root.trim_matches(['/', '\\']).is_empty()
+        || matches!(trimmed.to_ascii_lowercase().as_str(), "~" | "$home")
+        || trimmed.ends_with(':')
+}
+
+fn is_windows_drive_relative(root: &str) -> bool {
+    let bytes = root.as_bytes();
+    bytes.len() >= 2 && bytes[1] == b':' && !matches!(bytes.get(2), Some(b'/' | b'\\'))
+}
+
+fn is_concrete_filesystem_rule_root(root: &str) -> bool {
+    root.starts_with(['/', '\\']) || is_windows_drive_absolute(root)
+}
+
+fn is_windows_drive_absolute(root: &str) -> bool {
+    let bytes = root.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'/' | b'\\')
 }
 
 fn normalize_lexical(path: &Path) -> PathBuf {
@@ -1036,7 +1108,7 @@ fn missing_backend_features(
 mod tests {
     use super::*;
     use crate::policy::{NetworkMode, normalize_policy};
-    use crate::windows_plan::WindowsFilesystemAccess;
+    use crate::windows_plan::{WindowsFilesystemAccess, WindowsFilesystemRule};
     use serde_json::json;
     use std::fs;
     use std::io;
@@ -1273,6 +1345,57 @@ mod tests {
             plan.json()["filesystem"]["protected"],
             json!(["workspace_metadata", "host_profile", "credential_roots"])
         );
+        Ok(())
+    }
+
+    #[test]
+    fn filesystem_rule_setup_rejects_non_concrete_roots() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&cwd)?;
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+        let mut plan = WindowsReferenceBackend.fail_closed_plan("exec_rules", &cwd, &policy);
+
+        for invalid_root in [
+            "",
+            "*",
+            "/",
+            "C:\\",
+            "C:relative",
+            "relative\\path",
+            "../outside",
+        ] {
+            plan.private_filesystem_rules = vec![WindowsFilesystemRule {
+                access: WindowsFilesystemAccess::ReadWrite,
+                root: invalid_root.to_string(),
+            }];
+            let err = plan.prepare_filesystem_rules().unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+            assert!(
+                err.to_string()
+                    .contains("invalid private filesystem rule root")
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn sandbox_setup_cleans_runtime_tree_after_filesystem_rule_failure() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&cwd)?;
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+        let mut plan = WindowsReferenceBackend.fail_closed_plan("exec_bad_rule", &cwd, &policy);
+        let runtime_root = PathBuf::from(plan.runtime_root.as_ref().unwrap());
+        plan.private_filesystem_rules.push(WindowsFilesystemRule {
+            access: WindowsFilesystemAccess::Deny,
+            root: "*".to_string(),
+        });
+
+        let err = plan.prepare_sandbox_setup().unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(!runtime_root.exists());
         Ok(())
     }
 

@@ -744,7 +744,7 @@ fn execute_command(
         Err(err) => {
             let details = err.details_json();
             if let Some(plan) = err.plan.as_deref() {
-                match plan.prepare_runtime_roots() {
+                match plan.prepare_sandbox_setup() {
                     Ok(prepared_roots) => {
                         let event = execution_event_now(
                             json!({
@@ -788,7 +788,7 @@ fn execute_command(
 
                         return Err(RunSealError::with_details(
                             "INTERNAL_ERROR",
-                            "failed to prepare sandbox runtime roots",
+                            "failed to prepare sandbox setup",
                             details,
                         ));
                     }
