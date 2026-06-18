@@ -1,4 +1,5 @@
 use crate::policy::{BackendFeature, SandboxPolicy};
+use crate::windows_plan::WindowsPolicyPlan;
 use serde_json::{Value, json};
 use std::env;
 use std::ffi::OsString;
@@ -478,6 +479,7 @@ impl WindowsReferenceBackend {
         cwd: &Path,
         policy: &SandboxPolicy,
     ) -> PlatformSandboxPlan {
+        let windows_policy = WindowsPolicyPlan::from_policy(policy);
         let runtime_root = cwd.join(".runseal").join("runtime").join(execution_id);
         let profile_root = runtime_root.join("profile");
         let synthetic_home = runtime_root.join("home");
@@ -497,13 +499,13 @@ impl WindowsReferenceBackend {
             profile_root: Some(path_string(&profile_root)),
             synthetic_home: Some(path_string(&synthetic_home)),
             temp_root: Some(path_string(&temp_root)),
-            filesystem_read: policy.filesystem.read.clone(),
-            filesystem_write: policy.filesystem.write.clone(),
-            filesystem_deny: policy.filesystem.deny.clone(),
-            network_mode: policy.network.mode.as_str(),
+            filesystem_read: windows_policy.filesystem.read_roots,
+            filesystem_write: windows_policy.filesystem.write_roots,
+            filesystem_deny: windows_policy.filesystem.protected_roots,
+            network_mode: windows_policy.network.guard.as_str(),
             environment_inherit: policy.environment.inherit.clone(),
             environment_scrub: policy.environment.scrub.clone(),
-            environment_proxy: policy.environment.proxy,
+            environment_proxy: windows_policy.network.inject_proxy_environment,
             required_backend_features: policy.required_backend_feature_names(),
         }
     }
