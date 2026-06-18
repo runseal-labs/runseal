@@ -1,4 +1,4 @@
-use crate::policy::{SandboxLevel, SandboxPolicy};
+use crate::policy::{BackendFeature, SandboxPolicy};
 use serde_json::{Value, json};
 use std::fs;
 use std::io;
@@ -32,7 +32,23 @@ pub trait SandboxBackend {
     fn name(&self) -> &'static str;
     fn status(&self) -> &'static str;
     fn platform(&self) -> &'static str;
-    fn supports_policy(&self, policy: &SandboxPolicy) -> CapabilityStatus;
+    fn supported_features(&self) -> &'static [BackendFeature];
+    fn supports_policy(&self, policy: &SandboxPolicy) -> CapabilityStatus {
+        if policy.allows_local_execution() || self.missing_features(policy).is_empty() {
+            CapabilityStatus::Supported
+        } else {
+            CapabilityStatus::Unsupported
+        }
+    }
+    fn missing_features(&self, policy: &SandboxPolicy) -> Vec<BackendFeature> {
+        missing_backend_features(policy, self.supported_features())
+    }
+    fn missing_feature_names(&self, policy: &SandboxPolicy) -> Vec<&'static str> {
+        self.missing_features(policy)
+            .into_iter()
+            .map(BackendFeature::as_str)
+            .collect()
+    }
     fn compile_plan(
         &self,
         execution_id: &str,
@@ -76,10 +92,10 @@ impl SandboxBackend for ActiveBackend {
         }
     }
 
-    fn supports_policy(&self, policy: &SandboxPolicy) -> CapabilityStatus {
+    fn supported_features(&self) -> &'static [BackendFeature] {
         match self {
-            Self::Local(backend) => backend.supports_policy(policy),
-            Self::WindowsReference(backend) => backend.supports_policy(policy),
+            Self::Local(backend) => backend.supported_features(),
+            Self::WindowsReference(backend) => backend.supported_features(),
         }
     }
 
@@ -162,7 +178,7 @@ impl PlatformSandboxPlan {
             filesystem_write: policy.filesystem.write.clone(),
             filesystem_deny: policy.filesystem.deny.clone(),
             network_mode: policy.network.mode.as_str(),
-            required_backend_features: policy.required_backend_features(),
+            required_backend_features: policy.required_backend_feature_names(),
         }
     }
 
@@ -262,7 +278,7 @@ impl BackendError {
             backend_status: backend.status(),
             platform: backend.platform(),
             support: CapabilityStatus::Unsupported.as_str(),
-            missing_features: policy.required_backend_features(),
+            missing_features: backend.missing_feature_names(policy),
             plan: plan.map(Box::new),
         }
     }
@@ -302,12 +318,8 @@ impl SandboxBackend for LocalBackend {
         host_platform()
     }
 
-    fn supports_policy(&self, policy: &SandboxPolicy) -> CapabilityStatus {
-        if policy.sandbox_level == SandboxLevel::DangerFullAccess {
-            CapabilityStatus::Supported
-        } else {
-            CapabilityStatus::Unsupported
-        }
+    fn supported_features(&self) -> &'static [BackendFeature] {
+        &[]
     }
 
     fn compile_plan(
@@ -399,7 +411,7 @@ impl WindowsReferenceBackend {
             filesystem_write: policy.filesystem.write.clone(),
             filesystem_deny: policy.filesystem.deny.clone(),
             network_mode: policy.network.mode.as_str(),
-            required_backend_features: policy.required_backend_features(),
+            required_backend_features: policy.required_backend_feature_names(),
         }
     }
 }
@@ -420,12 +432,8 @@ impl SandboxBackend for WindowsReferenceBackend {
         "windows"
     }
 
-    fn supports_policy(&self, policy: &SandboxPolicy) -> CapabilityStatus {
-        if policy.sandbox_level == SandboxLevel::DangerFullAccess {
-            CapabilityStatus::Supported
-        } else {
-            CapabilityStatus::Unsupported
-        }
+    fn supported_features(&self) -> &'static [BackendFeature] {
+        &[]
     }
 
     fn compile_plan(
@@ -519,4 +527,48 @@ fn spawn_local_command(command: &[String], cwd: &Path) -> io::Result<Output> {
         .args(&command[1..])
         .current_dir(cwd)
         .output()
+}
+
+fn missing_backend_features(
+    policy: &SandboxPolicy,
+    supported_features: &[BackendFeature],
+) -> Vec<BackendFeature> {
+    policy
+        .required_backend_features()
+        .into_iter()
+        .filter(|feature| !supported_features.contains(feature))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::policy::{NetworkMode, normalize_policy};
+    use serde_json::json;
+    use std::path::PathBuf;
+
+    #[test]
+    fn missing_features_excludes_supported_backend_features() {
+        let cwd = PathBuf::from("/workspace");
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+
+        assert_eq!(
+            missing_backend_features(&policy, &[BackendFeature::FilesystemPolicy]),
+            vec![BackendFeature::NetworkProxy]
+        );
+    }
+
+    #[test]
+    fn danger_full_access_requires_no_sandbox_backend_features() {
+        let cwd = PathBuf::from("/workspace");
+        let policy = normalize_policy(
+            &json!("danger-full-access"),
+            &cwd,
+            Some(NetworkMode::Disabled),
+        )
+        .unwrap();
+
+        assert!(missing_backend_features(&policy, &[]).is_empty());
+        assert!(LocalBackend.supports_policy(&policy).is_supported());
+    }
 }

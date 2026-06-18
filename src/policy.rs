@@ -60,6 +60,23 @@ impl NetworkMode {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BackendFeature {
+    FilesystemPolicy,
+    NetworkDisabled,
+    NetworkProxy,
+}
+
+impl BackendFeature {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::FilesystemPolicy => "filesystem_policy",
+            Self::NetworkDisabled => "network_disabled",
+            Self::NetworkProxy => "network_proxy",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FilesystemPolicy {
     pub read: Vec<String>,
@@ -154,7 +171,7 @@ impl SandboxPolicy {
             } else {
                 "sandbox-backend"
             },
-            "required_backend_features": self.required_backend_features(),
+            "required_backend_features": self.required_backend_feature_names(),
             "support": if self.allows_local_execution() {
                 "supported"
             } else {
@@ -174,17 +191,24 @@ impl SandboxPolicy {
             && self.filesystem.write.is_empty()
     }
 
-    pub fn required_backend_features(&self) -> Vec<&'static str> {
+    pub fn required_backend_features(&self) -> Vec<BackendFeature> {
         if self.allows_local_execution() {
             return Vec::new();
         }
 
-        let mut features = vec!["filesystem_policy"];
+        let mut features = vec![BackendFeature::FilesystemPolicy];
         features.push(match self.network.mode {
-            NetworkMode::Disabled => "network_disabled",
-            NetworkMode::Proxy => "network_proxy",
+            NetworkMode::Disabled => BackendFeature::NetworkDisabled,
+            NetworkMode::Proxy => BackendFeature::NetworkProxy,
         });
         features
+    }
+
+    pub fn required_backend_feature_names(&self) -> Vec<&'static str> {
+        self.required_backend_features()
+            .into_iter()
+            .map(BackendFeature::as_str)
+            .collect()
     }
 }
 
@@ -435,7 +459,7 @@ mod tests {
         assert_eq!(policy.network.mode, NetworkMode::Proxy);
         assert!(policy.filesystem.protect_vcs);
         assert_eq!(
-            policy.required_backend_features(),
+            policy.required_backend_feature_names(),
             vec!["filesystem_policy", "network_proxy"]
         );
         assert!(policy.hash().starts_with("sha256:"));
