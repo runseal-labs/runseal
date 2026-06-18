@@ -281,3 +281,51 @@ fn exec_json_returns_execution_result() -> Result<()> {
     assert!(payload["resource_usage"]["duration_ms"].as_u64().is_some());
     Ok(())
 }
+
+#[test]
+fn exec_cli_enforces_timeout_ms() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let cwd = tmp.path().to_string_lossy().to_string();
+    let output = run_cli(&[
+        "exec",
+        "--json",
+        "--policy",
+        "danger-full-access",
+        "--timeout-ms",
+        "10",
+        "--cwd",
+        &cwd,
+        "--",
+        "python3",
+        "-c",
+        "import time; time.sleep(1)",
+    ])?;
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("execution timed out"), "{stderr}");
+    Ok(())
+}
+
+#[test]
+fn exec_cli_rejects_invalid_timeout_ms() -> Result<()> {
+    let output = run_cli(&[
+        "exec",
+        "--policy",
+        "danger-full-access",
+        "--timeout-ms",
+        "soon",
+        "--",
+        "python3",
+        "-c",
+        "print('must not run')",
+    ])?;
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("timeout must be an integer in milliseconds"),
+        "{stderr}"
+    );
+    Ok(())
+}

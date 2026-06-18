@@ -150,8 +150,9 @@ fn run_exec(args: &[String]) -> Result<(), String> {
         request.network,
     )
     .map_err(|err| err.reason)?;
-    let (events, result) = execute_command(&request.command, &request.cwd, &policy, None)
-        .map_err(|err| err.message)?;
+    let (events, result) =
+        execute_command(&request.command, &request.cwd, &policy, request.timeout)
+            .map_err(|err| err.message)?;
 
     if request.events {
         for event in events {
@@ -190,6 +191,7 @@ fn parse_exec_args(args: &[String]) -> Result<CliExecRequest, String> {
     let mut policy = "read-only".to_string();
     let mut network = None;
     let mut cwd = current_dir();
+    let mut timeout = None;
     let mut index = 0;
 
     while index < args.len() {
@@ -223,6 +225,13 @@ fn parse_exec_args(args: &[String]) -> Result<CliExecRequest, String> {
                 cwd = PathBuf::from(value);
                 index += 2;
             }
+            "--timeout-ms" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "--timeout-ms requires a value".to_string())?;
+                timeout = Some(parse_timeout_ms(value)?);
+                index += 2;
+            }
             "--" => {
                 let command = args[index + 1..].to_vec();
                 if command.is_empty() {
@@ -234,6 +243,7 @@ fn parse_exec_args(args: &[String]) -> Result<CliExecRequest, String> {
                     policy,
                     network,
                     cwd,
+                    timeout,
                     command,
                 });
             }
@@ -287,6 +297,13 @@ fn parse_policy_args(args: &[String]) -> Result<CliPolicyRequest, String> {
 fn parse_network_mode(value: &str) -> Result<NetworkMode, String> {
     NetworkMode::from_str(value)
         .ok_or_else(|| format!("network mode must be disabled or proxy, got {value}"))
+}
+
+fn parse_timeout_ms(value: &str) -> Result<Duration, String> {
+    let timeout_ms = value
+        .parse::<u64>()
+        .map_err(|_| format!("timeout must be an integer in milliseconds, got {value}"))?;
+    Ok(Duration::from_millis(timeout_ms))
 }
 
 fn explain_policy_from_params(params: &Value) -> Result<Value, RunSealError> {
@@ -767,6 +784,7 @@ struct CliExecRequest {
     policy: String,
     network: Option<NetworkMode>,
     cwd: PathBuf,
+    timeout: Option<Duration>,
     command: Vec<String>,
 }
 
