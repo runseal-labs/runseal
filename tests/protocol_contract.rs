@@ -2020,6 +2020,50 @@ fn execute_rpc_streams_events_and_final_result() -> Result<()> {
 }
 
 #[test]
+fn completed_policy_change_activates_new_epoch() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let first = run_rpc(&rpc_request(
+        "execute",
+        json!({
+            "command": [python_bin(), "-c", "print('first')"],
+            "cwd": tmp.path(),
+            "policy": "danger-full-access",
+            "network": {"mode": "disabled"}
+        }),
+    ))?;
+    let second = run_rpc(&rpc_request(
+        "execute",
+        json!({
+            "command": [python_bin(), "-c", "print('second')"],
+            "cwd": tmp.path(),
+            "policy": "danger-full-access",
+            "network": {"mode": "proxy"}
+        }),
+    ))?;
+
+    assert!(first.status.success());
+    assert!(second.status.success());
+    let first_messages = stdout_json_lines(&first)?;
+    let second_messages = stdout_json_lines(&second)?;
+    let first_result = &first_messages
+        .iter()
+        .find(|message| message.get("id") == Some(&json!(1)))
+        .context("first response with id 1 must exist")?["result"];
+    let second_result = &second_messages
+        .iter()
+        .find(|message| message.get("id") == Some(&json!(1)))
+        .context("second response with id 1 must exist")?["result"];
+
+    assert_eq!(first_result["status"], "finished");
+    assert_eq!(second_result["status"], "finished");
+    assert_eq!(first_result["policy_epoch"], first_result["policy_hash"]);
+    assert_eq!(second_result["policy_epoch"], second_result["policy_hash"]);
+    assert_ne!(first_result["policy_hash"], second_result["policy_hash"]);
+    assert_ne!(first_result["policy_epoch"], second_result["policy_epoch"]);
+    Ok(())
+}
+
+#[test]
 fn execute_uses_minimal_environment() -> Result<()> {
     let tmp = TempDir::new()?;
     let output = run_rpc_with_env(
