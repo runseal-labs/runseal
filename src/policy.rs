@@ -290,7 +290,6 @@ pub fn normalize_policy(
         )));
     }
     optional_string(object, "description")?;
-    reject_non_empty_section(object, "environment")?;
     reject_non_empty_section(object, "process")?;
     reject_non_empty_section(object, "resources")?;
     reject_non_empty_section(object, "audit")?;
@@ -321,13 +320,14 @@ pub fn normalize_policy(
     } else {
         default_network_mode(sandbox_level)
     };
+    let environment = inline_environment(optional_object(object, "environment")?, network)?;
 
     Ok(SandboxPolicy {
         id,
         sandbox_level,
         filesystem: inline_filesystem(filesystem, cwd, sandbox_level)?,
         network: NetworkPolicy { mode: network },
-        environment: default_environment(network),
+        environment,
         source: PolicySource::Inline,
     })
 }
@@ -434,18 +434,26 @@ fn string_array(
     object: Option<&Map<String, Value>>,
     field: &'static str,
 ) -> Result<Option<Vec<String>>, PolicyError> {
+    string_array_for(object, "filesystem", field)
+}
+
+fn string_array_for(
+    object: Option<&Map<String, Value>>,
+    context: &'static str,
+    field: &'static str,
+) -> Result<Option<Vec<String>>, PolicyError> {
     let Some(value) = object.and_then(|object| object.get(field)) else {
         return Ok(None);
     };
     let items = value
         .as_array()
-        .ok_or_else(|| PolicyError::invalid(format!("filesystem.{field} must be an array")))?;
+        .ok_or_else(|| PolicyError::invalid(format!("{context}.{field} must be an array")))?;
 
     items
         .iter()
         .map(|item| {
             item.as_str().map(str::to_string).ok_or_else(|| {
-                PolicyError::invalid(format!("filesystem.{field} entries must be strings"))
+                PolicyError::invalid(format!("{context}.{field} entries must be strings"))
             })
         })
         .collect::<Result<Vec<_>, _>>()
@@ -480,6 +488,41 @@ fn inline_network_mode(network: Option<&Value>) -> Option<Result<NetworkMode, Po
             "network.mode must be disabled or proxy, got {mode}"
         ))
     }))
+}
+
+fn inline_environment(
+    environment: Option<&Map<String, Value>>,
+    network: NetworkMode,
+) -> Result<EnvironmentPolicy, PolicyError> {
+    let mut policy = default_environment(network);
+    let Some(environment) = environment else {
+        return Ok(policy);
+    };
+
+    validate_keys(
+        environment,
+        "environment",
+        &["inherit", "scrub", "proxy", "set"],
+    )?;
+    reject_non_empty_value(environment, "set")?;
+
+    if let Some(inherit) = optional_string(environment, "inherit")? {
+        if inherit != "minimal" {
+            return Err(PolicyError::invalid(format!(
+                "environment.inherit must be minimal, got {inherit}"
+            )));
+        }
+        policy.inherit = inherit.to_string();
+    }
+    if let Some(scrub) = string_array_for(Some(environment), "environment", "scrub")? {
+        validate_environment_patterns(&scrub)?;
+        policy.scrub = scrub;
+    }
+    if let Some(proxy) = optional_bool_for(Some(environment), "environment", "proxy")? {
+        policy.proxy = proxy;
+    }
+
+    Ok(policy)
 }
 
 fn default_network_mode(sandbox_level: SandboxLevel) -> NetworkMode {
@@ -551,6 +594,17 @@ fn validate_path_entries(
     Ok(())
 }
 
+fn validate_environment_patterns(entries: &[String]) -> Result<(), PolicyError> {
+    for entry in entries {
+        if entry.is_empty() {
+            return Err(PolicyError::invalid(
+                "environment.scrub entries must not be empty",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn contains_parent_traversal(entry: &str) -> bool {
     Path::new(entry)
         .components()
@@ -614,13 +668,21 @@ fn optional_bool(
     object: Option<&Map<String, Value>>,
     field: &'static str,
 ) -> Result<Option<bool>, PolicyError> {
+    optional_bool_for(object, "filesystem", field)
+}
+
+fn optional_bool_for(
+    object: Option<&Map<String, Value>>,
+    context: &'static str,
+    field: &'static str,
+) -> Result<Option<bool>, PolicyError> {
     let Some(value) = object.and_then(|object| object.get(field)) else {
         return Ok(None);
     };
     value
         .as_bool()
         .map(Some)
-        .ok_or_else(|| PolicyError::invalid(format!("filesystem.{field} must be a boolean")))
+        .ok_or_else(|| PolicyError::invalid(format!("{context}.{field} must be a boolean")))
 }
 
 fn reject_non_empty_section(
@@ -637,6 +699,24 @@ fn reject_non_empty_section(
             "{field} requirements are not supported in this build"
         )))
     }
+}
+
+fn reject_non_empty_value(
+    object: &Map<String, Value>,
+    field: &'static str,
+) -> Result<(), PolicyError> {
+    let Some(value) = object.get(field) else {
+        return Ok(());
+    };
+    let value = value
+        .as_object()
+        .ok_or_else(|| PolicyError::invalid(format!("environment.{field} must be an object")))?;
+    if !value.is_empty() {
+        return Err(PolicyError::invalid(format!(
+            "environment.{field} is not supported in this build"
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -744,6 +824,30 @@ mod tests {
     }
 
     #[test]
+    fn inline_policy_materializes_environment_controls() {
+        let cwd = PathBuf::from("/workspace");
+        let policy = normalize_policy(
+            &json!({
+                "version": POLICY_VERSION,
+                "environment": {
+                    "inherit": "minimal",
+                    "scrub": ["*_SECRET"],
+                    "proxy": false
+                },
+                "network": {"mode": "proxy"}
+            }),
+            &cwd,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(policy.environment.inherit, "minimal");
+        assert_eq!(policy.environment.scrub, vec!["*_SECRET"]);
+        assert!(!policy.environment.proxy);
+        assert_eq!(policy.canonical_json()["environment"]["proxy"], false);
+    }
+
+    #[test]
     fn inline_policy_rejects_unsupported_network_routes() {
         assert_policy_invalid(
             json!({
@@ -788,7 +892,16 @@ mod tests {
                     }
                 }
             }),
-            "environment requirements are not supported",
+            "environment.set is not supported",
+        );
+        assert_policy_invalid(
+            json!({
+                "version": POLICY_VERSION,
+                "environment": {
+                    "set": []
+                }
+            }),
+            "environment.set must be an object",
         );
         assert_policy_invalid(
             json!({

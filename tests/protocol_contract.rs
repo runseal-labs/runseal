@@ -1029,6 +1029,43 @@ fn inline_policy_accepts_read_only_filesystem_roots() -> Result<()> {
 }
 
 #[test]
+fn inline_policy_accepts_environment_controls() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let output = run_rpc(&rpc_request(
+        "explainPolicy",
+        json!({
+            "cwd": tmp.path(),
+            "policy": {
+                "version": "runseal.policy/v1",
+                "environment": {
+                    "inherit": "minimal",
+                    "scrub": ["RUNSEAL_SECRET_*"],
+                    "proxy": false
+                },
+                "network": {"mode": "proxy"}
+            }
+        }),
+    ))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let payload = &messages[0]["result"];
+
+    assert_eq!(payload["environment"]["inherit"], "minimal");
+    assert_eq!(payload["environment"]["scrub"], json!(["RUNSEAL_SECRET_*"]));
+    assert_eq!(payload["environment"]["proxy"], false);
+    assert_eq!(
+        payload["canonical_policy"]["environment"]["scrub"],
+        json!(["RUNSEAL_SECRET_*"])
+    );
+    Ok(())
+}
+
+#[test]
 fn inline_policy_rejects_unsafe_filesystem_paths() -> Result<()> {
     let tmp = TempDir::new()?;
     let output = run_rpc(&rpc_request(
