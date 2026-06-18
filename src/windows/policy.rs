@@ -1,5 +1,5 @@
+use super::vendor_adapter::{WindowsVendorSandboxProfile, WindowsVendorTokenMode};
 use crate::policy::{SandboxLevel, SandboxPolicy};
-use crate::windows_vendor_adapter::{WindowsVendorSandboxProfile, WindowsVendorTokenMode};
 use std::env;
 use std::path::Path;
 

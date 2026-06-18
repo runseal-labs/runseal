@@ -1,8 +1,7 @@
 mod audit;
 mod backend;
 mod policy;
-mod windows_policy;
-mod windows_vendor_adapter;
+mod windows;
 
 use audit::AuditWriter;
 use backend::{

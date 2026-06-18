@@ -1,5 +1,5 @@
 use crate::policy::{BackendFeature, SandboxLevel, SandboxPolicy};
-use crate::windows_policy::{
+use crate::windows::policy::{
     WindowsFilesystemAclEffect, WindowsFilesystemAclEntry, WindowsFilesystemAclPlan,
     WindowsFilesystemAclRights, WindowsFilesystemAclTransactionPlan,
     WindowsFilesystemAclTransactionStep, WindowsFilesystemRule, WindowsHostRoots,
@@ -1682,7 +1682,7 @@ fn missing_backend_features(
 mod tests {
     use super::*;
     use crate::policy::{NetworkMode, normalize_policy};
-    use crate::windows_policy::{
+    use crate::windows::policy::{
         WindowsFilesystemAccess, WindowsFilesystemAclPlan, WindowsFilesystemAclTransactionPlan,
         WindowsFilesystemRule, WindowsFilesystemRuleSource,
     };
