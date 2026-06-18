@@ -3,6 +3,7 @@ use serde_json::{Value, json};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CapabilityStatus {
@@ -23,6 +24,10 @@ impl CapabilityStatus {
     }
 }
 
+/// Platform execution boundary for RunSeal sandbox policies.
+///
+/// Implementations compile a normalized policy into a platform plan, report the
+/// capabilities they can actually enforce, and execute only plans they support.
 pub trait SandboxBackend {
     fn name(&self) -> &'static str;
     fn status(&self) -> &'static str;
@@ -34,6 +39,12 @@ pub trait SandboxBackend {
         cwd: &Path,
         policy: &SandboxPolicy,
     ) -> Result<PlatformSandboxPlan, BackendError>;
+    fn execute_plan(
+        &self,
+        plan: &PlatformSandboxPlan,
+        command: &[String],
+        cwd: &Path,
+    ) -> io::Result<Output>;
     fn capabilities_json(&self) -> Value;
 }
 
@@ -81,6 +92,18 @@ impl SandboxBackend for ActiveBackend {
         match self {
             Self::Local(backend) => backend.compile_plan(execution_id, cwd, policy),
             Self::WindowsReference(backend) => backend.compile_plan(execution_id, cwd, policy),
+        }
+    }
+
+    fn execute_plan(
+        &self,
+        plan: &PlatformSandboxPlan,
+        command: &[String],
+        cwd: &Path,
+    ) -> io::Result<Output> {
+        match self {
+            Self::Local(backend) => backend.execute_plan(plan, command, cwd),
+            Self::WindowsReference(backend) => backend.execute_plan(plan, command, cwd),
         }
     }
 
@@ -197,6 +220,10 @@ impl PlatformSandboxPlan {
             Ok(Vec::new())
         }
     }
+
+    pub fn is_sandbox_enforced(&self) -> bool {
+        self.enforcement != "local-execution"
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -293,6 +320,15 @@ impl SandboxBackend for LocalBackend {
         } else {
             Err(BackendError::unsupported(self, policy))
         }
+    }
+
+    fn execute_plan(
+        &self,
+        _plan: &PlatformSandboxPlan,
+        command: &[String],
+        cwd: &Path,
+    ) -> io::Result<Output> {
+        spawn_local_command(command, cwd)
     }
 
     fn capabilities_json(&self) -> Value {
@@ -408,6 +444,15 @@ impl SandboxBackend for WindowsReferenceBackend {
         }
     }
 
+    fn execute_plan(
+        &self,
+        _plan: &PlatformSandboxPlan,
+        command: &[String],
+        cwd: &Path,
+    ) -> io::Result<Output> {
+        spawn_local_command(command, cwd)
+    }
+
     fn capabilities_json(&self) -> Value {
         json!({
             "backend": self.name(),
@@ -460,4 +505,11 @@ fn host_platform() -> &'static str {
 
 fn path_string(path: &Path) -> String {
     PathBuf::from(path).to_string_lossy().to_string()
+}
+
+fn spawn_local_command(command: &[String], cwd: &Path) -> io::Result<Output> {
+    Command::new(&command[0])
+        .args(&command[1..])
+        .current_dir(cwd)
+        .output()
 }

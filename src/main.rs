@@ -9,7 +9,6 @@ use serde_json::{Value, json};
 use std::env;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 const PROTOCOL_VERSION: &str = "runseal.protocol/v1";
@@ -494,6 +493,7 @@ fn execute_command(
         }
     };
 
+    let sandbox_enforced = plan.is_sandbox_enforced();
     let started = json!({
         "type": "execution.started",
         "execution_id": execution_id,
@@ -502,7 +502,7 @@ fn execute_command(
         "audit_path": audit_path,
         "sandbox": {
             "level": policy.sandbox_level.as_str(),
-            "enforced": false,
+            "enforced": sandbox_enforced,
         },
         "network": {
             "mode": policy.network.mode.as_str(),
@@ -517,7 +517,12 @@ fn execute_command(
     write_audit_event(&mut audit, &started)?;
 
     let timer = Instant::now();
-    let output = spawn_command(command, cwd)?;
+    let output = backend.execute_plan(&plan, command, cwd).map_err(|err| {
+        RunSealError::new(
+            "EXECUTION_FAILED_TO_START",
+            format!("failed to spawn command {}: {err}", command[0]),
+        )
+    })?;
     let duration_ms = timer.elapsed().as_millis() as u64;
     let exit_code = output.status.code().unwrap_or(1);
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -562,7 +567,7 @@ fn execute_command(
         "audit_path": audit_path,
         "sandbox": {
             "level": policy.sandbox_level.as_str(),
-            "enforced": false,
+            "enforced": sandbox_enforced,
         },
         "network": {
             "mode": policy.network.mode.as_str(),
@@ -601,19 +606,6 @@ fn write_audit_event(audit: &mut AuditWriter, event: &Value) -> Result<(), RunSe
             format!("failed to write audit event: {err}"),
         )
     })
-}
-
-fn spawn_command(command: &[String], cwd: &Path) -> Result<Output, RunSealError> {
-    Command::new(&command[0])
-        .args(&command[1..])
-        .current_dir(cwd)
-        .output()
-        .map_err(|err| {
-            RunSealError::new(
-                "EXECUTION_FAILED_TO_START",
-                format!("failed to spawn command {}: {err}", command[0]),
-            )
-        })
 }
 
 fn new_execution_id() -> String {
