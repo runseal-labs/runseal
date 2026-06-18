@@ -929,6 +929,43 @@ fn execute_timeout_returns_stable_error_and_audit_event() -> Result<()> {
 }
 
 #[test]
+fn execute_start_failure_returns_audit_path_and_failed_event() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let output = run_rpc(&rpc_request(
+        "execute",
+        json!({
+            "command": ["runseal-command-that-does-not-exist-for-test"],
+            "cwd": tmp.path(),
+            "policy": "danger-full-access"
+        }),
+    ))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = &messages[0];
+
+    assert_eq!(
+        response["error"]["data"]["code"],
+        "EXECUTION_FAILED_TO_START"
+    );
+    let audit_path = response["error"]["data"]["audit_path"]
+        .as_str()
+        .expect("start failure must return audit_path");
+    let audit_events = read_audit_events(tmp.path(), audit_path)?;
+    let failed_event = audit_events
+        .iter()
+        .find(|event| event["type"] == "execution.failed")
+        .context("execution.failed audit event must exist")?;
+    assert_event_envelope(failed_event)?;
+    assert_eq!(failed_event["reason"], "execution failed to start");
+    Ok(())
+}
+
+#[test]
 fn execute_uses_policy_resource_timeout() -> Result<()> {
     let tmp = TempDir::new()?;
     let output = run_rpc(&rpc_request(

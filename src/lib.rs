@@ -796,14 +796,36 @@ fn execute_command(
     write_audit_event_with_metadata(&mut audit, &started, &metadata)?;
 
     let timer = Instant::now();
-    let execution_output = backend
-        .execute_plan(&plan, command, cwd, stdin, &env, timeout)
-        .map_err(|err| {
-            RunSealError::new(
+    let execution_output = match backend.execute_plan(&plan, command, cwd, stdin, &env, timeout) {
+        Ok(output) => output,
+        Err(err) => {
+            let failed = execution_event_now(
+                json!({
+                    "type": "execution.failed",
+                    "execution_id": ids.execution_id,
+                    "policy_id": policy_id,
+                    "policy_hash": policy_hash,
+                    "audit_path": audit_path,
+                    "status": "failed",
+                    "reason": "execution failed to start",
+                    "error": err.to_string(),
+                }),
+                &event_context,
+            );
+            write_audit_event_with_metadata(&mut audit, &failed, &metadata)?;
+
+            return Err(RunSealError::with_details(
                 "EXECUTION_FAILED_TO_START",
                 format!("failed to spawn command {}: {err}", command[0]),
-            )
-        })?;
+                json!({
+                    "execution_id": ids.execution_id,
+                    "session_id": ids.session_id,
+                    "seal_id": ids.seal_id,
+                    "audit_path": audit_path,
+                }),
+            ));
+        }
+    };
     let mut output = execution_output.output;
     let output_truncated = truncate_output(&mut output, policy.resources.max_output_bytes);
     let duration_ms = timer.elapsed().as_millis() as u64;
