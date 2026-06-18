@@ -362,13 +362,7 @@ impl PlatformSandboxPlan {
         validate_private_filesystem_acl_entries(&transaction)?;
         apply_private_filesystem_acl_transaction(&transaction, driver)?;
 
-        let mut prepared = Vec::new();
-        for entry in transaction.apply_entries() {
-            if !prepared.iter().any(|root| root == entry.root()) {
-                prepared.push(entry.root().to_string());
-            }
-        }
-        Ok(prepared)
+        Ok(transaction.rollback_roots().to_vec())
     }
 
     pub fn cleanup_sandbox_setup(&self) -> io::Result<Vec<String>> {
@@ -394,12 +388,7 @@ impl PlatformSandboxPlan {
         validate_private_filesystem_acl_transaction(&transaction)?;
         validate_private_filesystem_acl_entries(&transaction)?;
 
-        let mut cleaned = Vec::new();
-        for entry in transaction.apply_entries() {
-            if !cleaned.iter().any(|root| root == entry.root()) {
-                cleaned.push(entry.root().to_string());
-            }
-        }
+        let cleaned = transaction.rollback_roots().to_vec();
         if cleaned.is_empty() {
             return Ok(cleaned);
         }
@@ -1911,6 +1900,42 @@ mod tests {
     }
 
     #[test]
+    fn filesystem_rule_setup_reports_deduplicated_rollback_roots() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&cwd)?;
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+        let mut plan =
+            WindowsReferenceBackend.fail_closed_plan("exec_rollback_roots", &cwd, &policy);
+        plan.private_filesystem_rules = vec![
+            WindowsFilesystemRule {
+                access: WindowsFilesystemAccess::Deny,
+                source: WindowsFilesystemRuleSource::ProtectedDeny,
+                root: "C:/Workspace/.Git/".to_string(),
+            },
+            WindowsFilesystemRule {
+                access: WindowsFilesystemAccess::Deny,
+                source: WindowsFilesystemRuleSource::ProtectedDeny,
+                root: "c:\\workspace\\.git".to_string(),
+            },
+        ];
+        let mut driver = RecordingAclDriver::default();
+
+        let prepared = plan.prepare_filesystem_rules_with_driver(&mut driver)?;
+
+        assert_eq!(prepared, vec!["C:/Workspace/.Git/"]);
+        assert_eq!(
+            driver.events,
+            vec![
+                "capture:C:/Workspace/.Git/",
+                "apply:C:/Workspace/.Git/",
+                "apply:c:\\workspace\\.git",
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
     fn sandbox_setup_reports_runtime_and_filesystem_roots() -> io::Result<()> {
         let tmp = TempDir::new()?;
         let cwd = tmp.path().join("workspace");
@@ -1953,6 +1978,41 @@ mod tests {
 
         assert_eq!(driver.events, vec!["rollback"]);
         assert_eq!(cleaned, vec![path_string(&cwd), path_string(&runtime_root)]);
+        assert!(!runtime_root.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn sandbox_cleanup_reports_deduplicated_rollback_roots() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&cwd)?;
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+        let mut plan =
+            WindowsReferenceBackend.fail_closed_plan("exec_cleanup_dedupe", &cwd, &policy);
+        plan.private_filesystem_rules = vec![
+            WindowsFilesystemRule {
+                access: WindowsFilesystemAccess::Deny,
+                source: WindowsFilesystemRuleSource::ProtectedDeny,
+                root: "C:/Workspace/.Git/".to_string(),
+            },
+            WindowsFilesystemRule {
+                access: WindowsFilesystemAccess::Deny,
+                source: WindowsFilesystemRuleSource::ProtectedDeny,
+                root: "c:\\workspace\\.git".to_string(),
+            },
+        ];
+        let runtime_root = PathBuf::from(plan.runtime_root.as_ref().unwrap());
+        plan.prepare_runtime_roots()?;
+        let mut driver = RecordingAclDriver::default();
+
+        let cleaned = plan.cleanup_sandbox_setup_with_driver(&mut driver)?;
+
+        assert_eq!(driver.events, vec!["rollback"]);
+        assert_eq!(
+            cleaned,
+            vec!["C:/Workspace/.Git/".to_string(), path_string(&runtime_root)]
+        );
         assert!(!runtime_root.exists());
         Ok(())
     }
