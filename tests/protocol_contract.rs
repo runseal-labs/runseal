@@ -1097,6 +1097,7 @@ fn sandboxed_policy_without_backend_fails_closed() -> Result<()> {
         .as_str()
         .expect("backend failure must return audit_path");
     let audit_events = read_audit_events(tmp.path(), audit_path)?;
+    assert_no_private_windows_setup_terms(&json!(audit_events));
     assert!(
         audit_events
             .iter()
