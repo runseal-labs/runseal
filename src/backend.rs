@@ -7,6 +7,8 @@ use crate::windows::policy::{
 };
 use crate::windows::vendor_adapter::WindowsVendorSandboxProfile;
 mod filesystem;
+#[cfg(windows)]
+mod managed_proxy;
 mod process;
 mod runtime;
 
@@ -15,6 +17,8 @@ use filesystem::{
     apply_private_filesystem_acl_transaction, new_windows_filesystem_acl_driver,
     validate_private_filesystem_acl_entries, validate_private_filesystem_acl_transaction,
 };
+#[cfg(windows)]
+use managed_proxy::ManagedSandboxProxy;
 #[cfg(all(test, windows))]
 use process::WindowsKillOnCloseJob;
 #[cfg(test)]
@@ -1097,6 +1101,17 @@ fn execute_windows_sandbox_plan(
     plan.prepare_runtime_roots()?;
     prepare_vendor_sandbox_home(cwd, &vendor_sandbox_home)?;
 
+    let managed_proxy = if plan.network_managed_proxy == "required" {
+        Some(ManagedSandboxProxy::start().map_err(|err| {
+            io::Error::other(BackendUnavailableError {
+                reason: format!("windows managed proxy unavailable: {err}"),
+            })
+        })?)
+    } else {
+        None
+    };
+    let env_map = sandbox_environment(plan, env, managed_proxy.as_ref());
+
     let result =
         codex_windows_sandbox::run_windows_sandbox_capture_for_permission_profile_elevated(
             codex_windows_sandbox::ElevatedSandboxProfileCaptureRequest {
@@ -1105,7 +1120,7 @@ fn execute_windows_sandbox_plan(
                 codex_home: &vendor_sandbox_home,
                 command: command.to_vec(),
                 cwd,
-                env_map: sandbox_environment(plan, env),
+                env_map,
                 timeout_ms: timeout.map(duration_millis_u64),
                 cancellation: None,
                 use_private_desktop: false,
@@ -1196,7 +1211,11 @@ fn prepare_vendor_sandbox_home(cwd: &Path, home: &Path) -> io::Result<()> {
 }
 
 #[cfg(windows)]
-fn sandbox_environment(plan: &PlatformSandboxPlan, env: &ExecutionEnv) -> HashMap<String, String> {
+fn sandbox_environment(
+    plan: &PlatformSandboxPlan,
+    env: &ExecutionEnv,
+    managed_proxy: Option<&ManagedSandboxProxy>,
+) -> HashMap<String, String> {
     let mut result = HashMap::new();
     for (key, value) in minimal_environment(plan) {
         result.insert(
@@ -1205,6 +1224,11 @@ fn sandbox_environment(plan: &PlatformSandboxPlan, env: &ExecutionEnv) -> HashMa
         );
     }
     result.extend(env.entries.iter().cloned());
+    if let Some(proxy) = managed_proxy {
+        for (key, value) in proxy.environment() {
+            result.insert(key, value);
+        }
+    }
     result
 }
 
