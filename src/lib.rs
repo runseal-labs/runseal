@@ -55,6 +55,23 @@ Windows sandbox setup:
   Run from an elevated PowerShell to install or repair the sandbox broker.
   Sandboxed exec fails closed when setup is missing or stale.
 ";
+const EXEC_HELP_TEXT: &str = "\
+Usage: runseal exec [--json|--events] [--policy <policy>] [--network <mode>] [--cwd <path>] [--timeout-ms <ms>] -- <command> [args...]
+
+Options:
+  --policy       danger-full-access, read-only, workspace-contained, or workspace-write
+  --network      disabled or proxy
+  --cwd          existing workspace directory
+  --timeout-ms   execution timeout in milliseconds
+";
+const EXPLAIN_POLICY_HELP_TEXT: &str = "\
+Usage: runseal explain-policy [--policy <policy>] [--network <mode>] [--cwd <path>]
+
+Options:
+  --policy   danger-full-access, read-only, workspace-contained, or workspace-write
+  --network  disabled or proxy
+  --cwd      existing workspace directory
+";
 
 pub fn run_cli() {
     if let Err(err) = run() {
@@ -171,6 +188,10 @@ fn handle_rpc_request(request: &Value) -> Vec<Value> {
 }
 
 fn run_exec(args: &[String]) -> Result<(), String> {
+    if matches!(args, [flag] if flag == "--help" || flag == "-h") {
+        print!("{EXEC_HELP_TEXT}");
+        return Ok(());
+    }
     let request = parse_exec_args(args)?;
     let policy = normalize_policy(
         &Value::String(request.policy.clone()),
@@ -249,6 +270,10 @@ fn run_windows_sandbox_setup(_cwd: &Path) -> Result<(), String> {
 }
 
 fn run_explain_policy(args: &[String]) -> Result<(), String> {
+    if matches!(args, [flag] if flag == "--help" || flag == "-h") {
+        print!("{EXPLAIN_POLICY_HELP_TEXT}");
+        return Ok(());
+    }
     let request = parse_policy_args(args)?;
     let policy = normalize_policy(
         &Value::String(request.policy.clone()),

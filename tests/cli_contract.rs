@@ -244,6 +244,36 @@ fn setup_help_describes_explicit_windows_setup() -> Result<()> {
 }
 
 #[test]
+fn command_help_describes_policy_entrypoints() -> Result<()> {
+    for (args, usage) in [
+        (
+            &["exec", "--help"][..],
+            "Usage: runseal exec [--json|--events]",
+        ),
+        (
+            &["explain-policy", "--help"][..],
+            "Usage: runseal explain-policy [--policy <policy>]",
+        ),
+    ] {
+        let output = run_cli(args)?;
+
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stderr.is_empty());
+        let stdout = String::from_utf8(output.stdout)?;
+        assert!(stdout.contains(usage));
+        assert!(stdout.contains("--policy"));
+        assert!(stdout.contains("--network"));
+        assert!(stdout.contains("--cwd"));
+        assert_no_private_windows_setup_terms(&stdout);
+    }
+    Ok(())
+}
+
+#[test]
 fn setup_rejects_invalid_cwd_before_windows_setup() -> Result<()> {
     let tmp = TempDir::new()?;
     let missing = tmp.path().join("missing").to_string_lossy().to_string();
