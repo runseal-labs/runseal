@@ -5,13 +5,13 @@ mod error;
 mod events;
 mod policy;
 mod rpc;
+mod stdin;
 mod windows;
 
 use audit::{create_audit_writer, write_audit_event_with_metadata};
 use backend::{
     ExecutionEnv, ExecutionStdin, SandboxBackend, active_backend, matches_environment_scrub_pattern,
 };
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use cli::{parse_exec_args, parse_policy_args};
 use error::RunSealError;
 use events::{
@@ -25,12 +25,10 @@ use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+use stdin::{stdin_audit_json, stdin_from_params};
 
 const PROTOCOL_VERSION: &str = "runseal.protocol/v1";
 const MAX_METADATA_BYTES: usize = 4096;
-const STDIN_BASE64_PREFIX: &str = "base64:";
-const MAX_STDIN_BYTES: usize = 64 * 1024;
-const MAX_STDIN_DATA_BYTES: usize = STDIN_BASE64_PREFIX.len() + 4 * MAX_STDIN_BYTES.div_ceil(3);
 const MAX_ENV_ENTRIES: usize = 64;
 const MAX_ENV_KEY_BYTES: usize = 128;
 const MAX_ENV_VALUE_BYTES: usize = 4096;
@@ -352,92 +350,6 @@ fn timeout_from_params(params: &Map<String, Value>) -> Result<Option<Duration>, 
     })?;
 
     Ok(Some(Duration::from_millis(timeout_ms)))
-}
-
-fn stdin_from_params(params: &Map<String, Value>) -> Result<ExecutionStdin, RunSealError> {
-    let Some(value) = params.get("stdin") else {
-        return Ok(ExecutionStdin::Empty);
-    };
-    let stdin = value
-        .as_object()
-        .ok_or_else(|| RunSealError::new("INVALID_REQUEST", "params.stdin must be an object"))?;
-    let mode = stdin
-        .get("mode")
-        .and_then(Value::as_str)
-        .ok_or_else(|| RunSealError::new("INVALID_REQUEST", "params.stdin.mode is required"))?;
-
-    match mode {
-        "empty" => {
-            validate_param_keys(stdin, "execute stdin", &["mode"])?;
-            Ok(ExecutionStdin::Empty)
-        }
-        "bytes" => stdin_bytes_from_params(stdin),
-        "inherit" | "stream" => Err(RunSealError::new(
-            "INVALID_REQUEST",
-            format!("params.stdin.mode={mode} is not supported by execute"),
-        )),
-        _ => Err(RunSealError::new(
-            "INVALID_REQUEST",
-            format!("params.stdin.mode must be empty, got {mode}"),
-        )),
-    }
-}
-
-fn stdin_bytes_from_params(stdin: &Map<String, Value>) -> Result<ExecutionStdin, RunSealError> {
-    validate_param_keys(stdin, "execute stdin", &["mode", "data", "encoding"])?;
-    let encoding = stdin
-        .get("encoding")
-        .and_then(Value::as_str)
-        .ok_or_else(|| RunSealError::new("INVALID_REQUEST", "params.stdin.encoding is required"))?;
-    if encoding != "base64" {
-        return Err(RunSealError::new(
-            "INVALID_REQUEST",
-            "params.stdin.encoding must be base64",
-        ));
-    }
-    let data = stdin
-        .get("data")
-        .and_then(Value::as_str)
-        .ok_or_else(|| RunSealError::new("INVALID_REQUEST", "params.stdin.data is required"))?;
-    if data.len() > MAX_STDIN_DATA_BYTES {
-        return Err(RunSealError::new(
-            "INVALID_REQUEST",
-            format!("params.stdin.data must decode to at most {MAX_STDIN_BYTES} bytes"),
-        ));
-    }
-    let encoded = data.strip_prefix(STDIN_BASE64_PREFIX).ok_or_else(|| {
-        RunSealError::new(
-            "INVALID_REQUEST",
-            "params.stdin.data must use base64: prefix",
-        )
-    })?;
-    let bytes = STANDARD.decode(encoded).map_err(|err| {
-        RunSealError::new(
-            "INVALID_REQUEST",
-            format!("params.stdin.data must be valid base64: {err}"),
-        )
-    })?;
-    if bytes.len() > MAX_STDIN_BYTES {
-        return Err(RunSealError::new(
-            "INVALID_REQUEST",
-            format!("params.stdin.data must decode to at most {MAX_STDIN_BYTES} bytes"),
-        ));
-    }
-
-    Ok(ExecutionStdin::Bytes(bytes))
-}
-
-fn stdin_audit_json(stdin: &ExecutionStdin) -> Value {
-    match stdin {
-        ExecutionStdin::Empty => json!({
-            "mode": "empty",
-            "byte_count": 0,
-        }),
-        ExecutionStdin::Bytes(bytes) => json!({
-            "mode": "bytes",
-            "byte_count": bytes.len(),
-        }),
-    }
 }
 
 fn metadata_from_params(params: &Map<String, Value>) -> Result<Option<Value>, RunSealError> {
