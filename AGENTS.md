@@ -10,7 +10,8 @@ The public contract lives in `runseal-labs/rfcs`. This repo implements that cont
 - When implementation needs to change public protocol, policy shape, event shape, error code, platform status, or conformance semantics, update `runseal-labs/rfcs` first or in the same change.
 - Implementation details that do not affect public behavior should stay in this repository.
 - Keep README and tests aligned with the current accepted RFCs.
-- Treat the current MVP implementation as greenfield. Do not preserve early scaffold behavior, field names, or test expectations for backward compatibility unless an accepted RFC explicitly requires that compatibility.
+- Treat the current MVP implementation as greenfield. There is no legacy compatibility obligation for early scaffold behavior, field names, aliases, fixtures, or test expectations.
+- Prefer replacing incorrect provisional behavior over adding adapters, compatibility shims, silent fallbacks, or deprecated aliases. Add compatibility behavior only when an accepted RFC explicitly requires it.
 
 ## Public Terminology And Redaction
 
@@ -66,6 +67,7 @@ Work in this order unless an accepted RFC changes it:
 
 - Preserve the black-box contract tests unless the RFC changes first.
 - Because the implementation is greenfield, update tests and protocol fixtures to match the correct MVP contract instead of maintaining compatibility with earlier temporary behavior.
+- Do not keep tests for obsolete local behavior unless they document a current RFC requirement.
 - Add conformance tests before broadening backend capability claims.
 - Tests should distinguish `supported`, `unsupported`, `experimental`, `denied`, `failed`, and `skipped`.
 - `danger-full-access` tests must assert that it is explicit local execution, not sandboxed execution.
