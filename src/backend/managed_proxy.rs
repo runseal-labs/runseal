@@ -199,7 +199,10 @@ fn strip_http_scheme(target: &str) -> Option<&str> {
 fn split_http_url(rest: &str) -> io::Result<(String, String)> {
     let (authority, path) = match rest.split_once('/') {
         Some((authority, path)) => (authority, format!("/{path}")),
-        None => (rest, "/".to_string()),
+        None => match rest.split_once('?') {
+            Some((authority, query)) => (authority, format!("/?{query}")),
+            None => (rest, "/".to_string()),
+        },
     };
     Ok((authority_with_default_port(authority, 80)?, path))
 }
@@ -310,6 +313,17 @@ mod tests {
                 .expect("rewrite uppercase scheme");
         assert_eq!(upstream, "example.test:80");
         assert!(rewritten.starts_with("GET /upper HTTP/1.1\r\n"));
+
+        let request = "GET http://example.test?only=query HTTP/1.1\r\nHost: ignored.test\r\n\r\n";
+        let (upstream, rewritten) = rewrite_plain_http_request(
+            "GET",
+            "http://example.test?only=query",
+            "HTTP/1.1",
+            request,
+        )
+        .expect("rewrite query-only absolute URI");
+        assert_eq!(upstream, "example.test:80");
+        assert!(rewritten.starts_with("GET /?only=query HTTP/1.1\r\n"));
     }
 
     #[test]
