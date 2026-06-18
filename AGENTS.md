@@ -76,12 +76,14 @@ Work in this order unless an accepted RFC changes it:
 - Keep public serialization structs stable and versioned.
 - Do not log raw secrets, full environments, Authorization headers, cookies, or credential material.
 - Avoid shell-string execution by default; prefer argv arrays. Shell mode must be explicit.
+- Keep the Rust lint baseline aligned with the local reference implementation style: workspace Clippy denies for common manual/redundant patterns, `expect`/`unwrap` denied outside tests, and Rust 2024 formatting.
 
 ## Validation
 
 Before committing:
 
 - Run `cargo fmt --check` when Rust files exist.
+- Run `cargo clippy --tests -- -D warnings`.
 - Run `cargo test` for contract and unit tests.
 - Run `git diff --check`.
 - Run `rg -n -i "tailos|tyclaw|myprojects|ferstar|private issue|private MR" .` and ensure matches are only generic redaction guidance or public source URLs.

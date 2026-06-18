@@ -3,12 +3,12 @@ mod backend;
 mod policy;
 
 use audit::AuditWriter;
-use backend::{active_backend, BackendError, SandboxBackend};
-use policy::{normalize_policy, NetworkMode, PolicyError, SandboxPolicy, POLICY_VERSION};
-use serde_json::{json, Value};
+use backend::{BackendError, SandboxBackend, active_backend};
+use policy::{NetworkMode, POLICY_VERSION, PolicyError, SandboxPolicy, normalize_policy};
+use serde_json::{Value, json};
 use std::env;
 use std::io::{self, Read};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -342,7 +342,7 @@ fn network_override_from_params(params: &Value) -> Result<Option<NetworkMode>, R
 
 fn execute_command(
     command: &[String],
-    cwd: &PathBuf,
+    cwd: &Path,
     policy: &SandboxPolicy,
 ) -> Result<(Vec<Value>, Value), RunSealError> {
     if command.is_empty() {
@@ -362,7 +362,7 @@ fn execute_command(
             "execution_id": execution_id,
             "policy_id": policy_id,
             "policy_hash": policy_hash,
-            "audit_path": audit_path.clone(),
+            "audit_path": audit_path,
             "decision": "denied",
             "reason": reason,
         });
@@ -382,7 +382,7 @@ fn execute_command(
         Ok(plan) => plan,
         Err(err) => {
             let details = err.details_json();
-            if let Some(plan) = &err.plan {
+            if let Some(plan) = err.plan.as_deref() {
                 match plan.prepare_runtime_roots() {
                     Ok(prepared_roots) => {
                         let event = json!({
@@ -390,7 +390,7 @@ fn execute_command(
                             "execution_id": execution_id,
                             "policy_id": policy_id,
                             "policy_hash": policy_hash,
-                            "audit_path": audit_path.clone(),
+                            "audit_path": audit_path,
                             "decision": "prepared",
                             "prepared_roots": prepared_roots,
                             "platform_plan": plan.json(),
@@ -403,7 +403,7 @@ fn execute_command(
                             "execution_id": execution_id,
                             "policy_id": policy_id,
                             "policy_hash": policy_hash,
-                            "audit_path": audit_path.clone(),
+                            "audit_path": audit_path,
                             "decision": "failed",
                             "reason": setup_err.to_string(),
                             "platform_plan": plan.json(),
@@ -412,7 +412,7 @@ fn execute_command(
 
                         let mut details = details;
                         if let Some(details) = details.as_object_mut() {
-                            details.insert("audit_path".to_string(), json!(audit_path.clone()));
+                            details.insert("audit_path".to_string(), json!(audit_path));
                             details.insert("setup_error".to_string(), json!(setup_err.to_string()));
                         }
 
@@ -430,18 +430,64 @@ fn execute_command(
                 "execution_id": execution_id,
                 "policy_id": policy_id,
                 "policy_hash": policy_hash,
-                "audit_path": audit_path.clone(),
+                "audit_path": audit_path,
                 "decision": "unsupported",
-                "reason": err.reason.clone(),
+                "reason": err.reason,
                 "backend": details.get("backend").cloned().unwrap_or_else(|| json!({})),
                 "support": details.get("support").cloned().unwrap_or_else(|| json!("unsupported")),
                 "platform_plan": details.get("platform_plan").cloned().unwrap_or(Value::Null),
             });
             write_audit_event(&mut audit, &event)?;
 
+            if let Some(plan) = err.plan.as_deref() {
+                match plan.cleanup_runtime_roots() {
+                    Ok(cleaned_roots) => {
+                        let event = json!({
+                            "type": "sandbox.cleaned",
+                            "execution_id": execution_id,
+                            "policy_id": policy_id,
+                            "policy_hash": policy_hash,
+                            "audit_path": audit_path,
+                            "decision": "cleaned",
+                            "cleaned_roots": cleaned_roots,
+                            "platform_plan": plan.json(),
+                        });
+                        write_audit_event(&mut audit, &event)?;
+                    }
+                    Err(cleanup_err) => {
+                        let event = json!({
+                            "type": "sandbox.cleanup_failed",
+                            "execution_id": execution_id,
+                            "policy_id": policy_id,
+                            "policy_hash": policy_hash,
+                            "audit_path": audit_path,
+                            "decision": "failed",
+                            "reason": cleanup_err.to_string(),
+                            "platform_plan": plan.json(),
+                        });
+                        write_audit_event(&mut audit, &event)?;
+
+                        let mut details = details;
+                        if let Some(details) = details.as_object_mut() {
+                            details.insert("audit_path".to_string(), json!(audit_path));
+                            details.insert(
+                                "cleanup_error".to_string(),
+                                json!(cleanup_err.to_string()),
+                            );
+                        }
+
+                        return Err(RunSealError::with_details(
+                            "INTERNAL_ERROR",
+                            "failed to clean sandbox runtime roots",
+                            details,
+                        ));
+                    }
+                }
+            }
+
             let mut details = details;
             if let Some(details) = details.as_object_mut() {
-                details.insert("audit_path".to_string(), json!(audit_path.clone()));
+                details.insert("audit_path".to_string(), json!(audit_path));
             }
 
             return Err(RunSealError::with_details(err.code, err.reason, details));
@@ -539,7 +585,7 @@ fn execute_command(
     Ok((events, result))
 }
 
-fn create_audit_writer(cwd: &PathBuf, execution_id: &str) -> Result<AuditWriter, RunSealError> {
+fn create_audit_writer(cwd: &Path, execution_id: &str) -> Result<AuditWriter, RunSealError> {
     AuditWriter::create(cwd, execution_id).map_err(|err| {
         RunSealError::new(
             "INTERNAL_ERROR",
@@ -557,7 +603,7 @@ fn write_audit_event(audit: &mut AuditWriter, event: &Value) -> Result<(), RunSe
     })
 }
 
-fn spawn_command(command: &[String], cwd: &PathBuf) -> Result<Output, RunSealError> {
+fn spawn_command(command: &[String], cwd: &Path) -> Result<Output, RunSealError> {
     Command::new(&command[0])
         .args(&command[1..])
         .current_dir(cwd)

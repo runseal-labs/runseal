@@ -28,8 +28,7 @@ impl AuditWriter {
     }
 
     pub fn write_event(&mut self, event: &Value) -> io::Result<()> {
-        serde_json::to_writer(&mut self.file, event)
-            .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+        serde_json::to_writer(&mut self.file, event).map_err(io::Error::other)?;
         self.file.write_all(b"\n")?;
         self.file.flush()
     }

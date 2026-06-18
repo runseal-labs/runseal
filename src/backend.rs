@@ -1,5 +1,5 @@
 use crate::policy::{SandboxLevel, SandboxPolicy};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -185,6 +185,18 @@ impl PlatformSandboxPlan {
         }
         Ok(prepared)
     }
+
+    pub fn cleanup_runtime_roots(&self) -> io::Result<Vec<String>> {
+        let Some(runtime_root) = &self.runtime_root else {
+            return Ok(Vec::new());
+        };
+        if Path::new(runtime_root).exists() {
+            fs::remove_dir_all(runtime_root)?;
+            Ok(vec![runtime_root.clone()])
+        } else {
+            Ok(Vec::new())
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -195,7 +207,7 @@ pub struct BackendError {
     pub backend_status: &'static str,
     pub platform: &'static str,
     pub support: &'static str,
-    pub plan: Option<PlatformSandboxPlan>,
+    pub plan: Option<Box<PlatformSandboxPlan>>,
 }
 
 impl BackendError {
@@ -219,7 +231,7 @@ impl BackendError {
             backend_status: backend.status(),
             platform: backend.platform(),
             support: CapabilityStatus::Unsupported.as_str(),
-            plan,
+            plan: plan.map(Box::new),
         }
     }
 
@@ -233,7 +245,7 @@ impl BackendError {
             "support": self.support,
         });
 
-        if let (Some(details), Some(plan)) = (details.as_object_mut(), &self.plan) {
+        if let (Some(details), Some(plan)) = (details.as_object_mut(), self.plan.as_deref()) {
             details.insert("platform_plan".to_string(), plan.json());
         }
 
@@ -317,7 +329,7 @@ impl SandboxBackend for LocalBackend {
 
 impl WindowsReferenceBackend {
     fn fail_closed_plan(
-        &self,
+        self,
         execution_id: &str,
         cwd: &Path,
         policy: &SandboxPolicy,

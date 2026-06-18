@@ -12,7 +12,7 @@ Phase 0 implementation with the first Phase 1/2 foundations. The repository cont
 
 Current execution support is intentionally narrow: only explicit `danger-full-access` runs as local, non-sandboxed execution. Sandboxed policies such as `read-only`, `workspace-contained`, and `workspace-write` must fail closed until a platform backend can enforce them.
 
-On Windows, fail-closed sandbox requests include a `PlatformSandboxPlan` preview for runtime root, synthetic home, profile root, temp root, and policy path planning. The scaffold creates those runtime roots before returning unsupported, but this is not an enforcement claim.
+On Windows, fail-closed sandbox requests include a `PlatformSandboxPlan` preview for runtime root, synthetic home, profile root, temp root, and policy path planning. The scaffold creates and cleans those runtime roots before returning unsupported, but this is not an enforcement claim.
 
 The design lives in the RFC repository:
 
@@ -60,6 +60,8 @@ runseal exec --policy danger-full-access -- python skill.py
 The conformance tests are Rust integration tests. `cargo test` builds and runs the local `runseal` binary.
 
 ```bash
+cargo fmt --check
+cargo clippy --tests -- -D warnings
 cargo test
 ```
 

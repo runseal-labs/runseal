@@ -1,0 +1,55 @@
+name: ci
+
+on:
+  pull_request: {}
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+jobs:
+  rust:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          components: clippy,rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Run Clippy
+        run: cargo clippy --tests -- -D warnings
+
+      - name: Run tests
+        run: cargo test
+
+      - name: Check whitespace
+        run: git diff --check
+
+      - name: Run redaction scan
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if ! command -v rg >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y ripgrep
+          fi
+
+          matches="$(rg -n -i "tailos|tyclaw|myprojects|ferstar|private issue|private MR" . || true)"
+          disallowed="$(printf '%s\n' "$matches" | rg -v '^(\./)?(AGENTS.md|\.github/workflows/ci\.yml):' || true)"
+
+          if [[ -n "$disallowed" ]]; then
+            printf '%s\n' "$disallowed"
+            exit 1
+          fi

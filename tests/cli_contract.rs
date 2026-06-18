@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde_json::Value;
 use std::env;
 use std::fs;
@@ -89,11 +89,13 @@ fn version_reports_protocol_and_runtime_versions() -> Result<()> {
     let payload = stdout_json(&output)?;
     assert!(payload["runseal_version"].as_str().is_some());
     assert_eq!(payload["protocol_version"], "runseal.protocol/v1");
-    assert!(payload["policy_versions"]
-        .as_array()
-        .expect("policy_versions must be an array")
-        .iter()
-        .any(|version| version == "runseal.policy/v1"));
+    assert!(
+        payload["policy_versions"]
+            .as_array()
+            .expect("policy_versions must be an array")
+            .iter()
+            .any(|version| version == "runseal.policy/v1")
+    );
     Ok(())
 }
 
@@ -148,10 +150,12 @@ fn explain_policy_cli_materializes_standard_profile() -> Result<()> {
         payload["canonical_policy"]["filesystem"]["protect_vcs"],
         true
     );
-    assert!(payload["policy_hash"]
-        .as_str()
-        .unwrap_or_default()
-        .starts_with("sha256:"));
+    assert!(
+        payload["policy_hash"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("sha256:")
+    );
     Ok(())
 }
 
@@ -186,13 +190,15 @@ fn exec_events_stream_uses_execution_vocabulary() -> Result<()> {
     assert!(event_types.contains(&"execution.started"));
     assert!(event_types.contains(&"execution.stdout"));
     assert!(event_types.contains(&"execution.finished"));
-    assert!(events
-        .iter()
-        .filter(|event| event["type"]
-            .as_str()
-            .unwrap_or_default()
-            .starts_with("execution."))
-        .all(|event| event.get("execution_id").is_some()));
+    assert!(
+        events
+            .iter()
+            .filter(|event| event["type"]
+                .as_str()
+                .unwrap_or_default()
+                .starts_with("execution."))
+            .all(|event| event.get("execution_id").is_some())
+    );
     assert!(events.iter().all(|event| event.get("process_id").is_none()));
     Ok(())
 }
@@ -222,10 +228,12 @@ fn exec_json_returns_execution_result() -> Result<()> {
     let payload = stdout_json(&output)?;
     assert_eq!(payload["status"], "finished");
     assert_eq!(payload["exit_code"], 0);
-    assert!(payload["execution_id"]
-        .as_str()
-        .unwrap_or_default()
-        .starts_with("exec_"));
+    assert!(
+        payload["execution_id"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("exec_")
+    );
     assert_eq!(payload["policy_id"], "danger-full-access");
     assert_eq!(payload["sandbox"]["enforced"], false);
     assert_eq!(payload["platform_plan"]["enforcement"], "local-execution");
@@ -234,10 +242,12 @@ fn exec_json_returns_execution_result() -> Result<()> {
         expected_backend_name()
     );
     assert_eq!(payload["platform_plan"]["filesystem"]["write"][0], "*");
-    assert!(payload["policy_hash"]
-        .as_str()
-        .unwrap_or_default()
-        .starts_with("sha256:"));
+    assert!(
+        payload["policy_hash"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("sha256:")
+    );
     let audit_path = payload["audit_path"]
         .as_str()
         .expect("ExecutionResult must include audit_path");

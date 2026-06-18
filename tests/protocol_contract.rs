@@ -1,5 +1,5 @@
-use anyhow::{bail, Context, Result};
-use serde_json::{json, Value};
+use anyhow::{Context, Result, bail};
+use serde_json::{Value, json};
 use std::env;
 use std::fs;
 use std::io::Write;
@@ -117,11 +117,13 @@ fn get_version_rpc_contract() -> Result<()> {
         response["result"]["protocol_version"],
         "runseal.protocol/v1"
     );
-    assert!(response["result"]["policy_versions"]
-        .as_array()
-        .expect("policy_versions must be an array")
-        .iter()
-        .any(|version| version == "runseal.policy/v1"));
+    assert!(
+        response["result"]["policy_versions"]
+            .as_array()
+            .expect("policy_versions must be an array")
+            .iter()
+            .any(|version| version == "runseal.policy/v1")
+    );
     Ok(())
 }
 
@@ -164,24 +166,30 @@ fn explain_policy_returns_effective_hash_and_network_mode() -> Result<()> {
     let payload = &messages[0]["result"];
     assert_eq!(payload["policy_id"], "workspace-write");
     assert_eq!(payload["sandbox_level"], "workspace-write");
-    assert!(payload["policy_hash"]
-        .as_str()
-        .unwrap_or_default()
-        .starts_with("sha256:"));
+    assert!(
+        payload["policy_hash"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("sha256:")
+    );
     assert_eq!(payload["network"]["mode"], "proxy");
     assert_eq!(payload["environment"]["inherit"], "minimal");
     assert_eq!(payload["backend_requirement"], "sandbox-backend");
     assert_eq!(payload["support"], "unsupported");
-    assert!(payload["filesystem"]["write"]
-        .as_array()
-        .expect("filesystem.write must be an array")
-        .iter()
-        .any(|path| path == tmp.path().to_string_lossy().as_ref()));
-    assert!(payload["canonical_policy"]["filesystem"]["deny"]
-        .as_array()
-        .expect("canonical filesystem.deny must be an array")
-        .iter()
-        .any(|path| path.as_str().unwrap_or_default().ends_with(".git")));
+    assert!(
+        payload["filesystem"]["write"]
+            .as_array()
+            .expect("filesystem.write must be an array")
+            .iter()
+            .any(|path| path == tmp.path().to_string_lossy().as_ref())
+    );
+    assert!(
+        payload["canonical_policy"]["filesystem"]["deny"]
+            .as_array()
+            .expect("canonical filesystem.deny must be an array")
+            .iter()
+            .any(|path| path.as_str().unwrap_or_default().ends_with(".git"))
+    );
     Ok(())
 }
 
@@ -221,7 +229,7 @@ fn explain_policy_hash_tracks_network_override() -> Result<()> {
 fn policy_denial_uses_stable_error_code() -> Result<()> {
     let tmp = TempDir::new()?;
     let forbidden_path = tmp.path().join("outside");
-    let code = format!("open({:?}, 'w').write('x')", forbidden_path);
+    let code = format!("open({forbidden_path:?}, 'w').write('x')");
     let output = run_rpc(&rpc_request(
         "execute",
         json!({
@@ -251,9 +259,11 @@ fn policy_denial_uses_stable_error_code() -> Result<()> {
         .as_str()
         .expect("policy denial must return audit_path");
     let audit_events = read_audit_events(tmp.path(), audit_path)?;
-    assert!(audit_events
-        .iter()
-        .any(|event| event["type"] == "policy.denied" && event["decision"] == "denied"));
+    assert!(
+        audit_events
+            .iter()
+            .any(|event| event["type"] == "policy.denied" && event["decision"] == "denied")
+    );
     Ok(())
 }
 
@@ -292,41 +302,55 @@ fn sandboxed_policy_without_backend_fails_closed() -> Result<()> {
         .as_str()
         .expect("backend failure must return audit_path");
     let audit_events = read_audit_events(tmp.path(), audit_path)?;
-    assert!(audit_events
-        .iter()
-        .any(|event| event["type"] == "sandbox.backend_capability"
-            && event["decision"] == "unsupported"));
+    assert!(
+        audit_events
+            .iter()
+            .any(|event| event["type"] == "sandbox.backend_capability"
+                && event["decision"] == "unsupported")
+    );
     if cfg!(windows) {
         let plan = &response["error"]["data"]["platform_plan"];
         assert_eq!(plan["enforcement"], "fail-closed-preview");
         assert_eq!(plan["sandbox_level"], "read-only");
-        assert!(plan["runtime_root"]
-            .as_str()
-            .unwrap_or_default()
-            .contains(".runseal"));
+        assert!(
+            plan["runtime_root"]
+                .as_str()
+                .unwrap_or_default()
+                .contains(".runseal")
+        );
         assert!(plan["profile_root"].as_str().is_some());
         assert!(plan["synthetic_home"].as_str().is_some());
         assert!(plan["temp_root"].as_str().is_some());
-        assert!(plan["filesystem"]["write"]
-            .as_array()
-            .expect("read-only write roots must be an array")
-            .is_empty());
-        for key in [
-            "runtime_root",
-            "profile_root",
-            "synthetic_home",
-            "temp_root",
-        ] {
-            let root = PathBuf::from(plan[key].as_str().expect("planned root must be a string"));
-            assert!(root.is_dir(), "planned root must exist: {}", root.display());
-        }
+        assert!(
+            plan["filesystem"]["write"]
+                .as_array()
+                .expect("read-only write roots must be an array")
+                .is_empty()
+        );
+        let runtime_root = PathBuf::from(
+            plan["runtime_root"]
+                .as_str()
+                .expect("runtime root must be a string"),
+        );
+        assert!(
+            !runtime_root.exists(),
+            "runtime root must be cleaned after fail-closed setup: {}",
+            runtime_root.display()
+        );
         assert!(audit_events
             .iter()
             .any(|event| event["type"] == "sandbox.prepared" && event["decision"] == "prepared"));
+        assert!(
+            audit_events
+                .iter()
+                .any(|event| event["type"] == "sandbox.cleaned" && event["decision"] == "cleaned")
+        );
     }
-    assert!(messages
-        .iter()
-        .all(|message| message.get("method") != Some(&json!("event"))));
+    assert!(
+        messages
+            .iter()
+            .all(|message| message.get("method") != Some(&json!("event")))
+    );
     Ok(())
 }
 
@@ -374,10 +398,12 @@ fn execute_rpc_streams_events_and_final_result() -> Result<()> {
         response["result"]["platform_plan"]["backend"]["name"],
         expected_backend_name()
     );
-    assert!(response["result"]["audit_path"]
-        .as_str()
-        .unwrap_or_default()
-        .starts_with(".runseal/audit/exec_"));
+    assert!(
+        response["result"]["audit_path"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with(".runseal/audit/exec_")
+    );
     assert_eq!(response["result"]["sandbox"]["enforced"], false);
     assert_eq!(
         response["result"]["backend"]["name"],
