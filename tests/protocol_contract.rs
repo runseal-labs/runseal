@@ -98,6 +98,7 @@ fn assert_rfc3339_timestamp(value: &Value) -> Result<()> {
 }
 
 fn assert_event_envelope(event: &Value) -> Result<()> {
+    assert!(event["type"].as_str().is_some());
     assert_rfc3339_timestamp(&event["time"])?;
     assert!(
         event["execution_id"]
