@@ -155,8 +155,14 @@ fn handle_rpc_request(request: &Value) -> Vec<Value> {
     let params = request.get("params").cloned().unwrap_or_else(|| json!({}));
 
     match method {
-        "getVersion" => vec![rpc::result(id, version_payload())],
-        "getCapabilities" => vec![rpc::result(id, active_backend().capabilities_json())],
+        "getVersion" => match validate_empty_params(&params, "getVersion") {
+            Ok(()) => vec![rpc::result(id, version_payload())],
+            Err(err) => vec![rpc::error(id, err)],
+        },
+        "getCapabilities" => match validate_empty_params(&params, "getCapabilities") {
+            Ok(()) => vec![rpc::result(id, active_backend().capabilities_json())],
+            Err(err) => vec![rpc::error(id, err)],
+        },
         "explainPolicy" => match explain_policy_from_params(&params) {
             Ok(result) => vec![rpc::result(id, result)],
             Err(err) => vec![rpc::error(id, err)],
@@ -446,6 +452,11 @@ fn dispose_session_from_params(params: &Value) -> Result<Value, RunSealError> {
         "session_id": session_id,
         "status": "disposed",
     }))
+}
+
+fn validate_empty_params(params: &Value, method: &'static str) -> Result<(), RunSealError> {
+    let params = params_object(params, method)?;
+    validate_param_keys(params, method, &[])
 }
 
 fn params_object<'a>(

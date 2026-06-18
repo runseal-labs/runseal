@@ -351,6 +351,50 @@ fn get_capabilities_rpc_contract() -> Result<()> {
 }
 
 #[test]
+fn no_param_methods_reject_unsupported_params() -> Result<()> {
+    for method in ["getVersion", "getCapabilities"] {
+        let output = run_rpc(&rpc_request(method, json!({"extra": true})))?;
+
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let messages = stdout_json_lines(&output)?;
+        let response = &messages[0];
+
+        assert_eq!(response["error"]["data"]["code"], "INVALID_REQUEST");
+        assert_eq!(
+            response["error"]["data"]["reason"],
+            format!("params.extra is not supported by {method}")
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn no_param_methods_require_object_params() -> Result<()> {
+    for method in ["getVersion", "getCapabilities"] {
+        let output = run_rpc(&rpc_request(method, json!(null)))?;
+
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let messages = stdout_json_lines(&output)?;
+        let response = &messages[0];
+
+        assert_eq!(response["error"]["data"]["code"], "INVALID_REQUEST");
+        assert_eq!(
+            response["error"]["data"]["reason"],
+            format!("{method} params must be an object")
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn execution_lookup_methods_return_stable_not_found() -> Result<()> {
     let cases = [
         ("getExecution", json!({"execution_id": "exec_missing"})),
