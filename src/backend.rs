@@ -194,6 +194,8 @@ pub struct PlatformSandboxPlan {
     private_process_sandbox_user_model: &'static str,
     private_process_token: &'static str,
     private_process_job: &'static str,
+    private_setup_account_name: &'static str,
+    private_setup_group_name: &'static str,
     private_setup_identity_artifacts: &'static str,
     pub network_mode: &'static str,
     pub network_direct_egress: &'static str,
@@ -244,6 +246,8 @@ impl PlatformSandboxPlan {
             private_process_sandbox_user_model: "current-user",
             private_process_token: "none",
             private_process_job: "none",
+            private_setup_account_name: "current-user",
+            private_setup_group_name: "current-user",
             private_setup_identity_artifacts: "current-user",
             network_mode: policy.network.mode.as_str(),
             network_direct_egress: "unmanaged",
@@ -346,6 +350,8 @@ impl PlatformSandboxPlan {
             && self.private_process_sandbox_user_model == "single-sandbox-user"
             && self.private_process_token == "restricted-token"
             && self.private_process_job == "kill-on-close-job"
+            && self.private_setup_account_name == "RunSealSandbox"
+            && self.private_setup_group_name == "RunSealSandboxUsers"
             && self.private_setup_identity_artifacts == "single-sandbox-user-artifacts"
         {
             return Ok(());
@@ -799,6 +805,11 @@ impl WindowsReferenceBackend {
         let private_filesystem_deny = windows_policy.filesystem.private_protected_roots.clone();
         let private_filesystem_rules = windows_policy.filesystem.enforcement_rules();
         let private_process_sandbox_user_model = windows_policy.process.sandbox_user_model.as_str();
+        let private_setup_account_name = windows_policy
+            .process
+            .sandbox_user_model
+            .local_account_name();
+        let private_setup_group_name = windows_policy.process.sandbox_user_model.local_group_name();
         let private_setup_identity_artifacts = windows_policy
             .process
             .sandbox_user_model
@@ -833,6 +844,8 @@ impl WindowsReferenceBackend {
             private_process_sandbox_user_model,
             private_process_token,
             private_process_job,
+            private_setup_account_name,
+            private_setup_group_name,
             private_setup_identity_artifacts,
             network_mode: windows_policy.network.guard.as_str(),
             network_direct_egress: windows_policy.network.direct_egress.as_str(),
@@ -1455,6 +1468,8 @@ mod tests {
         );
         assert_eq!(plan.private_process_token, "restricted-token");
         assert_eq!(plan.private_process_job, "kill-on-close-job");
+        assert_eq!(plan.private_setup_account_name, "RunSealSandbox");
+        assert_eq!(plan.private_setup_group_name, "RunSealSandboxUsers");
         assert_eq!(
             plan.private_setup_identity_artifacts,
             "single-sandbox-user-artifacts"
@@ -1463,6 +1478,8 @@ mod tests {
         let plan_json = plan.json();
         let public_plan = plan_json.to_string();
         assert!(!public_plan.contains("single-sandbox-user"));
+        assert!(!public_plan.contains("RunSealSandbox"));
+        assert!(!public_plan.contains("RunSealSandboxUsers"));
         assert!(!public_plan.contains("restricted-token"));
         assert!(!public_plan.contains("kill-on-close-job"));
         assert!(!public_plan.contains("single-sandbox-user-artifacts"));
@@ -2246,6 +2263,27 @@ mod tests {
 
         let Err(err) = plan.prepare_sandbox_setup() else {
             panic!("non-single sandbox user setup artifacts must fail sandbox setup");
+        };
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains("setup identity artifacts"));
+        assert!(!runtime_root.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn sandbox_setup_rejects_unexpected_setup_account_before_runtime_tree() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&cwd)?;
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+        let mut plan =
+            WindowsReferenceBackend.fail_closed_plan("exec_bad_setup_account", &cwd, &policy);
+        let runtime_root = PathBuf::from(plan.runtime_root.as_ref().unwrap());
+        plan.private_setup_account_name = "OtherSandboxUser";
+
+        let Err(err) = plan.prepare_sandbox_setup() else {
+            panic!("unexpected setup account must fail sandbox setup");
         };
 
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);

@@ -203,6 +203,8 @@ fn assert_no_private_windows_setup_terms(value: &Value) {
     let public_payload = value.to_string();
     for private_term in [
         "single-sandbox-user",
+        "RunSealSandbox",
+        "RunSealSandboxUsers",
         "restricted-token",
         "kill-on-close-job",
         "offline",

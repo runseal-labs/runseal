@@ -126,6 +126,18 @@ impl WindowsVendorSandboxUserModel {
         }
     }
 
+    pub(crate) fn local_account_name(self) -> &'static str {
+        match self {
+            Self::SingleSandboxUser => "RunSealSandbox",
+        }
+    }
+
+    pub(crate) fn local_group_name(self) -> &'static str {
+        match self {
+            Self::SingleSandboxUser => "RunSealSandboxUsers",
+        }
+    }
+
     pub(crate) fn setup_identity_artifacts(self) -> &'static str {
         match self {
             Self::SingleSandboxUser => "single-sandbox-user-artifacts",
