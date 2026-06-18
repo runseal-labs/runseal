@@ -12,6 +12,11 @@ vendored crate into the build when the adapter is ready.
 Keep local RunSeal changes outside `upstream/` unless they are deliberately
 tracked as vendor patches.
 
+Prior non-public integrations may be used as pitfall evidence only after
+redaction. Land those lessons as public acceptance criteria, adapter behavior,
+or conformance tests; do not copy product-specific names, local paths, account
+names, logs, screenshots, or chat-only rationale into this repository.
+
 Integration constraint: the upstream setup helper currently models separate
 offline and online sandbox users. RunSeal's Windows backend is specified around
 one dedicated sandbox user. Adapter code must preserve the public RunSeal policy
