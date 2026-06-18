@@ -3,6 +3,7 @@ mod backend;
 mod cli;
 mod error;
 mod policy;
+mod rpc;
 mod windows;
 
 use audit::AuditWriter;
@@ -103,11 +104,11 @@ fn handle_rpc_request(request: &Value) -> Vec<Value> {
     let params = request.get("params").cloned().unwrap_or_else(|| json!({}));
 
     match method {
-        "getVersion" => vec![rpc_result(id, version_payload())],
-        "getCapabilities" => vec![rpc_result(id, active_backend().capabilities_json())],
+        "getVersion" => vec![rpc::result(id, version_payload())],
+        "getCapabilities" => vec![rpc::result(id, active_backend().capabilities_json())],
         "explainPolicy" => match explain_policy_from_params(&params) {
-            Ok(result) => vec![rpc_result(id, result)],
-            Err(err) => vec![rpc_error(id, err)],
+            Ok(result) => vec![rpc::result(id, result)],
+            Err(err) => vec![rpc::error(id, err)],
         },
         "execute" => match execute_from_params(&params) {
             Ok((events, result)) => {
@@ -115,50 +116,26 @@ fn handle_rpc_request(request: &Value) -> Vec<Value> {
                     .into_iter()
                     .map(|event| json!({"jsonrpc": "2.0", "method": "event", "params": event}))
                     .collect();
-                messages.push(rpc_result(id, result));
+                messages.push(rpc::result(id, result));
                 messages
             }
-            Err(err) => vec![rpc_error(id, err)],
+            Err(err) => vec![rpc::error(id, err)],
         },
         "getExecution" | "cancelExecution" | "subscribeEvents" => {
             match execution_not_found_from_params(&params) {
-                Ok(result) => vec![rpc_result(id, result)],
-                Err(err) => vec![rpc_error(id, err)],
+                Ok(result) => vec![rpc::result(id, result)],
+                Err(err) => vec![rpc::error(id, err)],
             }
         }
         "disposeSession" => match dispose_session_from_params(&params) {
-            Ok(result) => vec![rpc_result(id, result)],
-            Err(err) => vec![rpc_error(id, err)],
+            Ok(result) => vec![rpc::result(id, result)],
+            Err(err) => vec![rpc::error(id, err)],
         },
-        _ => vec![rpc_error(
+        _ => vec![rpc::error(
             id,
             RunSealError::new("INVALID_REQUEST", format!("unknown method: {method}")),
         )],
     }
-}
-
-fn rpc_result(id: Value, result: Value) -> Value {
-    json!({"jsonrpc": "2.0", "id": id, "result": result})
-}
-
-fn rpc_error(id: Value, err: RunSealError) -> Value {
-    let mut data = json!({
-        "code": err.code,
-        "reason": err.reason,
-    });
-    if let (Some(data), Some(details)) = (data.as_object_mut(), err.details) {
-        data.extend(details.as_object().cloned().unwrap_or_default());
-    }
-
-    json!({
-        "jsonrpc": "2.0",
-        "id": id,
-        "error": {
-            "code": -32000,
-            "message": err.message,
-            "data": data
-        }
-    })
 }
 
 fn run_exec(args: &[String]) -> Result<(), String> {
