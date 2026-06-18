@@ -8,7 +8,7 @@ RunSeal is **not** a cloud VM sandbox, a Docker Desktop replacement, or a microV
 
 ## Status
 
-Phase 0 implementation with the first Phase 1/2 foundations. The repository contains a buildable CLI/RPC shell, standard policy profile normalization, canonical policy hashes, local backend capability reporting, and black-box conformance tests.
+Phase 0 implementation with the first Phase 1/2 foundations. The repository contains a buildable CLI/RPC shell, standard policy profile normalization, canonical policy hashes, backend capability reporting, Windows reference backend scaffolding, and black-box conformance tests.
 
 Current execution support is intentionally narrow: only explicit `danger-full-access` runs as local, non-sandboxed execution. Sandboxed policies such as `read-only`, `workspace-contained`, and `workspace-write` must fail closed until a platform backend can enforce them.
 

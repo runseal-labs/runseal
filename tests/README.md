@@ -12,6 +12,7 @@ The tests are black-box by design:
 
 - CLI behavior through `runseal exec`.
 - Capability reporting through `runseal capabilities` and `getCapabilities`.
+- Windows hosts select the Windows reference backend scaffold and still fail closed for unsupported sandbox levels.
 - Policy explanation through `runseal explain-policy`.
 - JSON-RPC behavior through `runseal rpc --stdio`.
 - Protocol vocabulary uses `Execution`, not raw process objects.

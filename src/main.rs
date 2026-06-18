@@ -355,7 +355,8 @@ fn execute_command(
         return Err(RunSealError::new(
             "BACKEND_CAPABILITY_MISSING",
             format!(
-                "no sandbox backend can enforce policy {} in this build",
+                "backend {} cannot enforce policy {} in this build",
+                backend.name(),
                 policy.id
             ),
         ));
@@ -365,6 +366,7 @@ fn execute_command(
     let policy_id = policy.id.clone();
     let policy_hash = policy.hash();
     let backend_name = backend.name();
+    let backend_status = backend.status();
     let backend_platform = backend.platform();
     let started = json!({
         "type": "execution.started",
@@ -380,6 +382,7 @@ fn execute_command(
         },
         "backend": {
             "name": backend_name,
+            "status": backend_status,
             "platform": backend_platform,
         }
     });
@@ -430,6 +433,7 @@ fn execute_command(
         },
         "backend": {
             "name": backend_name,
+            "status": backend_status,
             "platform": backend_platform,
         },
         "stdout_bytes": output.stdout.len(),

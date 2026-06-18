@@ -63,6 +63,22 @@ fn stdout_json_lines(output: &Output) -> Result<Vec<Value>> {
         .collect()
 }
 
+fn expected_backend_name() -> &'static str {
+    if cfg!(windows) {
+        "runseal-windows-reference"
+    } else {
+        "runseal-local"
+    }
+}
+
+fn expected_backend_status() -> &'static str {
+    if cfg!(windows) {
+        "scaffold"
+    } else {
+        "local-baseline"
+    }
+}
+
 #[test]
 fn rpc_missing_binary_is_explicit_red_state() {
     if runseal_bin().exists() {
@@ -109,7 +125,8 @@ fn get_capabilities_rpc_contract() -> Result<()> {
     );
     let messages = stdout_json_lines(&output)?;
     let payload = &messages[0]["result"];
-    assert_eq!(payload["backend"], "runseal-local");
+    assert_eq!(payload["backend"], expected_backend_name());
+    assert_eq!(payload["backend_status"], expected_backend_status());
     assert!(payload["platform"].as_str().is_some());
     assert_eq!(payload["sandbox_levels"]["danger-full-access"], "supported");
     assert_eq!(payload["sandbox_levels"]["workspace-write"], "unsupported");
@@ -291,6 +308,13 @@ fn execute_rpc_streams_events_and_final_result() -> Result<()> {
     assert_eq!(response["result"]["status"], "finished");
     assert_eq!(response["result"]["exit_code"], 0);
     assert_eq!(response["result"]["sandbox"]["enforced"], false);
-    assert_eq!(response["result"]["backend"]["name"], "runseal-local");
+    assert_eq!(
+        response["result"]["backend"]["name"],
+        expected_backend_name()
+    );
+    assert_eq!(
+        response["result"]["backend"]["status"],
+        expected_backend_status()
+    );
     Ok(())
 }

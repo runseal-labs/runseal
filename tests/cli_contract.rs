@@ -49,6 +49,22 @@ fn stdout_json_lines(output: &Output) -> Result<Vec<Value>> {
         .collect()
 }
 
+fn expected_backend_name() -> &'static str {
+    if cfg!(windows) {
+        "runseal-windows-reference"
+    } else {
+        "runseal-local"
+    }
+}
+
+fn expected_backend_status() -> &'static str {
+    if cfg!(windows) {
+        "scaffold"
+    } else {
+        "local-baseline"
+    }
+}
+
 #[test]
 fn missing_binary_is_explicit_red_state() {
     if runseal_bin().exists() {
@@ -81,7 +97,7 @@ fn version_reports_protocol_and_runtime_versions() -> Result<()> {
 }
 
 #[test]
-fn capabilities_cli_reports_local_baseline() -> Result<()> {
+fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
     let output = run_cli(&["capabilities"])?;
 
     assert!(
@@ -90,7 +106,8 @@ fn capabilities_cli_reports_local_baseline() -> Result<()> {
         String::from_utf8_lossy(&output.stderr)
     );
     let payload = stdout_json(&output)?;
-    assert_eq!(payload["backend"], "runseal-local");
+    assert_eq!(payload["backend"], expected_backend_name());
+    assert_eq!(payload["backend_status"], expected_backend_status());
     assert!(payload["platform"].as_str().is_some());
     assert_eq!(payload["features"]["local_execution"], true);
     assert_eq!(payload["features"]["filesystem_policy"], false);
