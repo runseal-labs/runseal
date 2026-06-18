@@ -310,16 +310,26 @@ impl PlatformSandboxPlan {
         })
     }
 
-    pub fn prepare_sandbox_setup(&self) -> io::Result<Vec<String>> {
+    pub fn prepare_sandbox_setup(&self) -> io::Result<PreparedSandboxSetup> {
+        self.prepare_sandbox_setup_with_driver(new_windows_filesystem_acl_driver())
+    }
+
+    fn prepare_sandbox_setup_with_driver(
+        &self,
+        mut filesystem_driver: Box<dyn WindowsFilesystemAclDriver>,
+    ) -> io::Result<PreparedSandboxSetup> {
         let mut prepared_roots = self.prepare_runtime_roots()?;
-        match self.prepare_filesystem_rules() {
+        match self.prepare_filesystem_rules_with_driver(filesystem_driver.as_mut()) {
             Ok(filesystem_roots) => extend_unique(&mut prepared_roots, filesystem_roots),
             Err(setup_err) => {
                 self.cleanup_runtime_roots()?;
                 return Err(setup_err);
             }
         }
-        Ok(prepared_roots)
+        Ok(PreparedSandboxSetup {
+            prepared_roots,
+            filesystem_driver,
+        })
     }
 
     pub fn prepare_runtime_roots(&self) -> io::Result<Vec<String>> {
@@ -347,7 +357,8 @@ impl PlatformSandboxPlan {
         Ok(prepared)
     }
 
-    pub fn prepare_filesystem_rules(&self) -> io::Result<Vec<String>> {
+    #[cfg(test)]
+    fn prepare_filesystem_rules(&self) -> io::Result<Vec<String>> {
         let mut driver = ValidateOnlyWindowsFilesystemAclDriver;
         self.prepare_filesystem_rules_with_driver(&mut driver)
     }
@@ -363,11 +374,6 @@ impl PlatformSandboxPlan {
         apply_private_filesystem_acl_transaction(&transaction, driver)?;
 
         Ok(transaction.rollback_roots().to_vec())
-    }
-
-    pub fn cleanup_sandbox_setup(&self) -> io::Result<Vec<String>> {
-        let mut driver = ValidateOnlyWindowsFilesystemAclDriver;
-        self.cleanup_sandbox_setup_with_driver(&mut driver)
     }
 
     fn cleanup_sandbox_setup_with_driver(
@@ -472,6 +478,21 @@ impl PlatformSandboxPlan {
     }
 }
 
+pub struct PreparedSandboxSetup {
+    prepared_roots: Vec<String>,
+    filesystem_driver: Box<dyn WindowsFilesystemAclDriver>,
+}
+
+impl PreparedSandboxSetup {
+    pub fn prepared_roots(&self) -> &[String] {
+        &self.prepared_roots
+    }
+
+    pub fn cleanup(mut self, plan: &PlatformSandboxPlan) -> io::Result<Vec<String>> {
+        plan.cleanup_sandbox_setup_with_driver(self.filesystem_driver.as_mut())
+    }
+}
+
 fn prepare_unique_runtime_root(prepared: &mut Vec<String>, root: &str) -> io::Result<()> {
     fs::create_dir_all(root)?;
     if !prepared.iter().any(|item| item == root) {
@@ -516,6 +537,10 @@ trait WindowsFilesystemAclDriver {
     fn capture_rollback(&mut self, root: &str) -> io::Result<()>;
     fn apply_entry(&mut self, entry: &WindowsFilesystemAclEntry) -> io::Result<()>;
     fn rollback(&mut self) -> io::Result<()>;
+}
+
+fn new_windows_filesystem_acl_driver() -> Box<dyn WindowsFilesystemAclDriver> {
+    Box::new(ValidateOnlyWindowsFilesystemAclDriver)
 }
 
 #[derive(Default)]
@@ -1949,11 +1974,42 @@ mod tests {
         }];
         let runtime_root = path_string(Path::new(plan.runtime_root.as_ref().unwrap()));
 
-        let prepared = plan.prepare_sandbox_setup()?;
+        let setup = plan.prepare_sandbox_setup()?;
+        let prepared = setup.prepared_roots();
 
         assert!(prepared.iter().any(|root| root == &runtime_root));
         assert!(prepared.iter().any(|root| root == &path_string(&cwd)));
-        plan.cleanup_sandbox_setup()?;
+        setup.cleanup(&plan)?;
+        Ok(())
+    }
+
+    #[test]
+    fn prepared_sandbox_cleanup_uses_setup_driver_state() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&cwd)?;
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+        let mut plan =
+            WindowsReferenceBackend.fail_closed_plan("exec_setup_driver_state", &cwd, &policy);
+        plan.private_filesystem_rules = vec![WindowsFilesystemRule {
+            access: WindowsFilesystemAccess::ReadWrite,
+            source: WindowsFilesystemRuleSource::PolicyWrite,
+            root: path_string(&cwd),
+        }];
+        let runtime_root = PathBuf::from(plan.runtime_root.as_ref().unwrap());
+        let setup = plan.prepare_sandbox_setup_with_driver(Box::new(RecordingAclDriver {
+            fail_rollback: true,
+            ..RecordingAclDriver::default()
+        }))?;
+
+        let err = setup
+            .cleanup(&plan)
+            .expect_err("cleanup must use setup driver rollback state");
+
+        assert_eq!(err.kind(), io::ErrorKind::Other);
+        assert!(err.to_string().contains("rollback failed"));
+        assert!(runtime_root.exists());
+        plan.cleanup_runtime_roots()?;
         Ok(())
     }
 
@@ -2266,7 +2322,9 @@ mod tests {
             root: "*".to_string(),
         });
 
-        let err = plan.prepare_sandbox_setup().unwrap_err();
+        let Err(err) = plan.prepare_sandbox_setup() else {
+            panic!("bad filesystem rule must fail sandbox setup");
+        };
 
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
         assert!(!runtime_root.exists());

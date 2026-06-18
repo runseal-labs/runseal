@@ -743,9 +743,10 @@ fn execute_command(
         Ok(plan) => plan,
         Err(err) => {
             let details = err.details_json();
+            let mut prepared_setup = None;
             if let Some(plan) = err.plan.as_deref() {
                 match plan.prepare_sandbox_setup() {
-                    Ok(prepared_roots) => {
+                    Ok(setup) => {
                         let event = execution_event_now(
                             json!({
                                 "type": "sandbox.prepared",
@@ -754,12 +755,13 @@ fn execute_command(
                                 "policy_hash": policy_hash,
                                 "audit_path": audit_path,
                                 "decision": "prepared",
-                                "prepared_roots": prepared_roots,
+                                "prepared_roots": setup.prepared_roots(),
                                 "platform_plan": plan.json(),
                             }),
                             &event_context,
                         );
                         write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
+                        prepared_setup = Some(setup);
                     }
                     Err(setup_err) => {
                         let event = execution_event_now(
@@ -813,8 +815,8 @@ fn execute_command(
             );
             write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
 
-            if let Some(plan) = err.plan.as_deref() {
-                match plan.cleanup_sandbox_setup() {
+            if let (Some(plan), Some(setup)) = (err.plan.as_deref(), prepared_setup) {
+                match setup.cleanup(plan) {
                     Ok(cleaned_roots) => {
                         let event = execution_event_now(
                             json!({
