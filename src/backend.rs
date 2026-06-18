@@ -462,6 +462,7 @@ impl PlatformSandboxPlan {
             ));
         }
         self.validate_runtime_root_path_for_setup(runtime_root, &expected)?;
+        self.validate_runtime_marker_for_setup(runtime_root)?;
         for root in [
             self.profile_root.as_ref(),
             self.synthetic_home.as_ref(),
@@ -474,6 +475,23 @@ impl PlatformSandboxPlan {
         }
         for (_, root) in &self.environment_runtime {
             self.validate_runtime_root_path_for_setup(Path::new(root), &expected)?;
+        }
+        Ok(())
+    }
+
+    fn validate_runtime_marker_for_setup(&self, runtime_root: &Path) -> io::Result<()> {
+        if !runtime_root.exists() {
+            return Ok(());
+        }
+        let marker = runtime_root.join(RUNTIME_ROOT_MARKER);
+        if !marker.is_file() || fs::read_to_string(&marker)? != self.execution_id {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "refusing to prepare runtime root with mismatched marker: {}",
+                    runtime_root.display()
+                ),
+            ));
         }
         Ok(())
     }
@@ -2701,6 +2719,24 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn runtime_setup_refuses_mismatched_runtime_marker() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&cwd)?;
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+        let plan = WindowsReferenceBackend.fail_closed_plan("exec_setup_marker", &cwd, &policy);
+        let runtime_root = PathBuf::from(plan.runtime_root.as_ref().unwrap());
+        fs::create_dir_all(&runtime_root)?;
+        fs::write(runtime_root.join(RUNTIME_ROOT_MARKER), b"exec_other")?;
+
+        let err = plan.prepare_runtime_roots().unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        assert!(runtime_root.exists());
+        Ok(())
+    }
+
     #[cfg(any(unix, windows))]
     #[test]
     fn runtime_setup_refuses_symlink_ancestor_before_creating_runtime_tree() -> io::Result<()> {
@@ -2714,6 +2750,10 @@ mod tests {
             WindowsReferenceBackend.fail_closed_plan("exec_symlink_env_setup", &cwd, &policy);
         let runtime_root = PathBuf::from(plan.runtime_root.as_ref().unwrap());
         fs::create_dir_all(&runtime_root)?;
+        fs::write(
+            runtime_root.join(RUNTIME_ROOT_MARKER),
+            plan.execution_id.as_bytes(),
+        )?;
         let link = runtime_root.join("link");
         if let Err(err) = symlink_dir_for_test(&outside, &link) {
             if err.kind() == io::ErrorKind::PermissionDenied {
