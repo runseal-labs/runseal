@@ -80,6 +80,7 @@ codex-utils-absolute-path = { path = "vendor/codex-utils-absolute-path" }
 codex-windows-sandbox = { path = "vendor/codex-windows-sandbox/upstream" }
 windows-sys = { version = "0.61.2", features = [
     "Win32_Foundation",
+    "Win32_Globalization",
     "Win32_Security",
     "Win32_System_JobObjects",
     "Win32_System_Threading",

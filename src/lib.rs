@@ -4,6 +4,7 @@ mod cli;
 mod error;
 mod events;
 mod policy;
+mod process_output;
 mod rpc;
 mod stdin;
 mod windows;
@@ -21,6 +22,7 @@ use events::{
 use policy::{
     NetworkMode, POLICY_VERSION, SandboxPolicy, matches_environment_scrub_pattern, normalize_policy,
 };
+use process_output::decode_process_output;
 use serde_json::{Map, Value, json};
 use std::env;
 use std::fs;
@@ -1059,8 +1061,9 @@ fn execute_command(
         events.push(event);
     }
     let exit_code = output.status.code().unwrap_or(1);
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let output_program = command.first().map(String::as_str).unwrap_or("");
+    let stdout = decode_process_output(output_program, &output.stdout);
+    let stderr = decode_process_output(output_program, &output.stderr);
     let finished_at = timestamp_now();
     let resource_sample = execution_event_at(
         json!({
