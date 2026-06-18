@@ -2,9 +2,12 @@ use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use std::env;
 use std::fs;
-use std::io::Write;
+use std::io::{ErrorKind, Read, Write};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 fn runseal_bin() -> PathBuf {
@@ -225,6 +228,39 @@ fn is_backend_unavailable(response: &Value) -> bool {
     response["error"]["data"]["code"] == "BACKEND_UNAVAILABLE"
 }
 
+fn start_loopback_http_server() -> Result<(u16, thread::JoinHandle<Result<bool>>)> {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    listener.set_nonblocking(true)?;
+    let port = listener.local_addr()?.port();
+    let handle = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let mut buffer = [0_u8; 512];
+                    let read = stream.read(&mut buffer)?;
+                    let request = String::from_utf8_lossy(&buffer[..read]);
+                    assert!(request.starts_with("GET /proxy-ok HTTP/1.1"));
+                    let body = "proxy-ok";
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    stream.write_all(response.as_bytes())?;
+                    return Ok(true);
+                }
+                Err(err) if err.kind() == ErrorKind::WouldBlock && Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(err) if err.kind() == ErrorKind::WouldBlock => return Ok(false),
+                Err(err) => return Err(err.into()),
+            }
+        }
+    });
+    Ok((port, handle))
+}
+
 #[test]
 fn workspace_write_allows_workspace_write_when_supported_or_fails_closed() -> Result<()> {
     let tmp = TempDir::new()?;
@@ -416,6 +452,54 @@ fn network_proxy_blocks_direct_egress_when_supported_or_fails_closed() -> Result
             .as_str()
             .unwrap_or_default()
             .contains("direct-network-ok")
+    );
+    Ok(())
+}
+
+#[test]
+fn network_proxy_allows_http_through_managed_proxy_when_supported_or_fails_closed() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let workspace = tmp.path().join("workspace");
+    fs::create_dir_all(&workspace)?;
+    let (port, upstream) = start_loopback_http_server()?;
+    let code = format!(
+        "import os, socket, urllib.parse\n\
+         proxy = urllib.parse.urlparse(os.environ['HTTP_PROXY'])\n\
+         with socket.create_connection((proxy.hostname, proxy.port), timeout=2) as s:\n\
+             s.sendall(b'GET http://127.0.0.1:{port}/proxy-ok HTTP/1.1\\r\\nHost: 127.0.0.1:{port}\\r\\nConnection: close\\r\\n\\r\\n')\n\
+             data = b''\n\
+             while True:\n\
+                 chunk = s.recv(4096)\n\
+                 if not chunk:\n\
+                     break\n\
+                 data += chunk\n\
+         print(data.decode('utf-8', 'replace'))"
+    );
+    let response = execute_with_network("workspace-write", &workspace, Some("proxy"), code)?;
+
+    if is_backend_missing(&response) {
+        let upstream_hit = upstream.join().expect("upstream server thread")?;
+        assert!(!upstream_hit);
+        let expected_features = expected_missing_features(&["network_proxy", "managed_proxy"]);
+        assert_backend_missing_features(&response, &workspace, &expected_features)?;
+        return Ok(());
+    }
+    if is_backend_unavailable(&response) {
+        let upstream_hit = upstream.join().expect("upstream server thread")?;
+        assert!(!upstream_hit);
+        assert_backend_unavailable(&response, &workspace)?;
+        return Ok(());
+    }
+
+    let upstream_hit = upstream.join().expect("upstream server thread")?;
+    assert!(upstream_hit);
+    assert_eq!(response["result"]["status"], "finished");
+    assert_eq!(response["result"]["exit_code"], 0);
+    assert!(
+        response["result"]["stdout"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("proxy-ok")
     );
     Ok(())
 }
