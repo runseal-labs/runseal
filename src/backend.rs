@@ -1196,6 +1196,13 @@ fn spawn_local_command(
     env: &ExecutionEnv,
     timeout: Option<Duration>,
 ) -> io::Result<BackendExecutionOutput> {
+    if plan.is_sandbox_enforced() {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "refusing to spawn sandboxed plan through local execution path",
+        ));
+    }
+
     let mut process = Command::new(&command[0]);
     process
         .args(&command[1..])
@@ -1637,6 +1644,29 @@ mod tests {
         assert_eq!(err.code, "BACKEND_CAPABILITY_MISSING");
         assert_eq!(plan.enforcement, "fail-closed-preview");
         assert_ne!(plan.enforcement, "local-execution");
+    }
+
+    #[test]
+    fn local_spawn_rejects_sandboxed_plan() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&cwd)?;
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+        let plan = WindowsReferenceBackend.fail_closed_plan("exec_no_local_spawn", &cwd, &policy);
+
+        let err = spawn_local_command(
+            &plan,
+            &["runseal-command-that-must-not-start".to_string()],
+            &cwd,
+            ExecutionStdin::Empty,
+            &ExecutionEnv::default(),
+            None,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::Unsupported);
+        assert!(err.to_string().contains("refusing to spawn sandboxed plan"));
+        Ok(())
     }
 
     #[test]
