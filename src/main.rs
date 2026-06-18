@@ -3,7 +3,10 @@ mod backend;
 mod policy;
 
 use audit::AuditWriter;
-use backend::{BackendError, ExecutionStdin, SandboxBackend, active_backend};
+use backend::{
+    BackendError, ExecutionEnv, ExecutionStdin, SandboxBackend, active_backend,
+    matches_environment_scrub_pattern,
+};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use policy::{NetworkMode, POLICY_VERSION, PolicyError, SandboxPolicy, normalize_policy};
 use serde_json::{Map, Value, json};
@@ -15,6 +18,9 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 const PROTOCOL_VERSION: &str = "runseal.protocol/v1";
 const MAX_METADATA_BYTES: usize = 4096;
+const MAX_ENV_ENTRIES: usize = 64;
+const MAX_ENV_KEY_BYTES: usize = 128;
+const MAX_ENV_VALUE_BYTES: usize = 4096;
 
 fn main() {
     if let Err(err) = run() {
@@ -158,6 +164,7 @@ fn run_exec(args: &[String]) -> Result<(), String> {
         &request.cwd,
         &policy,
         ExecutionStdin::Empty,
+        ExecutionEnv::default(),
         None,
         request.timeout,
     )
@@ -351,6 +358,7 @@ fn execute_from_params(params: &Value) -> Result<(Vec<Value>, Value), RunSealErr
             "stdin",
             "timeout_ms",
             "metadata",
+            "env",
         ],
     )?;
     let stdin = stdin_from_params(params)?;
@@ -378,8 +386,9 @@ fn execute_from_params(params: &Value) -> Result<(Vec<Value>, Value), RunSealErr
         .unwrap_or_else(|| json!("read-only"));
     let network = network_override_from_params(params)?;
     let policy = normalize_policy(&policy, &cwd, network)?;
+    let env = env_from_params(params, &policy)?;
 
-    execute_command(&command, &cwd, &policy, stdin, metadata, timeout)
+    execute_command(&command, &cwd, &policy, stdin, env, metadata, timeout)
 }
 
 fn execution_not_found_from_params(params: &Value) -> Result<Value, RunSealError> {
@@ -532,11 +541,89 @@ fn metadata_from_params(params: &Map<String, Value>) -> Result<Option<Value>, Ru
     Ok(Some(metadata))
 }
 
+fn env_from_params(
+    params: &Map<String, Value>,
+    policy: &SandboxPolicy,
+) -> Result<ExecutionEnv, RunSealError> {
+    let Some(value) = params.get("env") else {
+        return Ok(ExecutionEnv::default());
+    };
+    let env = value
+        .as_object()
+        .ok_or_else(|| RunSealError::new("INVALID_REQUEST", "params.env must be an object"))?;
+    if env.len() > MAX_ENV_ENTRIES {
+        return Err(RunSealError::new(
+            "INVALID_REQUEST",
+            format!("params.env must include at most {MAX_ENV_ENTRIES} entries"),
+        ));
+    }
+
+    let mut entries = Vec::with_capacity(env.len());
+    for (key, value) in env {
+        validate_env_key(key)?;
+        if policy
+            .environment
+            .scrub
+            .iter()
+            .any(|pattern| matches_environment_scrub_pattern(key, pattern))
+        {
+            return Err(RunSealError::new(
+                "INVALID_REQUEST",
+                format!("params.env.{key} is denied by policy environment scrub"),
+            ));
+        }
+        let value = value.as_str().ok_or_else(|| {
+            RunSealError::new(
+                "INVALID_REQUEST",
+                format!("params.env.{key} must be a string"),
+            )
+        })?;
+        if value.len() > MAX_ENV_VALUE_BYTES {
+            return Err(RunSealError::new(
+                "INVALID_REQUEST",
+                format!("params.env.{key} must be at most {MAX_ENV_VALUE_BYTES} bytes"),
+            ));
+        }
+        entries.push((key.clone(), value.to_string()));
+    }
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+
+    Ok(ExecutionEnv { entries })
+}
+
+fn validate_env_key(key: &str) -> Result<(), RunSealError> {
+    if key.is_empty() || key.len() > MAX_ENV_KEY_BYTES {
+        return Err(RunSealError::new(
+            "INVALID_REQUEST",
+            format!("params.env.{key} is not a valid environment variable name"),
+        ));
+    }
+
+    let mut chars = key.chars();
+    let Some(first) = chars.next() else {
+        return Err(RunSealError::new(
+            "INVALID_REQUEST",
+            "params.env key is not a valid environment variable name",
+        ));
+    };
+    if !(first == '_' || first.is_ascii_alphabetic())
+        || chars.any(|item| !(item == '_' || item.is_ascii_alphanumeric()))
+    {
+        return Err(RunSealError::new(
+            "INVALID_REQUEST",
+            format!("params.env.{key} is not a valid environment variable name"),
+        ));
+    }
+
+    Ok(())
+}
+
 fn execute_command(
     command: &[String],
     cwd: &Path,
     policy: &SandboxPolicy,
     stdin: ExecutionStdin,
+    env: ExecutionEnv,
     metadata: Option<Value>,
     timeout: Option<Duration>,
 ) -> Result<(Vec<Value>, Value), RunSealError> {
@@ -547,6 +634,7 @@ fn execute_command(
     let ids = new_execution_ids();
     let policy_id = policy.id.clone();
     let policy_hash = policy.hash();
+    let env_keys = env.keys();
     let mut audit = create_audit_writer(cwd, &ids.session_id)?;
     let audit_path = audit.relative_path().to_string();
     let backend = active_backend();
@@ -749,6 +837,9 @@ fn execute_command(
                 "platform": plan.platform,
             },
             "platform_plan": plan.json(),
+            "environment": {
+                "requested_keys": env_keys,
+            },
         }),
         &started_at,
         &event_context,
@@ -757,7 +848,7 @@ fn execute_command(
 
     let timer = Instant::now();
     let execution_output = backend
-        .execute_plan(&plan, command, cwd, stdin, timeout)
+        .execute_plan(&plan, command, cwd, stdin, &env, timeout)
         .map_err(|err| {
             RunSealError::new(
                 "EXECUTION_FAILED_TO_START",

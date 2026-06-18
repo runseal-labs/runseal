@@ -65,6 +65,7 @@ pub trait SandboxBackend {
         command: &[String],
         cwd: &Path,
         stdin: ExecutionStdin,
+        env: &ExecutionEnv,
         timeout: Option<Duration>,
     ) -> io::Result<BackendExecutionOutput>;
     fn capabilities_json(&self) -> Value;
@@ -73,6 +74,17 @@ pub trait SandboxBackend {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExecutionStdin {
     Empty,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ExecutionEnv {
+    pub entries: Vec<(String, String)>,
+}
+
+impl ExecutionEnv {
+    pub fn keys(&self) -> Vec<String> {
+        self.entries.iter().map(|(key, _)| key.clone()).collect()
+    }
 }
 
 #[derive(Debug)]
@@ -132,10 +144,11 @@ impl SandboxBackend for ActiveBackend {
         command: &[String],
         cwd: &Path,
         stdin: ExecutionStdin,
+        env: &ExecutionEnv,
         timeout: Option<Duration>,
     ) -> io::Result<BackendExecutionOutput> {
         self.as_backend()
-            .execute_plan(plan, command, cwd, stdin, timeout)
+            .execute_plan(plan, command, cwd, stdin, env, timeout)
     }
 
     fn capabilities_json(&self) -> Value {
@@ -360,9 +373,10 @@ impl SandboxBackend for LocalBackend {
         command: &[String],
         cwd: &Path,
         stdin: ExecutionStdin,
+        env: &ExecutionEnv,
         timeout: Option<Duration>,
     ) -> io::Result<BackendExecutionOutput> {
-        spawn_local_command(plan, command, cwd, stdin, timeout)
+        spawn_local_command(plan, command, cwd, stdin, env, timeout)
     }
 
     fn capabilities_json(&self) -> Value {
@@ -463,9 +477,10 @@ impl SandboxBackend for WindowsReferenceBackend {
         command: &[String],
         cwd: &Path,
         stdin: ExecutionStdin,
+        env: &ExecutionEnv,
         timeout: Option<Duration>,
     ) -> io::Result<BackendExecutionOutput> {
-        spawn_local_command(plan, command, cwd, stdin, timeout)
+        spawn_local_command(plan, command, cwd, stdin, env, timeout)
     }
 
     fn capabilities_json(&self) -> Value {
@@ -515,9 +530,10 @@ impl SandboxBackend for MacosExperimentalBackend {
         command: &[String],
         cwd: &Path,
         stdin: ExecutionStdin,
+        env: &ExecutionEnv,
         timeout: Option<Duration>,
     ) -> io::Result<BackendExecutionOutput> {
-        spawn_local_command(plan, command, cwd, stdin, timeout)
+        spawn_local_command(plan, command, cwd, stdin, env, timeout)
     }
 
     fn capabilities_json(&self) -> Value {
@@ -566,9 +582,10 @@ impl SandboxBackend for LinuxCommunityBackend {
         command: &[String],
         cwd: &Path,
         stdin: ExecutionStdin,
+        env: &ExecutionEnv,
         timeout: Option<Duration>,
     ) -> io::Result<BackendExecutionOutput> {
-        spawn_local_command(plan, command, cwd, stdin, timeout)
+        spawn_local_command(plan, command, cwd, stdin, env, timeout)
     }
 
     fn capabilities_json(&self) -> Value {
@@ -612,6 +629,7 @@ fn spawn_local_command(
     command: &[String],
     cwd: &Path,
     stdin: ExecutionStdin,
+    env: &ExecutionEnv,
     timeout: Option<Duration>,
 ) -> io::Result<BackendExecutionOutput> {
     let mut process = Command::new(&command[0]);
@@ -619,7 +637,8 @@ fn spawn_local_command(
         .args(&command[1..])
         .current_dir(cwd)
         .env_clear()
-        .envs(minimal_environment(plan));
+        .envs(minimal_environment(plan))
+        .envs(env.entries.iter().map(|(key, value)| (key, value)));
     match stdin {
         ExecutionStdin::Empty => {
             process.stdin(Stdio::null());
@@ -678,7 +697,7 @@ fn minimal_environment(plan: &PlatformSandboxPlan) -> Vec<(OsString, OsString)> 
             !plan
                 .environment_scrub
                 .iter()
-                .any(|pattern| matches_scrub_pattern(key, pattern))
+                .any(|pattern| matches_environment_scrub_pattern(key, pattern))
         })
         .filter_map(|key| env::var_os(key).map(|value| (OsString::from(key), value)))
         .collect()
@@ -702,7 +721,7 @@ fn minimal_environment_keys() -> Vec<&'static str> {
     }
 }
 
-fn matches_scrub_pattern(key: &str, pattern: &str) -> bool {
+pub(crate) fn matches_environment_scrub_pattern(key: &str, pattern: &str) -> bool {
     let key = key.to_ascii_uppercase();
     let pattern = pattern.to_ascii_uppercase();
 

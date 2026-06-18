@@ -269,7 +269,7 @@ fn dispose_session_is_noop_for_stdio_mvp() -> Result<()> {
 #[test]
 fn execute_rejects_unsupported_request_fields() -> Result<()> {
     let tmp = TempDir::new()?;
-    let unsupported_cases = [("env", json!({"CI": "1"}))];
+    let unsupported_cases = [("trace_id", json!("trace_test"))];
 
     for (field, value) in unsupported_cases {
         let mut request = json!({
@@ -298,6 +298,94 @@ fn execute_rejects_unsupported_request_fields() -> Result<()> {
                 .as_str()
                 .unwrap_or_default()
                 .contains(&format!("params.{field} is not supported"))
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn execute_accepts_non_secret_env_and_audits_keys_only() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let output = run_rpc(&rpc_request(
+        "execute",
+        json!({
+            "command": [
+                "python3",
+                "-c",
+                "import os; print('flag=' + os.environ.get('RUNSEAL_PUBLIC_FLAG', 'missing'))"
+            ],
+            "cwd": tmp.path(),
+            "policy": "danger-full-access",
+            "env": {"RUNSEAL_PUBLIC_FLAG": "visible"}
+        }),
+    ))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = messages
+        .iter()
+        .find(|message| message.get("id") == Some(&json!(1)))
+        .unwrap();
+
+    assert_eq!(response["result"]["status"], "finished");
+    assert_eq!(response["result"]["exit_code"], 0);
+    assert!(
+        response["result"]["stdout"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("flag=visible")
+    );
+
+    let audit_path = response["result"]["audit_path"]
+        .as_str()
+        .expect("execution result must include audit_path");
+    let audit_events = read_audit_events(tmp.path(), audit_path)?;
+    let started = audit_events
+        .iter()
+        .find(|event| event["type"] == "execution.started")
+        .context("execution.started audit event must exist")?;
+    assert_eq!(
+        started["environment"]["requested_keys"],
+        json!(["RUNSEAL_PUBLIC_FLAG"])
+    );
+    let audit_jsonl = fs::read_to_string(tmp.path().join(audit_path))?;
+    assert!(audit_jsonl.contains("RUNSEAL_PUBLIC_FLAG"));
+    assert!(!audit_jsonl.contains("visible"));
+    Ok(())
+}
+
+#[test]
+fn execute_rejects_secret_env_keys() -> Result<()> {
+    let tmp = TempDir::new()?;
+    for key in ["OPENAI_API_KEY", "RUNSEAL_TOKEN", "AWS_REGION"] {
+        let output = run_rpc(&rpc_request(
+            "execute",
+            json!({
+                "command": ["python3", "-c", "print('must not run')"],
+                "cwd": tmp.path(),
+                "policy": "danger-full-access",
+                "env": {key: "blocked"}
+            }),
+        ))?;
+
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let messages = stdout_json_lines(&output)?;
+        let response = &messages[0];
+
+        assert_eq!(response["error"]["data"]["code"], "INVALID_REQUEST");
+        assert!(
+            response["error"]["data"]["reason"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("is denied by policy environment scrub")
         );
     }
     Ok(())
