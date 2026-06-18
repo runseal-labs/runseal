@@ -1155,7 +1155,10 @@ fn explain_policy_returns_effective_hash_and_network_mode() -> Result<()> {
     assert_eq!(payload["network"]["mode"], "proxy");
     assert_eq!(payload["environment"]["inherit"], "minimal");
     assert_eq!(payload["backend_requirement"], "sandbox-backend");
-    assert_eq!(payload["support"], "unsupported");
+    assert_eq!(
+        payload["support"],
+        expected_status(expected_windows_sandbox_supported())
+    );
     assert_eq!(
         payload["required_backend_features"],
         json!([
@@ -1168,6 +1171,14 @@ fn explain_policy_returns_effective_hash_and_network_mode() -> Result<()> {
             "network_proxy",
             "managed_proxy"
         ])
+    );
+    assert_eq!(
+        payload["missing_features"],
+        if expected_windows_sandbox_supported() {
+            json!([])
+        } else {
+            payload["required_backend_features"].clone()
+        }
     );
     assert!(
         payload["filesystem"]["write"]

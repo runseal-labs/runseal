@@ -223,8 +223,26 @@ fn run_explain_policy(args: &[String]) -> Result<(), String> {
     )
     .map_err(|err| err.reason)?;
 
-    println!("{}", policy.explain_json());
+    println!("{}", explain_policy_json(&policy));
     Ok(())
+}
+
+fn explain_policy_json(policy: &SandboxPolicy) -> Value {
+    let backend = active_backend();
+    let missing_features = backend.missing_feature_names(policy);
+    let mut result = policy.explain_json();
+    if let Some(result) = result.as_object_mut() {
+        result.insert(
+            "support".to_string(),
+            json!(if missing_features.is_empty() {
+                "supported"
+            } else {
+                "unsupported"
+            }),
+        );
+        result.insert("missing_features".to_string(), json!(missing_features));
+    }
+    result
 }
 
 fn explain_policy_from_params(params: &Value) -> Result<Value, RunSealError> {
@@ -246,7 +264,7 @@ fn explain_policy_from_params(params: &Value) -> Result<Value, RunSealError> {
     let network = network_override_from_params(params)?;
     let policy = normalize_policy(&policy, &cwd, network)?;
 
-    Ok(policy.explain_json())
+    Ok(explain_policy_json(&policy))
 }
 
 fn execute_from_params(params: &Value) -> Result<(Vec<Value>, Value), RunSealError> {

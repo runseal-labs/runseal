@@ -299,6 +299,10 @@ fn explain_policy_cli_materializes_standard_profile() -> Result<()> {
     assert_eq!(payload["environment"]["inherit"], "minimal");
     assert_eq!(payload["backend_requirement"], "sandbox-backend");
     assert_eq!(
+        payload["support"],
+        expected_status(expected_windows_sandbox_supported())
+    );
+    assert_eq!(
         payload["required_backend_features"],
         serde_json::json!([
             "filesystem_policy",
@@ -310,6 +314,12 @@ fn explain_policy_cli_materializes_standard_profile() -> Result<()> {
             "network_disabled"
         ])
     );
+    let expected_missing_features = if expected_windows_sandbox_supported() {
+        serde_json::json!([])
+    } else {
+        payload["required_backend_features"].clone()
+    };
+    assert_eq!(payload["missing_features"], expected_missing_features);
     assert_eq!(
         payload["canonical_policy"]["filesystem"]["protect_vcs"],
         true
