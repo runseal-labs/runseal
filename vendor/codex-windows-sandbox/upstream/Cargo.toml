@@ -16,7 +16,7 @@ name = "runseal-windows-sandbox-setup"
 path = "bin/setup_main/main.rs"
 
 [[bin]]
-name = "codex-command-runner"
+name = "runseal-command-runner"
 path = "bin/command_runner/main.rs"
 
 [dependencies]

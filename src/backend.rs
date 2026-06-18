@@ -1125,6 +1125,7 @@ fn execute_windows_sandbox_plan(
     } else {
         Vec::new()
     };
+    let sandbox_command = windows_sandbox_command(command, &env_map);
 
     let result =
         codex_windows_sandbox::run_windows_sandbox_capture_for_permission_profile_elevated(
@@ -1132,7 +1133,7 @@ fn execute_windows_sandbox_plan(
                 permission_profile: &permission_profile,
                 workspace_roots: workspace_roots.as_slice(),
                 codex_home: &vendor_sandbox_home,
-                command: command.to_vec(),
+                command: sandbox_command,
                 cwd,
                 env_map,
                 timeout_ms: timeout.map(duration_millis_u64),
@@ -1175,6 +1176,82 @@ fn execute_windows_sandbox_plan(
         },
         timed_out: capture.timed_out,
     })
+}
+
+#[cfg(windows)]
+fn windows_sandbox_command(command: &[String], env_map: &HashMap<String, String>) -> Vec<String> {
+    let Some((program, args)) = command.split_first() else {
+        return Vec::new();
+    };
+    let mut resolved = Vec::with_capacity(command.len());
+    resolved
+        .push(resolve_windows_sandbox_program(program, env_map).unwrap_or_else(|| program.clone()));
+    resolved.extend(args.iter().cloned());
+    resolved
+}
+
+#[cfg(windows)]
+fn resolve_windows_sandbox_program(
+    program: &str,
+    env_map: &HashMap<String, String>,
+) -> Option<String> {
+    let program_path = Path::new(program);
+    if program_path.is_absolute() || program.contains('\\') || program.contains('/') {
+        return Some(program.to_string());
+    }
+
+    let path_env = windows_environment_value(env_map, "PATH")
+        .map(str::to_string)
+        .or_else(|| std::env::var("PATH").ok())?;
+    let pathext = windows_environment_value(env_map, "PATHEXT")
+        .map(str::to_string)
+        .or_else(|| std::env::var("PATHEXT").ok())
+        .unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".to_string());
+    let candidate_names = windows_executable_candidate_names(program, &pathext);
+
+    for dir in std::env::split_paths(&path_env) {
+        for name in &candidate_names {
+            let candidate = dir.join(name);
+            if candidate.is_file() {
+                return Some(candidate.to_string_lossy().into_owned());
+            }
+        }
+    }
+
+    None
+}
+
+#[cfg(windows)]
+fn windows_environment_value<'a>(
+    env_map: &'a HashMap<String, String>,
+    key: &str,
+) -> Option<&'a str> {
+    env_map
+        .iter()
+        .find(|(candidate, _)| candidate.eq_ignore_ascii_case(key))
+        .map(|(_, value)| value.as_str())
+}
+
+#[cfg(windows)]
+fn windows_executable_candidate_names(program: &str, pathext: &str) -> Vec<String> {
+    if Path::new(program).extension().is_some() {
+        return vec![program.to_string()];
+    }
+
+    let mut names = Vec::new();
+    for ext in pathext.split(';') {
+        let ext = ext.trim();
+        if ext.is_empty() {
+            continue;
+        }
+        if ext.starts_with('.') {
+            names.push(format!("{program}{ext}"));
+        } else {
+            names.push(format!("{program}.{ext}"));
+        }
+    }
+    names.push(program.to_string());
+    names
 }
 
 #[cfg(windows)]
@@ -1670,6 +1747,27 @@ mod tests {
         assert!(!deny_keys.contains(&windows_sandbox_path_key(&sandbox_temp)));
         assert!(!deny_keys.contains(&windows_sandbox_path_key(&appdata)));
         assert!(!deny_keys.contains(&windows_sandbox_path_key(&local)));
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_sandbox_command_resolves_program_from_path_and_pathext() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let bin = tmp.path().join("bin");
+        fs::create_dir_all(&bin)?;
+        let tool = bin.join("tool.EXE");
+        fs::write(&tool, b"")?;
+        let env_map = HashMap::from([
+            ("PATH".to_string(), bin.to_string_lossy().into_owned()),
+            ("PATHEXT".to_string(), ".EXE;.CMD".to_string()),
+        ]);
+        let command = vec!["tool".to_string(), "--version".to_string()];
+
+        let resolved = windows_sandbox_command(&command, &env_map);
+
+        assert_eq!(resolved[0], tool.to_string_lossy());
+        assert_eq!(resolved[1], "--version");
         Ok(())
     }
 

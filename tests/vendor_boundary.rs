@@ -108,6 +108,94 @@ fn vendored_windows_setup_helper_uses_runseal_binary_name() {
 }
 
 #[test]
+fn vendored_windows_runner_uses_runseal_binary_name() {
+    let helper_materialization =
+        include_str!("../vendor/codex-windows-sandbox/upstream/helper_materialization.rs");
+    let runner_client =
+        include_str!("../vendor/codex-windows-sandbox/upstream/elevated/runner_client.rs");
+    let runner_pipe =
+        include_str!("../vendor/codex-windows-sandbox/upstream/elevated/runner_pipe.rs");
+
+    assert!(WINDOWS_SANDBOX_MANIFEST.contains("name = \"runseal-command-runner\""));
+    assert!(!WINDOWS_SANDBOX_MANIFEST.contains("name = \"codex-command-runner\""));
+
+    for source in [helper_materialization, runner_client] {
+        assert!(source.contains("runseal-command-runner.exe"));
+        assert!(!source.contains("codex-command-runner.exe"));
+    }
+
+    assert!(runner_client.contains("runseal-runner-connect-"));
+    assert!(!runner_client.contains("codex-runner-connect-"));
+    assert!(runner_pipe.contains("runseal-runner-"));
+    assert!(!runner_pipe.contains("codex-runner-"));
+}
+
+#[test]
+fn vendored_windows_setup_has_no_host_app_runtime_bin_special_case() {
+    for (name, source) in VENDOR_SETUP_SOURCES {
+        for forbidden in [
+            "ensure_codex_app_runtime_bin_readable",
+            "WindowsApps",
+            "OpenAI",
+            "LocalAppData cache",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "{name} must not contain host app runtime-bin special case {forbidden}"
+            );
+        }
+    }
+}
+
+#[test]
+fn vendored_windows_setup_passes_payload_by_file() {
+    let setup = VENDOR_SETUP_SOURCES
+        .iter()
+        .find_map(|(name, source)| (*name == "setup.rs").then_some(*source))
+        .expect("setup.rs must be included");
+    let setup_main = VENDOR_SETUP_SOURCES
+        .iter()
+        .find_map(|(name, source)| (*name == "setup_main/win.rs").then_some(*source))
+        .expect("setup_main/win.rs must be included");
+
+    for source in [setup, setup_main] {
+        assert!(source.contains("--payload-file"));
+        assert!(source.contains("write_setup_payload_file"));
+        assert!(!source.contains("payload_b64"));
+        assert!(!source.contains("failed to decode payload b64"));
+        assert!(!source.contains("expected payload argument"));
+    }
+}
+
+#[test]
+fn vendored_windows_setup_reuses_elevation_via_scheduled_task() {
+    let setup = VENDOR_SETUP_SOURCES
+        .iter()
+        .find_map(|(name, source)| (*name == "setup.rs").then_some(*source))
+        .expect("setup.rs must be included");
+    let setup_main = VENDOR_SETUP_SOURCES
+        .iter()
+        .find_map(|(name, source)| (*name == "setup_main/win.rs").then_some(*source))
+        .expect("setup_main/win.rs must be included");
+
+    assert!(setup.contains("try_run_setup_exe_via_scheduled_task"));
+    assert!(setup.contains("schtasks.exe"));
+    assert!(setup.contains("--task-run"));
+    assert!(setup.contains("\\RunSeal\\WindowsSandboxSetup"));
+    assert!(setup.contains("RUNSEAL_WINDOWS_SANDBOX_SETUP_BROKER_HOME"));
+
+    assert!(setup_main.contains("run_scheduled_setup_task"));
+    assert!(setup_main.contains("ensure_scheduled_setup_task"));
+    assert!(setup_main.contains("/RL"));
+    assert!(setup_main.contains("HIGHEST"));
+    assert!(setup_main.contains("\\RunSeal\\WindowsSandboxSetup"));
+    assert!(setup_main.contains("RUNSEAL_WINDOWS_SANDBOX_SETUP_BROKER_HOME"));
+
+    assert!(setup.contains("RunSeal"));
+    assert!(setup_main.contains("RunSeal"));
+}
+
+#[test]
 fn vendored_windows_setup_launch_suppresses_shell_error_ui() {
     let setup = VENDOR_SETUP_SOURCES
         .iter()

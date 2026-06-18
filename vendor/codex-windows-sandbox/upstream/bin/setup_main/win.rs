@@ -3,8 +3,6 @@ mod read_acl_mutex;
 
 use anyhow::Context;
 use anyhow::Result;
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64;
 use codex_otel::StatsigMetricsSettings;
 use codex_windows_sandbox::SETUP_VERSION;
 use codex_windows_sandbox::SetupErrorCode;
@@ -36,6 +34,7 @@ use serde::Serialize;
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::ffi::c_void;
+use std::fs::OpenOptions;
 use std::io::Write;
 use std::os::windows::process::CommandExt;
 use std::path::Path;
@@ -65,9 +64,14 @@ use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
 
 const DENY_ACCESS: i32 = 3;
+const SETUP_PAYLOAD_DIRNAME: &str = "payloads";
+const SETUP_PAYLOAD_FILE_PREFIX: &str = "setup-payload-";
+const SETUP_PAYLOAD_FILE_SUFFIX: &str = ".json";
+const SCHEDULED_SETUP_TASK_NAME: &str = r"\RunSeal\WindowsSandboxSetup";
+const SCHEDULED_SETUP_PAYLOAD_PREFIX: &str = "setup-task-payload-";
+const SCHEDULED_SETUP_RESULT_PREFIX: &str = "setup-task-result-";
 
 mod sandbox_users;
-mod setup_runtime_bin;
 use read_acl_mutex::acquire_read_acl_mutex;
 use read_acl_mutex::read_acl_mutex_exists;
 use sandbox_users::commit_setup_marker;
@@ -108,6 +112,18 @@ enum SetupMode {
     Full,
     ProvisionOnly,
     ReadAclsOnly,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum SetupInvocation {
+    TaskRun(PathBuf),
+    PayloadFile(PathBuf),
+}
+
+#[derive(Debug, Serialize)]
+struct ScheduledSetupTaskResult {
+    ok: bool,
+    message: Option<String>,
 }
 
 fn log_line(log: &mut dyn Write, msg: &str) -> Result<()> {
@@ -157,21 +173,193 @@ fn workspace_write_cap_sids_for_path(
     Ok(sid_strs)
 }
 
+fn setup_payload_dir(codex_home: &Path) -> PathBuf {
+    sandbox_dir(codex_home).join(SETUP_PAYLOAD_DIRNAME)
+}
+
+fn setup_payload_request_id() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    format!("{}-{nanos}", std::process::id())
+}
+
+fn setup_payload_path(codex_home: &Path, request_id: &str) -> PathBuf {
+    setup_payload_dir(codex_home).join(format!(
+        "{SETUP_PAYLOAD_FILE_PREFIX}{request_id}{SETUP_PAYLOAD_FILE_SUFFIX}"
+    ))
+}
+
+fn write_setup_payload_file(codex_home: &Path, payload_json: &[u8]) -> Result<PathBuf> {
+    let dir = setup_payload_dir(codex_home);
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("failed to create setup payload dir {}", dir.display()))?;
+    for attempt in 0..16 {
+        let request_id = format!("{}-{attempt}", setup_payload_request_id());
+        let path = setup_payload_path(codex_home, &request_id);
+        let mut file = match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(file) => file,
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => {
+                return Err(err).with_context(|| {
+                    format!("failed to create setup payload file {}", path.display())
+                });
+            }
+        };
+        file.write_all(payload_json)
+            .with_context(|| format!("failed to write setup payload file {}", path.display()))?;
+        file.flush()
+            .with_context(|| format!("failed to flush setup payload file {}", path.display()))?;
+        return Ok(path);
+    }
+    anyhow::bail!(
+        "failed to create unique setup payload file in {}",
+        dir.display()
+    );
+}
+
+fn remove_setup_payload_file(path: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
+fn scheduled_setup_broker_home(fallback: &Path) -> PathBuf {
+    if let Some(path) = std::env::var_os("RUNSEAL_WINDOWS_SANDBOX_SETUP_BROKER_HOME") {
+        return PathBuf::from(path);
+    }
+    if let Some(user_data_dir) = std::env::var_os("RUNSEAL_USER_DATA_DIR") {
+        return PathBuf::from(user_data_dir).join("windows-sandbox");
+    }
+    if let Some(appdata) = std::env::var_os("APPDATA") {
+        return PathBuf::from(appdata)
+            .join("RunSeal")
+            .join("windows-sandbox");
+    }
+    fallback.to_path_buf()
+}
+
+fn quote_task_arg(arg: &str) -> String {
+    let needs = arg.is_empty()
+        || arg
+            .chars()
+            .any(|c| matches!(c, ' ' | '\t' | '\n' | '\r' | '"'));
+    if !needs {
+        return arg.to_string();
+    }
+    let mut out = String::from("\"");
+    let mut bs = 0;
+    for ch in arg.chars() {
+        match ch {
+            '\\' => {
+                bs += 1;
+            }
+            '"' => {
+                out.push_str(&"\\".repeat(bs * 2 + 1));
+                out.push('"');
+                bs = 0;
+            }
+            _ => {
+                if bs > 0 {
+                    out.push_str(&"\\".repeat(bs));
+                    bs = 0;
+                }
+                out.push(ch);
+            }
+        }
+    }
+    if bs > 0 {
+        out.push_str(&"\\".repeat(bs * 2));
+    }
+    out.push('"');
+    out
+}
+
+fn scheduled_setup_result_path(codex_home: &Path, request_id: &str) -> PathBuf {
+    sandbox_dir(codex_home).join(format!("{SCHEDULED_SETUP_RESULT_PREFIX}{request_id}.json"))
+}
+
+fn setup_task_request_id(path: &Path) -> Option<String> {
+    let name = path.file_name()?.to_string_lossy();
+    let rest = name.strip_prefix(SCHEDULED_SETUP_PAYLOAD_PREFIX)?;
+    let request_id = rest.strip_suffix(".json")?;
+    (!request_id.is_empty()).then(|| request_id.to_string())
+}
+
+fn ensure_scheduled_setup_task(codex_home: &Path, log: &mut dyn Write) -> Result<()> {
+    let exe = std::env::current_exe().context("locate setup helper for scheduled task")?;
+    let broker_home = scheduled_setup_broker_home(codex_home);
+    let task_command = format!(
+        "{} --task-run {}",
+        quote_task_arg(&exe.to_string_lossy()),
+        quote_task_arg(&broker_home.to_string_lossy())
+    );
+    let output = Command::new("schtasks.exe")
+        .args([
+            "/Create",
+            "/TN",
+            SCHEDULED_SETUP_TASK_NAME,
+            "/TR",
+            &task_command,
+            "/SC",
+            "ONCE",
+            "/ST",
+            "00:00",
+            "/RL",
+            "HIGHEST",
+            "/F",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .creation_flags(0x08000000) // CREATE_NO_WINDOW
+        .output()
+        .context("run schtasks /Create")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!(
+            "schtasks /Create failed with status {:?}: {}",
+            output.status.code(),
+            stderr.trim()
+        );
+    }
+    log_line(
+        log,
+        &format!(
+            "scheduled setup task configured name={SCHEDULED_SETUP_TASK_NAME} broker_home={}",
+            broker_home.display()
+        ),
+    )?;
+    Ok(())
+}
+
 fn spawn_read_acl_helper(payload: &Payload, _log: &mut dyn Write) -> Result<()> {
     let mut read_payload = payload.clone();
     read_payload.mode = SetupMode::ReadAclsOnly;
     read_payload.refresh_only = true;
     let payload_json = serde_json::to_vec(&read_payload)?;
-    let payload_b64 = BASE64.encode(payload_json);
+    let payload_path = write_setup_payload_file(&payload.codex_home, payload_json.as_slice())?;
     let exe = std::env::current_exe().context("locate setup helper")?;
-    Command::new(&exe)
-        .arg(payload_b64)
+    let spawn_result = Command::new(&exe)
+        .arg("--payload-file")
+        .arg(&payload_path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .creation_flags(0x08000000) // CREATE_NO_WINDOW
-        .spawn()
-        .context("spawn read ACL helper")?;
+        .spawn();
+    if let Err(err) = spawn_result {
+        let _ = remove_setup_payload_file(&payload_path);
+        return Err(err).with_context(|| {
+            format!(
+                "spawn read ACL helper with payload file {}",
+                payload_path.display()
+            )
+        });
+    }
     Ok(())
 }
 
@@ -406,20 +594,107 @@ pub fn main() -> Result<()> {
 }
 
 fn real_main() -> Result<()> {
-    let mut args = std::env::args().collect::<Vec<_>>();
-    if args.len() != 2 {
-        return Err(anyhow::Error::new(SetupFailure::new(
-            SetupErrorCode::HelperRequestArgsFailed,
-            "expected payload argument",
-        )));
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
+    match parse_setup_invocation(&args)? {
+        SetupInvocation::TaskRun(path) => run_scheduled_setup_task(&path),
+        SetupInvocation::PayloadFile(path) => run_payload_file(&path),
     }
-    let payload_b64 = args.remove(1);
-    let payload_json = BASE64.decode(payload_b64).map_err(|err| {
-        anyhow::Error::new(SetupFailure::new(
+}
+
+fn parse_setup_invocation(args: &[String]) -> Result<SetupInvocation> {
+    match args {
+        [flag, path] if flag == "--task-run" => Ok(SetupInvocation::TaskRun(PathBuf::from(path))),
+        [flag, path] if flag == "--payload-file" => {
+            Ok(SetupInvocation::PayloadFile(PathBuf::from(path)))
+        }
+        _ => Err(anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperRequestArgsFailed,
-            format!("failed to decode payload b64: {err}"),
+            "expected --payload-file <path> or --task-run <broker-home>",
+        ))),
+    }
+}
+
+fn run_scheduled_setup_task(broker_home: &Path) -> Result<()> {
+    let sbx_dir = sandbox_dir(broker_home);
+    std::fs::create_dir_all(&sbx_dir).map_err(|err| {
+        anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperSandboxDirCreateFailed,
+            format!("failed to create sandbox dir {}: {err}", sbx_dir.display()),
         ))
     })?;
+    let mut log = log_writer(&sbx_dir).ok_or_else(|| {
+        anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperLogFailed,
+            format!("open log in {} failed", sbx_dir.display()),
+        ))
+    })?;
+    let mut processed = 0usize;
+    for entry in std::fs::read_dir(&sbx_dir).with_context(|| {
+        format!(
+            "failed to read scheduled setup payload dir {}",
+            sbx_dir.display()
+        )
+    })? {
+        let entry = entry?;
+        let path = entry.path();
+        let Some(request_id) = setup_task_request_id(&path) else {
+            continue;
+        };
+        processed += 1;
+        let payload_json = match std::fs::read(&path) {
+            Ok(contents) => contents,
+            Err(err) => {
+                let result_path = scheduled_setup_result_path(broker_home, &request_id);
+                let result = ScheduledSetupTaskResult {
+                    ok: false,
+                    message: Some(format!("failed to read scheduled setup payload: {err}")),
+                };
+                let _ = std::fs::write(&result_path, serde_json::to_vec(&result)?);
+                continue;
+            }
+        };
+        let result = run_payload_json(payload_json.as_slice());
+        let task_result = match result {
+            Ok(()) => ScheduledSetupTaskResult {
+                ok: true,
+                message: None,
+            },
+            Err(err) => ScheduledSetupTaskResult {
+                ok: false,
+                message: Some(err.to_string()),
+            },
+        };
+        let result_path = scheduled_setup_result_path(broker_home, &request_id);
+        std::fs::write(&result_path, serde_json::to_vec(&task_result)?).with_context(|| {
+            format!(
+                "failed to write scheduled setup result {}",
+                result_path.display()
+            )
+        })?;
+        let _ = std::fs::remove_file(&path);
+    }
+    log_line(
+        &mut log,
+        &format!("scheduled setup task processed {processed} payload(s)"),
+    )?;
+    Ok(())
+}
+
+fn run_payload_file(payload_path: &Path) -> Result<()> {
+    let payload_json = std::fs::read(payload_path).map_err(|err| {
+        anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperRequestArgsFailed,
+            format!(
+                "failed to read payload file {}: {err}",
+                payload_path.display()
+            ),
+        ))
+    })?;
+    let _ = remove_setup_payload_file(payload_path);
+    run_payload_json(payload_json.as_slice())
+}
+
+fn run_payload_json(payload_json: &[u8]) -> Result<()> {
     let payload: Payload = serde_json::from_slice(&payload_json).map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperRequestArgsFailed,
@@ -809,14 +1084,6 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
         }
     }
 
-    if refresh_only {
-        setup_runtime_bin::ensure_codex_app_runtime_bin_readable(
-            sandbox_group_psid,
-            &mut refresh_errors,
-            log,
-        )?;
-    }
-
     let write_mask =
         FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE | FILE_DELETE_CHILD;
     let mut grant_tasks: Vec<(PathBuf, String)> = Vec::new();
@@ -1005,6 +1272,12 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
     }
     if !refresh_only {
         lock_persistent_sandbox_dirs(payload, &sandbox_group_sid, log)?;
+        if let Err(err) = ensure_scheduled_setup_task(&payload.codex_home, log) {
+            log_line(
+                log,
+                &format!("scheduled setup task configure failed: {err:?}"),
+            )?;
+        }
     }
 
     unsafe {
@@ -1034,6 +1307,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::fs;
+    use std::path::PathBuf;
 
     fn payload_json() -> serde_json::Value {
         json!({
@@ -1077,6 +1351,55 @@ mod tests {
             Some(StatsigMetricsSettings {
                 environment: "prod".to_string(),
             })
+        );
+    }
+
+    #[test]
+    fn setup_invocation_accepts_payload_file_and_rejects_legacy_b64() {
+        let task_args = vec!["--task-run".to_string(), r"C:\broker".to_string()];
+        assert_eq!(
+            super::parse_setup_invocation(&task_args).expect("task invocation"),
+            super::SetupInvocation::TaskRun(PathBuf::from(r"C:\broker"))
+        );
+
+        let payload_args = vec![
+            "--payload-file".to_string(),
+            r"C:\runseal\payload.json".to_string(),
+        ];
+        assert_eq!(
+            super::parse_setup_invocation(&payload_args).expect("payload invocation"),
+            super::SetupInvocation::PayloadFile(PathBuf::from(r"C:\runseal\payload.json"))
+        );
+
+        let legacy_args = vec![r"eyJ2ZXJzaW9uIjo1fQ==".to_string()];
+        assert!(super::parse_setup_invocation(&legacy_args).is_err());
+    }
+
+    #[test]
+    fn payload_file_is_removed_after_read_even_when_json_is_invalid() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let payload_path = temp.path().join("setup-payload-invalid.json");
+        fs::write(&payload_path, b"{not-json").expect("write invalid payload");
+
+        let err = super::run_payload_file(&payload_path).expect_err("invalid json should fail");
+
+        assert!(!payload_path.exists());
+        assert!(err.to_string().contains("failed to parse payload json"));
+    }
+
+    #[test]
+    fn scheduled_setup_payload_scan_uses_json_suffix() {
+        assert_eq!(
+            super::setup_task_request_id(PathBuf::from("setup-task-payload-abc.json").as_path()),
+            Some("abc".to_string())
+        );
+        assert_eq!(
+            super::setup_task_request_id(PathBuf::from("setup-task-payload-.json").as_path()),
+            None
+        );
+        assert_eq!(
+            super::setup_task_request_id(PathBuf::from("setup-task-payload-abc.tmp").as_path()),
+            None
         );
     }
 

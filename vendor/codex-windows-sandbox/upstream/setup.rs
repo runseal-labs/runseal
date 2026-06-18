@@ -4,6 +4,8 @@ use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::c_void;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::os::windows::process::CommandExt;
 use std::path::Path;
 use std::path::PathBuf;
@@ -29,8 +31,6 @@ use crate::setup_error::read_setup_error_report;
 use crate::ssh_config_dependencies::ssh_config_dependency_paths;
 use anyhow::Result;
 use anyhow::anyhow;
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_protocol::models::PermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
@@ -47,6 +47,10 @@ const ERROR_CANCELLED: u32 = 1223;
 const SECURITY_BUILTIN_DOMAIN_RID: u32 = 0x0000_0020;
 const DOMAIN_ALIAS_RID_ADMINS: u32 = 0x0000_0220;
 const SETUP_EXE_FILENAME: &str = "runseal-windows-sandbox-setup.exe";
+const SETUP_PAYLOAD_DIRNAME: &str = "payloads";
+const SETUP_PAYLOAD_FILE_PREFIX: &str = "setup-payload-";
+const SETUP_PAYLOAD_FILE_SUFFIX: &str = ".json";
+const PROTECTED_WRITABLE_CHILDREN: &[&str] = &[".git", ".agents", ".codex"];
 const USERPROFILE_ROOT_EXCLUSIONS: &[&str] = &[
     ".ssh",
     ".tsh",
@@ -207,7 +211,7 @@ fn run_setup_refresh_inner(
         refresh_only: true,
     };
     let json = serde_json::to_vec(&payload)?;
-    let b64 = BASE64_STANDARD.encode(json);
+    let payload_path = write_setup_payload_file(request.codex_home, json.as_slice())?;
     let exe = find_setup_exe(request.codex_home);
     let sbx_dir = sandbox_dir(request.codex_home);
     let log_path = current_log_file_path(&sbx_dir);
@@ -223,23 +227,30 @@ fn run_setup_refresh_inner(
     };
     // Refresh should never request elevation; ensure verb isn't set and we don't trigger UAC.
     let mut cmd = Command::new(&exe);
-    cmd.arg(&b64).stdout(Stdio::null()).stderr(Stdio::null());
+    cmd.arg("--payload-file")
+        .arg(&payload_path)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
     let cwd = std::env::current_dir().unwrap_or_else(|_| request.codex_home.to_path_buf());
     log_note(
         &format!(
-            "setup refresh: spawning {} (cwd={}, payload_len={})",
+            "setup refresh: spawning {} (cwd={}, payload_file={}, payload_len={})",
             exe.display(),
             cwd.display(),
-            b64.len()
+            payload_path.display(),
+            json.len()
         ),
         Some(&sbx_dir),
     );
-    let status = cmd.status().map_err(|err| {
+    let status = cmd.status();
+    let _ = remove_setup_payload_file(&payload_path);
+    let status = status.map_err(|err| {
         let message = format!(
-            "setup refresh failed to launch helper: helper={}, cwd={}, log={}, error={err}",
+            "setup refresh failed to launch helper: helper={}, cwd={}, log={}, payload_file={}, error={err}",
             exe.display(),
             cwd.display(),
-            log_path.display()
+            log_path.display(),
+            payload_path.display()
         );
         log_note(&format!("setup refresh: {message}"), Some(&sbx_dir));
         failure(SetupErrorCode::OrchestratorHelperLaunchFailed, message)
@@ -658,6 +669,90 @@ fn quote_arg(arg: &str) -> String {
     out
 }
 
+fn setup_payload_dir(codex_home: &Path) -> PathBuf {
+    sandbox_dir(codex_home).join(SETUP_PAYLOAD_DIRNAME)
+}
+
+fn setup_payload_request_id() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    format!("{}-{nanos}", std::process::id())
+}
+
+fn setup_payload_path(codex_home: &Path, request_id: &str) -> PathBuf {
+    setup_payload_dir(codex_home).join(format!(
+        "{SETUP_PAYLOAD_FILE_PREFIX}{request_id}{SETUP_PAYLOAD_FILE_SUFFIX}"
+    ))
+}
+
+fn write_setup_payload_file(codex_home: &Path, payload_json: &[u8]) -> Result<PathBuf> {
+    let dir = setup_payload_dir(codex_home);
+    std::fs::create_dir_all(&dir).map_err(|err| {
+        failure(
+            SetupErrorCode::OrchestratorSandboxDirCreateFailed,
+            format!(
+                "failed to create setup payload dir {}: {err}",
+                dir.display()
+            ),
+        )
+    })?;
+
+    for attempt in 0..16 {
+        let request_id = format!("{}-{attempt}", setup_payload_request_id());
+        let path = setup_payload_path(codex_home, &request_id);
+        let mut file = match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(file) => file,
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => {
+                return Err(failure(
+                    SetupErrorCode::OrchestratorPayloadSerializeFailed,
+                    format!(
+                        "failed to create setup payload file {}: {err}",
+                        path.display()
+                    ),
+                ));
+            }
+        };
+        file.write_all(payload_json).map_err(|err| {
+            failure(
+                SetupErrorCode::OrchestratorPayloadSerializeFailed,
+                format!(
+                    "failed to write setup payload file {}: {err}",
+                    path.display()
+                ),
+            )
+        })?;
+        file.flush().map_err(|err| {
+            failure(
+                SetupErrorCode::OrchestratorPayloadSerializeFailed,
+                format!(
+                    "failed to flush setup payload file {}: {err}",
+                    path.display()
+                ),
+            )
+        })?;
+        return Ok(path);
+    }
+
+    Err(failure(
+        SetupErrorCode::OrchestratorPayloadSerializeFailed,
+        format!(
+            "failed to create unique setup payload file in {}",
+            dir.display()
+        ),
+    ))
+}
+
+fn remove_setup_payload_file(path: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
 fn find_setup_exe(codex_home: &Path) -> PathBuf {
     if let Ok(exe) = std::env::current_exe()
         && let Some(setup_exe) = find_setup_exe_for_current_exe(&exe)
@@ -701,6 +796,211 @@ fn verify_setup_completed(codex_home: &Path) -> Result<()> {
     }
 }
 
+const SCHEDULED_SETUP_TASK_NAME: &str = r"\RunSeal\WindowsSandboxSetup";
+const SCHEDULED_SETUP_PAYLOAD_PREFIX: &str = "setup-task-payload-";
+const SCHEDULED_SETUP_RESULT_PREFIX: &str = "setup-task-result-";
+
+#[derive(Debug, Deserialize)]
+struct ScheduledSetupTaskResult {
+    ok: bool,
+    message: Option<String>,
+}
+
+fn scheduled_setup_request_id() -> String {
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+    format!("{}-{millis}", std::process::id())
+}
+
+fn scheduled_setup_broker_home(fallback: &Path) -> PathBuf {
+    if let Some(path) = std::env::var_os("RUNSEAL_WINDOWS_SANDBOX_SETUP_BROKER_HOME") {
+        return PathBuf::from(path);
+    }
+    if let Some(user_data_dir) = std::env::var_os("RUNSEAL_USER_DATA_DIR") {
+        return PathBuf::from(user_data_dir).join("windows-sandbox");
+    }
+    if let Some(appdata) = std::env::var_os("APPDATA") {
+        return PathBuf::from(appdata)
+            .join("RunSeal")
+            .join("windows-sandbox");
+    }
+    fallback.to_path_buf()
+}
+
+fn scheduled_setup_payload_path(codex_home: &Path, request_id: &str) -> PathBuf {
+    sandbox_dir(codex_home).join(format!("{SCHEDULED_SETUP_PAYLOAD_PREFIX}{request_id}.json"))
+}
+
+fn scheduled_setup_result_path(codex_home: &Path, request_id: &str) -> PathBuf {
+    sandbox_dir(codex_home).join(format!("{SCHEDULED_SETUP_RESULT_PREFIX}{request_id}.json"))
+}
+
+fn normalized_scheduled_task_text(value: &str) -> String {
+    value.replace('\\', "/").to_ascii_lowercase()
+}
+
+fn scheduled_setup_task_command_path(xml: &str) -> Option<PathBuf> {
+    let start = xml.find("<Command>")? + "<Command>".len();
+    let end = xml[start..].find("</Command>")?;
+    let command = xml[start..start + end].trim();
+    (!command.is_empty()).then(|| PathBuf::from(command))
+}
+
+fn scheduled_setup_task_is_usable(broker_home: &Path) -> bool {
+    let output = Command::new("schtasks.exe")
+        .args(["/Query", "/TN", SCHEDULED_SETUP_TASK_NAME, "/XML"])
+        .creation_flags(0x08000000) // CREATE_NO_WINDOW
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output();
+
+    let Ok(output) = output else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+
+    let xml = String::from_utf8_lossy(&output.stdout);
+    let haystack = normalized_scheduled_task_text(&xml);
+    let needle = normalized_scheduled_task_text(&broker_home.to_string_lossy());
+    haystack.contains("--task-run")
+        && haystack.contains(&needle)
+        && scheduled_setup_task_command_path(&xml).is_some_and(|path| path.is_file())
+}
+
+fn try_run_setup_exe_via_scheduled_task(
+    payload_json: &[u8],
+    codex_home: &Path,
+    cleared_report: bool,
+) -> Result<()> {
+    let request_id = scheduled_setup_request_id();
+    let broker_home = scheduled_setup_broker_home(codex_home);
+    if !scheduled_setup_task_is_usable(&broker_home) {
+        return Err(failure(
+            SetupErrorCode::OrchestratorHelperLaunchFailed,
+            format!(
+                "scheduled setup task is not usable for broker home {}",
+                broker_home.display()
+            ),
+        ));
+    }
+
+    let payload_path = scheduled_setup_payload_path(&broker_home, &request_id);
+    let result_path = scheduled_setup_result_path(&broker_home, &request_id);
+    if let Some(parent) = payload_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| {
+            failure(
+                SetupErrorCode::OrchestratorSandboxDirCreateFailed,
+                format!(
+                    "failed to create setup task dir {}: {err}",
+                    parent.display()
+                ),
+            )
+        })?;
+    }
+    let _ = std::fs::remove_file(&result_path);
+    std::fs::write(&payload_path, payload_json).map_err(|err| {
+        failure(
+            SetupErrorCode::OrchestratorHelperLaunchFailed,
+            format!(
+                "failed to write scheduled setup payload {}: {err}",
+                payload_path.display()
+            ),
+        )
+    })?;
+
+    let output = Command::new("schtasks.exe")
+        .args(["/Run", "/TN", SCHEDULED_SETUP_TASK_NAME])
+        .creation_flags(0x08000000) // CREATE_NO_WINDOW
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|err| {
+            failure(
+                SetupErrorCode::OrchestratorHelperLaunchFailed,
+                format!("failed to run scheduled setup task: {err}"),
+            )
+        })?;
+    if !output.status.success() {
+        let _ = remove_setup_payload_file(&payload_path);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(failure(
+            SetupErrorCode::OrchestratorHelperLaunchFailed,
+            format!(
+                "scheduled setup task launch failed with status {:?}: {}",
+                output.status.code(),
+                stderr.trim()
+            ),
+        ));
+    }
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(180);
+    loop {
+        match std::fs::read_to_string(&result_path) {
+            Ok(contents) => {
+                let result: ScheduledSetupTaskResult =
+                    serde_json::from_str(&contents).map_err(|err| {
+                        let _ = remove_setup_payload_file(&payload_path);
+                        let _ = remove_setup_payload_file(&result_path);
+                        failure(
+                            SetupErrorCode::OrchestratorHelperLaunchFailed,
+                            format!(
+                                "failed to parse scheduled setup result {}: {err}",
+                                result_path.display()
+                            ),
+                        )
+                    })?;
+                let _ = std::fs::remove_file(&payload_path);
+                let _ = std::fs::remove_file(&result_path);
+                if result.ok {
+                    verify_setup_completed(codex_home)?;
+                    if let Err(err) = clear_setup_error_report(codex_home) {
+                        log_note(
+                            &format!(
+                                "setup orchestrator: failed to clear setup_error.json after scheduled task success: {err}"
+                            ),
+                            Some(&sandbox_dir(codex_home)),
+                        );
+                    }
+                    return Ok(());
+                }
+                if cleared_report {
+                    return Err(report_helper_failure(codex_home, cleared_report, Some(1)));
+                }
+                return Err(failure(
+                    SetupErrorCode::OrchestratorHelperExitNonzero,
+                    result
+                        .message
+                        .unwrap_or_else(|| "scheduled setup task failed".to_string()),
+                ));
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(failure(
+                    SetupErrorCode::OrchestratorHelperLaunchFailed,
+                    format!(
+                        "failed to read scheduled setup result {}: {err}",
+                        result_path.display()
+                    ),
+                ));
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = remove_setup_payload_file(&payload_path);
+            return Err(failure(
+                SetupErrorCode::OrchestratorHelperLaunchFailed,
+                "scheduled setup task timed out".to_string(),
+            ));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+}
+
 fn run_setup_exe(
     payload: &ElevationPayload,
     needs_elevation: bool,
@@ -720,7 +1020,6 @@ fn run_setup_exe(
             format!("failed to serialize elevation payload: {err}"),
         )
     })?;
-    let payload_b64 = BASE64_STANDARD.encode(payload_json.as_bytes());
     let cleared_report = match clear_setup_error_report(codex_home) {
         Ok(()) => true,
         Err(err) => {
@@ -735,19 +1034,25 @@ fn run_setup_exe(
     };
 
     if !needs_elevation {
+        let payload_path = write_setup_payload_file(codex_home, payload_json.as_bytes())?;
         let status = Command::new(&exe)
-            .arg(&payload_b64)
+            .arg("--payload-file")
+            .arg(&payload_path)
             .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status()
-            .map_err(|err| {
-                failure(
-                    SetupErrorCode::OrchestratorHelperLaunchFailed,
-                    format!("failed to launch setup helper (non-elevated): {err}"),
-                )
-            })?;
+            .status();
+        let _ = remove_setup_payload_file(&payload_path);
+        let status = status.map_err(|err| {
+            failure(
+                SetupErrorCode::OrchestratorHelperLaunchFailed,
+                format!(
+                    "failed to launch setup helper (non-elevated): payload_file={}, error={err}",
+                    payload_path.display()
+                ),
+            )
+        })?;
         if !status.success() {
             return Err(report_helper_failure(
                 codex_home,
@@ -767,8 +1072,23 @@ fn run_setup_exe(
         return Ok(());
     }
 
+    match try_run_setup_exe_via_scheduled_task(payload_json.as_bytes(), codex_home, cleared_report)
+    {
+        Ok(()) => return Ok(()),
+        Err(err) => {
+            log_note(
+                &format!("setup orchestrator: scheduled setup task unavailable: {err}"),
+                Some(&sandbox_dir(codex_home)),
+            );
+        }
+    }
+
+    let payload_path = write_setup_payload_file(codex_home, payload_json.as_bytes())?;
     let exe_w = crate::winutil::to_wide(&exe);
-    let params = quote_arg(&payload_b64);
+    let params = format!(
+        "--payload-file {}",
+        quote_arg(&payload_path.to_string_lossy())
+    );
     let params_w = crate::winutil::to_wide(params);
     let verb_w = crate::winutil::to_wide("runas");
     let mut sei: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
@@ -781,6 +1101,7 @@ fn run_setup_exe(
     sei.nShow = 0; // SW_HIDE
     let ok = unsafe { ShellExecuteExW(&mut sei) };
     if ok == 0 || sei.hProcess == 0 {
+        let _ = remove_setup_payload_file(&payload_path);
         let last_error = unsafe { GetLastError() };
         let code = if last_error == ERROR_CANCELLED {
             SetupErrorCode::OrchestratorHelperLaunchCanceled
@@ -797,6 +1118,7 @@ fn run_setup_exe(
         let mut code: u32 = 1;
         GetExitCodeProcess(sei.hProcess, &mut code);
         CloseHandle(sei.hProcess);
+        let _ = remove_setup_payload_file(&payload_path);
         if code != 0 {
             return Err(report_helper_failure(
                 codex_home,
@@ -955,7 +1277,28 @@ fn build_payload_deny_write_paths(
         .map(|path| canonicalize_path(&path))
         .collect();
     deny_write_paths.extend(allow_deny_paths.deny);
+    deny_write_paths.extend(existing_protected_children_for_roots(
+        &allow_deny_paths.allow,
+    ));
     deny_write_paths
+}
+
+fn existing_protected_children_for_roots(roots: &HashSet<PathBuf>) -> Vec<PathBuf> {
+    let mut seen = HashSet::new();
+    let mut protected = Vec::new();
+    for root in roots {
+        for child in PROTECTED_WRITABLE_CHILDREN {
+            let path = root.join(child);
+            if !path.exists() {
+                continue;
+            }
+            let path = canonicalize_path(&path);
+            if seen.insert(path.clone()) {
+                protected.push(path);
+            }
+        }
+    }
+    protected
 }
 
 fn build_payload_deny_read_paths(explicit_deny_read_paths: Option<Vec<PathBuf>>) -> Vec<PathBuf> {
@@ -1097,8 +1440,11 @@ mod tests {
     use super::loopback_proxy_port_from_url;
     use super::profile_read_roots;
     use super::proxy_ports_from_env;
+    use super::remove_setup_payload_file;
     use super::sandbox_proxy_settings_from_env;
+    use super::setup_payload_dir;
     use super::verify_setup_completed;
+    use super::write_setup_payload_file;
     use crate::helper_materialization::BIN_DIRNAME;
     use crate::helper_materialization::RESOURCES_DIRNAME;
     use crate::helper_materialization::helper_bin_dir;
@@ -1135,6 +1481,64 @@ mod tests {
             extract_failure(&err).map(|failure| failure.code),
             Some(SetupErrorCode::OrchestratorHelperIncomplete)
         );
+    }
+
+    #[test]
+    fn setup_payload_file_is_written_under_sandbox_payload_dir_and_removed() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+        let payload = br#"{"version":5}"#;
+
+        let path = write_setup_payload_file(codex_home.as_path(), payload).expect("payload file");
+
+        assert!(path.starts_with(setup_payload_dir(codex_home.as_path())));
+        assert_eq!(path.extension().and_then(|ext| ext.to_str()), Some("json"));
+        assert_eq!(fs::read(&path).expect("read payload file"), payload);
+
+        remove_setup_payload_file(&path).expect("remove payload file");
+        assert!(!path.exists());
+        remove_setup_payload_file(&path).expect("remove missing payload file");
+    }
+
+    #[test]
+    fn scheduled_setup_paths_are_under_broker_sandbox_dir() {
+        let tmp = TempDir::new().expect("tempdir");
+        let broker_home = tmp.path().join("runseal-broker");
+
+        let payload_path = super::scheduled_setup_payload_path(&broker_home, "req-1");
+        let result_path = super::scheduled_setup_result_path(&broker_home, "req-1");
+
+        assert!(payload_path.starts_with(super::sandbox_dir(&broker_home)));
+        assert!(result_path.starts_with(super::sandbox_dir(&broker_home)));
+        assert_eq!(
+            payload_path.file_name().and_then(|name| name.to_str()),
+            Some("setup-task-payload-req-1.json")
+        );
+        assert_eq!(
+            result_path.file_name().and_then(|name| name.to_str()),
+            Some("setup-task-result-req-1.json")
+        );
+    }
+
+    #[test]
+    fn scheduled_setup_task_text_normalization_matches_windows_paths() {
+        assert_eq!(
+            super::normalized_scheduled_task_text(r"C:\Users\Me\AppData\Roaming\RunSeal"),
+            "c:/users/me/appdata/roaming/runseal"
+        );
+    }
+
+    #[test]
+    fn scheduled_setup_task_command_path_extracts_helper_path() {
+        let tmp = TempDir::new().expect("tempdir");
+        let helper = tmp.path().join("runseal-windows-sandbox-setup.exe");
+        fs::write(&helper, b"helper").expect("write helper");
+        let xml = format!(
+            "<Task><Actions><Exec><Command>{}</Command></Exec></Actions></Task>",
+            helper.display()
+        );
+
+        assert_eq!(super::scheduled_setup_task_command_path(&xml), Some(helper));
     }
 
     fn permissions_for(

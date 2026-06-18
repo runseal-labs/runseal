@@ -316,17 +316,15 @@ mod tests {
     fn invalid_glob_patterns_fail_before_expansion() {
         let tmp = TempDir::new().expect("tempdir");
         let cwd = AbsolutePathBuf::from_absolute_path(tmp.path()).expect("absolute cwd");
-        let policy = FileSystemSandboxPolicy::restricted(vec![unreadable_glob_entry(format!(
-            "{}/**/[z-a]",
-            tmp.path().display()
-        ))]);
+        let root = tmp.path().to_string_lossy().replace('\\', "/");
+        let policy =
+            FileSystemSandboxPolicy::restricted(vec![unreadable_glob_entry(format!("{root}/**b"))]);
 
         let err = resolve_windows_deny_read_paths(&policy, &cwd).expect_err("invalid glob");
         assert!(
-            err.contains("invalid deny-read glob pattern"),
+            err.contains("recursive wildcards"),
             "unexpected error: {err}"
         );
-        assert!(err.contains("invalid range"), "unexpected error: {err}");
     }
 
     #[test]
