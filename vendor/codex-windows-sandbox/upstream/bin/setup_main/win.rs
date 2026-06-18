@@ -282,6 +282,62 @@ fn scheduled_setup_result_path(codex_home: &Path, request_id: &str) -> PathBuf {
     sandbox_dir(codex_home).join(format!("{SCHEDULED_SETUP_RESULT_PREFIX}{request_id}.json"))
 }
 
+fn scheduled_setup_result_temp_path(codex_home: &Path, request_id: &str) -> PathBuf {
+    sandbox_dir(codex_home).join(format!(
+        "{SCHEDULED_SETUP_RESULT_PREFIX}{request_id}.json.tmp"
+    ))
+}
+
+fn write_scheduled_setup_result(
+    broker_home: &Path,
+    request_id: &str,
+    result: &ScheduledSetupTaskResult,
+) -> Result<()> {
+    let result_path = scheduled_setup_result_path(broker_home, request_id);
+    let temp_path = scheduled_setup_result_temp_path(broker_home, request_id);
+    let _ = remove_setup_payload_file(&temp_path);
+    if result_path.exists() {
+        anyhow::bail!(
+            "failed to publish scheduled setup result {}: result already exists",
+            result_path.display()
+        );
+    }
+    let result_json = serde_json::to_vec(result)?;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp_path)
+        .with_context(|| {
+            format!(
+                "failed to create scheduled setup result {}",
+                temp_path.display()
+            )
+        })?;
+    file.write_all(&result_json).with_context(|| {
+        format!(
+            "failed to write scheduled setup result {}",
+            temp_path.display()
+        )
+    })?;
+    file.flush().with_context(|| {
+        format!(
+            "failed to flush scheduled setup result {}",
+            temp_path.display()
+        )
+    })?;
+    drop(file);
+    if let Err(err) = std::fs::rename(&temp_path, &result_path) {
+        let _ = remove_setup_payload_file(&temp_path);
+        return Err(err).with_context(|| {
+            format!(
+                "failed to publish scheduled setup result {}",
+                result_path.display()
+            )
+        });
+    }
+    Ok(())
+}
+
 fn setup_task_request_id(path: &Path) -> Option<String> {
     let name = path.file_name()?.to_string_lossy();
     let rest = name.strip_prefix(SCHEDULED_SETUP_PAYLOAD_PREFIX)?;
@@ -653,22 +709,20 @@ fn run_scheduled_setup_task(broker_home: &Path) -> Result<()> {
         let payload_json = match std::fs::read(&path) {
             Ok(contents) => contents,
             Err(err) => {
-                let result_path = scheduled_setup_result_path(broker_home, &request_id);
                 let result = ScheduledSetupTaskResult {
                     ok: false,
                     message: Some(format!("failed to read scheduled setup payload: {err}")),
                 };
-                let _ = std::fs::write(&result_path, serde_json::to_vec(&result)?);
+                write_scheduled_setup_result(broker_home, &request_id, &result)?;
                 continue;
             }
         };
         if let Err(err) = remove_setup_payload_file(&path) {
-            let result_path = scheduled_setup_result_path(broker_home, &request_id);
             let result = ScheduledSetupTaskResult {
                 ok: false,
                 message: Some(format!("failed to remove scheduled setup payload: {err}")),
             };
-            let _ = std::fs::write(&result_path, serde_json::to_vec(&result)?);
+            write_scheduled_setup_result(broker_home, &request_id, &result)?;
             continue;
         }
         let result = run_payload_json(payload_json.as_slice());
@@ -682,13 +736,7 @@ fn run_scheduled_setup_task(broker_home: &Path) -> Result<()> {
                 message: Some(err.to_string()),
             },
         };
-        let result_path = scheduled_setup_result_path(broker_home, &request_id);
-        std::fs::write(&result_path, serde_json::to_vec(&task_result)?).with_context(|| {
-            format!(
-                "failed to write scheduled setup result {}",
-                result_path.display()
-            )
-        })?;
+        write_scheduled_setup_result(broker_home, &request_id, &task_result)?;
     }
     log_line(
         &mut log,
@@ -1414,6 +1462,35 @@ mod tests {
             super::setup_task_request_id(PathBuf::from("setup-task-payload-abc.tmp").as_path()),
             None
         );
+    }
+
+    #[test]
+    fn scheduled_setup_result_publish_does_not_overwrite_existing_result() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let broker_home = temp.path().join("broker");
+        let sbx_dir = codex_windows_sandbox::sandbox_dir(&broker_home);
+        fs::create_dir_all(&sbx_dir).expect("create broker dir");
+        let request_id = "req-1";
+        let result_path = super::scheduled_setup_result_path(&broker_home, request_id);
+        let temp_path = super::scheduled_setup_result_temp_path(&broker_home, request_id);
+        fs::write(&result_path, br#"{"ok":true,"message":null}"#).expect("write old result");
+        let result = super::ScheduledSetupTaskResult {
+            ok: false,
+            message: Some("new".to_string()),
+        };
+
+        let err = super::write_scheduled_setup_result(&broker_home, request_id, &result)
+            .expect_err("existing result must fail closed");
+
+        assert!(
+            err.to_string()
+                .contains("failed to publish scheduled setup result")
+        );
+        assert_eq!(
+            fs::read_to_string(&result_path).expect("read old result"),
+            r#"{"ok":true,"message":null}"#
+        );
+        assert!(!temp_path.exists());
     }
 
     #[test]
