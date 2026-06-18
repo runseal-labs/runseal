@@ -10,10 +10,20 @@ use std::env;
 use std::ffi::OsString;
 use std::fs;
 use std::io::{self, Write};
+#[cfg(windows)]
+use std::os::windows::io::AsRawHandle;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
+#[cfg(windows)]
+use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+#[cfg(windows)]
+use windows_sys::Win32::System::JobObjects::{
+    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+    SetInformationJobObject,
+};
 
 const RUNTIME_ROOT_MARKER: &str = ".runseal-runtime-root";
 
@@ -1075,21 +1085,19 @@ fn spawn_local_command(
     }
 
     let Some(timeout) = timeout else {
+        process.stdout(Stdio::piped()).stderr(Stdio::piped());
+        let mut child = process.spawn()?;
+        #[cfg(windows)]
+        let _process_job = assign_windows_process_job(plan, &child)?;
         if let ExecutionStdin::Bytes(bytes) = stdin {
-            process.stdout(Stdio::piped()).stderr(Stdio::piped());
-            let mut child = process.spawn()?;
             write_child_stdin(&mut child, bytes)?;
-            return child
-                .wait_with_output()
-                .map(|output| BackendExecutionOutput {
-                    output,
-                    timed_out: false,
-                });
         }
-        return process.output().map(|output| BackendExecutionOutput {
-            output,
-            timed_out: false,
-        });
+        return child
+            .wait_with_output()
+            .map(|output| BackendExecutionOutput {
+                output,
+                timed_out: false,
+            });
     };
 
     if matches!(stdin, ExecutionStdin::Bytes(_)) {
@@ -1097,6 +1105,8 @@ fn spawn_local_command(
     }
     let start = Instant::now();
     let mut child = process.spawn()?;
+    #[cfg(windows)]
+    let _process_job = assign_windows_process_job(plan, &child)?;
     if let ExecutionStdin::Bytes(bytes) = stdin {
         write_child_stdin(&mut child, bytes)?;
     }
@@ -1137,6 +1147,75 @@ fn write_child_stdin(child: &mut std::process::Child, bytes: Vec<u8>) -> io::Res
         stdin.write_all(&bytes)?;
     }
     Ok(())
+}
+
+#[cfg(windows)]
+fn assign_windows_process_job(
+    plan: &PlatformSandboxPlan,
+    child: &std::process::Child,
+) -> io::Result<Option<WindowsKillOnCloseJob>> {
+    if plan.private_process_job != "kill-on-close-job" {
+        return Ok(None);
+    }
+    let job = WindowsKillOnCloseJob::new()?;
+    job.assign_child(child)?;
+    Ok(Some(job))
+}
+
+#[cfg(windows)]
+struct WindowsKillOnCloseJob {
+    handle: HANDLE,
+}
+
+#[cfg(windows)]
+impl WindowsKillOnCloseJob {
+    fn new() -> io::Result<Self> {
+        let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+        if handle.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        let job = Self { handle };
+        if let Err(err) = job.set_kill_on_close() {
+            drop(job);
+            return Err(err);
+        }
+        Ok(job)
+    }
+
+    fn set_kill_on_close(&self) -> io::Result<()> {
+        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        let result = unsafe {
+            SetInformationJobObject(
+                self.handle,
+                JobObjectExtendedLimitInformation,
+                std::ptr::addr_of!(limits).cast(),
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            )
+        };
+        if result == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    fn assign_child(&self, child: &std::process::Child) -> io::Result<()> {
+        let process_handle = child.as_raw_handle() as HANDLE;
+        let result = unsafe { AssignProcessToJobObject(self.handle, process_handle) };
+        if result == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+impl Drop for WindowsKillOnCloseJob {
+    fn drop(&mut self) {
+        unsafe {
+            CloseHandle(self.handle);
+        }
+    }
 }
 
 fn minimal_environment(plan: &PlatformSandboxPlan) -> Vec<(OsString, OsString)> {
@@ -1668,6 +1747,20 @@ mod tests {
                 format!("apply:{}", path_string(&cwd)),
             ]
         );
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_kill_on_close_job_assigns_child_process() -> io::Result<()> {
+        let job = WindowsKillOnCloseJob::new()?;
+        let mut child = std::process::Command::new("cmd")
+            .args(["/C", "ping -n 2 127.0.0.1 >NUL"])
+            .spawn()?;
+
+        job.assign_child(&child)?;
+        drop(job);
+        child.wait()?;
         Ok(())
     }
 

@@ -396,6 +396,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "time",
+ "windows-sys",
 ]
 
 [[package]]
