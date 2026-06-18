@@ -113,6 +113,7 @@ enum SetupMode {
     #[default]
     Full,
     ProvisionOnly,
+    NetworkOnly,
     ReadAclsOnly,
 }
 
@@ -686,15 +687,28 @@ fn real_main() -> Result<()> {
 
 fn parse_setup_invocation(args: &[String]) -> Result<SetupInvocation> {
     match args {
-        [flag, path] if flag == "--task-run" => Ok(SetupInvocation::TaskRun(PathBuf::from(path))),
-        [flag, path] if flag == "--payload-file" => {
-            Ok(SetupInvocation::PayloadFile(PathBuf::from(path)))
-        }
+        [flag, path] if flag == "--task-run" => Ok(SetupInvocation::TaskRun(
+            parse_setup_invocation_path(flag, path)?,
+        )),
+        [flag, path] if flag == "--payload-file" => Ok(SetupInvocation::PayloadFile(
+            parse_setup_invocation_path(flag, path)?,
+        )),
         _ => Err(anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperRequestArgsFailed,
             "expected --payload-file <path> or --task-run <broker-home>",
         ))),
     }
+}
+
+fn parse_setup_invocation_path(flag: &str, path: &str) -> Result<PathBuf> {
+    let path = PathBuf::from(path);
+    if !path.is_absolute() {
+        return Err(anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperRequestArgsFailed,
+            format!("{flag} requires an absolute path"),
+        )));
+    }
+    Ok(path)
 }
 
 fn run_scheduled_setup_task(broker_home: &Path) -> Result<()> {
@@ -835,12 +849,15 @@ fn run_payload_json(payload_json: &[u8]) -> Result<()> {
 
 fn run_setup(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Result<()> {
     let writes_setup_marker = !payload.refresh_only && payload.mode != SetupMode::ReadAclsOnly;
-    if writes_setup_marker {
+    let provisions_identity =
+        !payload.refresh_only && matches!(payload.mode, SetupMode::Full | SetupMode::ProvisionOnly);
+    if provisions_identity {
         prepare_setup_marker(&payload.codex_home, &payload.real_user)?;
     }
     match payload.mode {
         SetupMode::ReadAclsOnly => run_read_acl_only(payload, log),
         SetupMode::ProvisionOnly => run_provision_only(payload, log, sbx_dir),
+        SetupMode::NetworkOnly => run_network_only(payload, log, sbx_dir),
         SetupMode::Full => run_setup_full(payload, log, sbx_dir),
     }?;
     if writes_setup_marker {
@@ -1078,6 +1095,24 @@ fn run_provision_only(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) ->
     lock_persistent_sandbox_dirs(payload, &sandbox_group_sid, log)?;
     ensure_scheduled_setup_task_or_fail(&payload.codex_home, log)?;
     log_note("setup provisioning binary completed", Some(sbx_dir));
+    Ok(())
+}
+
+fn run_network_only(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Result<()> {
+    log_line(log, "network-only mode: refreshing sandbox network guard")?;
+    let sandbox_sid = resolve_sid(&payload.sandbox_username).map_err(|err| {
+        anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperSidResolveFailed,
+            format!(
+                "resolve SID for sandbox user {} failed: {err}",
+                payload.sandbox_username
+            ),
+        ))
+    })?;
+    let sandbox_sid_str = string_from_sid_bytes(&sandbox_sid).map_err(anyhow::Error::msg)?;
+
+    configure_sandbox_network_guard(payload, &sandbox_sid_str, log)?;
+    log_note("setup network refresh completed", Some(sbx_dir));
     Ok(())
 }
 
@@ -1418,6 +1453,15 @@ mod tests {
     }
 
     #[test]
+    fn payload_accepts_network_only_mode() {
+        let mut payload = payload_json();
+        payload["mode"] = json!("network-only");
+        let payload: Payload = serde_json::from_value(payload).expect("payload");
+
+        assert_eq!(payload.mode, super::SetupMode::NetworkOnly);
+    }
+
+    #[test]
     fn payload_accepts_otel_settings() {
         let mut payload = payload_json();
         payload["otel"] = json!({
@@ -1452,6 +1496,15 @@ mod tests {
 
         let legacy_args = vec![r"eyJ2ZXJzaW9uIjo1fQ==".to_string()];
         assert!(super::parse_setup_invocation(&legacy_args).is_err());
+    }
+
+    #[test]
+    fn setup_invocation_rejects_relative_paths() {
+        let task_args = vec!["--task-run".to_string(), r"broker".to_string()];
+        assert!(super::parse_setup_invocation(&task_args).is_err());
+
+        let payload_args = vec!["--payload-file".to_string(), r"payload.json".to_string()];
+        assert!(super::parse_setup_invocation(&payload_args).is_err());
     }
 
     #[test]

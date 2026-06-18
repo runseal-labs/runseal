@@ -537,6 +537,7 @@ struct ElevationPayload {
 enum SetupMode {
     Full,
     ProvisionOnly,
+    NetworkOnly,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1160,6 +1161,51 @@ pub fn run_elevated_setup(
         real_user: std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string()),
         otel: codex_otel::global_statsig_metrics_settings(),
         mode: SetupMode::Full,
+        refresh_only: false,
+    };
+    let needs_elevation = !is_elevated().map_err(|err| {
+        failure(
+            SetupErrorCode::OrchestratorElevationCheckFailed,
+            format!("failed to determine elevation state: {err}"),
+        )
+    })?;
+    run_setup_exe(&payload, needs_elevation, request.codex_home)
+}
+
+pub fn run_elevated_network_setup(
+    request: SandboxSetupRequest<'_>,
+    overrides: SetupRootOverrides,
+) -> Result<()> {
+    if !request.permissions.is_enforceable_by_windows_sandbox() {
+        anyhow::bail!("unsupported filesystem permissions for Windows sandbox setup");
+    }
+    let sbx_dir = sandbox_dir(request.codex_home);
+    std::fs::create_dir_all(&sbx_dir).map_err(|err| {
+        failure(
+            SetupErrorCode::OrchestratorSandboxDirCreateFailed,
+            format!("failed to create sandbox dir {}: {err}", sbx_dir.display()),
+        )
+    })?;
+    let (read_roots, write_roots) = build_payload_roots(&request, &overrides);
+    let deny_read_paths = build_payload_deny_read_paths(overrides.deny_read_paths);
+    let deny_write_paths = build_payload_deny_write_paths(&request, overrides.deny_write_paths);
+    let network_guard =
+        SandboxNetworkGuard::from_permissions(request.permissions, request.proxy_enforced);
+    let sandbox_proxy_settings = sandbox_proxy_settings_from_env(request.env_map, network_guard);
+    let payload = ElevationPayload {
+        version: SETUP_VERSION,
+        sandbox_username: SANDBOX_USERNAME.to_string(),
+        codex_home: request.codex_home.to_path_buf(),
+        command_cwd: request.command_cwd.to_path_buf(),
+        read_roots,
+        write_roots,
+        deny_read_paths,
+        deny_write_paths,
+        proxy_ports: sandbox_proxy_settings.proxy_ports,
+        allow_local_binding: sandbox_proxy_settings.allow_local_binding,
+        real_user: std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string()),
+        otel: codex_otel::global_statsig_metrics_settings(),
+        mode: SetupMode::NetworkOnly,
         refresh_only: false,
     };
     let needs_elevation = !is_elevated().map_err(|err| {

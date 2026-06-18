@@ -7,6 +7,7 @@ use crate::setup::SandboxUsersFile;
 use crate::setup::SetupMarker;
 use crate::setup::gather_read_roots;
 use crate::setup::gather_write_roots_for_permissions;
+use crate::setup::run_elevated_network_setup;
 use crate::setup::run_elevated_setup;
 use crate::setup::run_setup_refresh_with_overrides;
 use crate::setup::sandbox_proxy_settings_from_env;
@@ -166,13 +167,22 @@ pub fn require_logon_sandbox_creds(
     // granting the sandbox group access to this directory without granting the capability SID.
     let mut setup_reason: Option<String> = None;
 
+    let mut refresh_network_only = false;
     let mut identity = match load_marker(codex_home)? {
         Some(marker) if marker.version_matches() => {
             if let Some(reason) =
                 marker.request_mismatch_reason(network_guard, &desired_sandbox_proxy_settings)
             {
                 setup_reason = Some(reason);
-                None
+                refresh_network_only = true;
+                let selected = select_identity(network_guard, codex_home)?;
+                if selected.is_none() {
+                    setup_reason = Some(
+                        "sandbox users missing or incompatible with marker version".to_string(),
+                    );
+                    refresh_network_only = false;
+                }
+                selected
             } else {
                 let selected = select_identity(network_guard, codex_home)?;
                 if selected.is_none() {
@@ -188,6 +198,33 @@ pub fn require_logon_sandbox_creds(
             None
         }
     };
+
+    if refresh_network_only {
+        if let Some(reason) = &setup_reason {
+            crate::logging::log_note(
+                &format!("sandbox network refresh required: {reason}"),
+                Some(&sandbox_dir),
+            );
+        } else {
+            crate::logging::log_note("sandbox network refresh required", Some(&sandbox_dir));
+        }
+        run_elevated_network_setup(
+            crate::setup::SandboxSetupRequest {
+                permissions,
+                command_cwd,
+                env_map,
+                codex_home,
+                proxy_enforced,
+            },
+            crate::setup::SetupRootOverrides {
+                read_roots: Some(needed_read.clone()),
+                read_roots_include_platform_defaults,
+                write_roots: Some(needed_write.clone()),
+                deny_read_paths: Some(deny_read_paths_override.to_vec()),
+                deny_write_paths: Some(deny_write_paths_override.to_vec()),
+            },
+        )?;
+    }
 
     if identity.is_none() {
         if let Some(reason) = &setup_reason {

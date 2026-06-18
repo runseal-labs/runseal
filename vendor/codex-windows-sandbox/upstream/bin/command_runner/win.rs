@@ -50,6 +50,8 @@ use std::path::PathBuf;
 use std::ptr;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::ERROR_FILE_NOT_FOUND;
 use windows_sys::Win32::Foundation::GetLastError;
@@ -67,6 +69,7 @@ use windows_sys::Win32::System::JobObjects::JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
 use windows_sys::Win32::System::JobObjects::JOBOBJECT_EXTENDED_LIMIT_INFORMATION;
 use windows_sys::Win32::System::JobObjects::JobObjectExtendedLimitInformation;
 use windows_sys::Win32::System::JobObjects::SetInformationJobObject;
+use windows_sys::Win32::System::JobObjects::TerminateJobObject;
 use windows_sys::Win32::System::Threading::GetExitCodeProcess;
 use windows_sys::Win32::System::Threading::GetProcessId;
 use windows_sys::Win32::System::Threading::INFINITE;
@@ -381,6 +384,7 @@ fn spawn_input_loop(
     stdin_handle: Option<HANDLE>,
     hpc_handle: Arc<StdMutex<Option<HANDLE>>>,
     process_handle: Arc<StdMutex<Option<HANDLE>>>,
+    terminated_by_request: Arc<AtomicBool>,
     log_dir: Option<PathBuf>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
@@ -473,6 +477,7 @@ fn spawn_input_loop(
                     }
                 }
                 Message::Terminate { .. } => {
+                    terminated_by_request.store(true, Ordering::SeqCst);
                     if let Ok(guard) = process_handle.lock()
                         && let Some(handle) = guard.as_ref()
                     {
@@ -548,14 +553,35 @@ pub fn main() -> Result<()> {
     let stdin_handle = ipc_spawn.stdin_handle;
     let hpc_handle = Arc::new(StdMutex::new(ipc_spawn.hpc_handle));
 
-    let h_job = unsafe { create_job_kill_on_close().ok() };
-    if let Some(job) = h_job {
-        unsafe {
-            let _ = AssignProcessToJobObject(job, pi.hProcess);
+    let h_job = unsafe {
+        match create_job_kill_on_close() {
+            Ok(job) => {
+                if AssignProcessToJobObject(job, pi.hProcess) == 0 {
+                    log_note(
+                        &format!(
+                            "runner failed to assign child process to job object: {}",
+                            GetLastError()
+                        ),
+                        log_dir,
+                    );
+                    CloseHandle(job);
+                    None
+                } else {
+                    Some(job)
+                }
+            }
+            Err(err) => {
+                log_note(
+                    &format!("runner failed to create kill-on-close job object: {err}"),
+                    log_dir,
+                );
+                None
+            }
         }
-    }
+    };
 
     let process_handle = Arc::new(StdMutex::new(Some(pi.hProcess)));
+    let terminated_by_request = Arc::new(AtomicBool::new(false));
 
     let msg = FramedMessage {
         version: IPC_PROTOCOL_VERSION,
@@ -596,12 +622,14 @@ pub fn main() -> Result<()> {
         stdin_handle,
         Arc::clone(&hpc_handle),
         Arc::clone(&process_handle),
+        Arc::clone(&terminated_by_request),
         log_dir_owned,
     );
 
     let timeout = req.timeout_ms.map(|ms| ms as u32).unwrap_or(INFINITE);
     let wait_res = unsafe { WaitForSingleObject(pi.hProcess, timeout) };
     let timed_out = wait_res == WAIT_TIMEOUT;
+    let interrupted = timed_out || terminated_by_request.load(Ordering::SeqCst);
 
     let exit_code: i32;
     unsafe {
@@ -620,6 +648,9 @@ pub fn main() -> Result<()> {
             CloseHandle(pi.hProcess);
         }
         if let Some(job) = h_job {
+            if interrupted {
+                let _ = TerminateJobObject(job, 1);
+            }
             CloseHandle(job);
         }
     }
@@ -629,9 +660,16 @@ pub fn main() -> Result<()> {
     }
     drop(conpty_owner.take());
 
-    let _ = out_thread.join();
-    if let Some(thread) = err_thread {
-        let _ = thread.join();
+    if interrupted {
+        log_note(
+            "runner skipped blocking output reader joins after interruption",
+            log_dir,
+        );
+    } else {
+        let _ = out_thread.join();
+        if let Some(thread) = err_thread {
+            let _ = thread.join();
+        }
     }
 
     let exit_msg = FramedMessage {
