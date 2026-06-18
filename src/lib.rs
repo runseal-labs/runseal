@@ -1034,6 +1034,8 @@ fn execute_command(
         }
     };
     let mut output = execution_output.output;
+    let original_stdout_bytes = output.stdout.len();
+    let original_stderr_bytes = output.stderr.len();
     let output_truncated = truncate_output(&mut output, policy.resources.max_output_bytes);
     let duration_ms = timer.elapsed().as_millis() as u64;
     if execution_output.timed_out {
@@ -1102,6 +1104,8 @@ fn execute_command(
                 "max_output_bytes": policy.resources.max_output_bytes,
                 "stdout_bytes": output.stdout.len(),
                 "stderr_bytes": output.stderr.len(),
+                "original_stdout_bytes": original_stdout_bytes,
+                "original_stderr_bytes": original_stderr_bytes,
             }),
             &event_context,
         );
@@ -1125,6 +1129,56 @@ fn execute_command(
         &event_context,
     );
     write_audit_event_with_metadata(&mut audit, &resource_sample, &metadata)?;
+    if output_truncated {
+        let limit_exceeded = execution_event_at(
+            json!({
+                "type": "execution.resource.limit_exceeded",
+                "decision": "limit_exceeded",
+                "resource": "max_output_bytes",
+                "limit": policy.resources.max_output_bytes,
+                "stdout_bytes": original_stdout_bytes,
+                "stderr_bytes": original_stderr_bytes,
+                "retained_stdout_bytes": output.stdout.len(),
+                "retained_stderr_bytes": output.stderr.len(),
+            }),
+            &finished_at,
+            &event_context,
+        );
+        write_audit_event_with_metadata(&mut audit, &limit_exceeded, &metadata)?;
+        let failed = execution_event_at(
+            json!({
+                "type": "execution.failed",
+                "execution_id": ids.execution_id,
+                "policy_id": policy_id,
+                "policy_hash": policy_hash,
+                "audit_path": audit_path,
+                "status": "failed",
+                "reason": "output limit exceeded",
+                "max_output_bytes": policy.resources.max_output_bytes,
+                "stdout_bytes": original_stdout_bytes,
+                "stderr_bytes": original_stderr_bytes,
+            }),
+            &finished_at,
+            &event_context,
+        );
+        write_audit_event_with_metadata(&mut audit, &failed, &metadata)?;
+
+        return Err(RunSealError::with_details(
+            "OUTPUT_LIMIT_EXCEEDED",
+            "output limit exceeded",
+            json!({
+                "execution_id": ids.execution_id,
+                "session_id": ids.session_id,
+                "seal_id": ids.seal_id,
+                "audit_path": audit_path,
+                "max_output_bytes": policy.resources.max_output_bytes,
+                "stdout_bytes": original_stdout_bytes,
+                "stderr_bytes": original_stderr_bytes,
+                "retained_stdout_bytes": output.stdout.len(),
+                "retained_stderr_bytes": output.stderr.len(),
+            }),
+        ));
+    }
     let finished = execution_event_at(
         json!({
             "type": "execution.finished",
