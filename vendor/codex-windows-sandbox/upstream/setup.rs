@@ -186,9 +186,9 @@ fn run_setup_refresh_inner(
     let (read_roots, write_roots) = build_payload_roots(&request, &overrides);
     let deny_read_paths = build_payload_deny_read_paths(overrides.deny_read_paths);
     let deny_write_paths = build_payload_deny_write_paths(&request, overrides.deny_write_paths);
-    let network_identity =
-        SandboxNetworkIdentity::from_permissions(request.permissions, request.proxy_enforced);
-    let offline_proxy_settings = offline_proxy_settings_from_env(request.env_map, network_identity);
+    let network_guard =
+        SandboxNetworkGuard::from_permissions(request.permissions, request.proxy_enforced);
+    let sandbox_proxy_settings = sandbox_proxy_settings_from_env(request.env_map, network_guard);
     let payload = ElevationPayload {
         version: SETUP_VERSION,
         sandbox_username: SANDBOX_USERNAME.to_string(),
@@ -198,8 +198,8 @@ fn run_setup_refresh_inner(
         write_roots,
         deny_read_paths,
         deny_write_paths,
-        proxy_ports: offline_proxy_settings.proxy_ports,
-        allow_local_binding: offline_proxy_settings.allow_local_binding,
+        proxy_ports: sandbox_proxy_settings.proxy_ports,
+        allow_local_binding: sandbox_proxy_settings.allow_local_binding,
         otel: None,
         real_user: std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string()),
         mode: SetupMode::Full,
@@ -282,23 +282,23 @@ impl SetupMarker {
 
     pub(crate) fn request_mismatch_reason(
         &self,
-        network_identity: SandboxNetworkIdentity,
-        offline_proxy_settings: &OfflineProxySettings,
+        network_guard: SandboxNetworkGuard,
+        sandbox_proxy_settings: &SandboxProxySettings,
     ) -> Option<String> {
-        if !network_identity.uses_offline_identity() {
+        if !network_guard.uses_network_guard() {
             return None;
         }
-        if self.proxy_ports == offline_proxy_settings.proxy_ports
-            && self.allow_local_binding == offline_proxy_settings.allow_local_binding
+        if self.proxy_ports == sandbox_proxy_settings.proxy_ports
+            && self.allow_local_binding == sandbox_proxy_settings.allow_local_binding
         {
             return None;
         }
         Some(format!(
             "sandbox network guard settings changed (stored_ports={:?}, desired_ports={:?}, stored_allow_local_binding={}, desired_allow_local_binding={})",
             self.proxy_ports,
-            offline_proxy_settings.proxy_ports,
+            sandbox_proxy_settings.proxy_ports,
             self.allow_local_binding,
-            offline_proxy_settings.allow_local_binding
+            sandbox_proxy_settings.allow_local_binding
         ))
     }
 }
@@ -528,31 +528,31 @@ enum SetupMode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct OfflineProxySettings {
+pub(crate) struct SandboxProxySettings {
     pub proxy_ports: Vec<u16>,
     pub allow_local_binding: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SandboxNetworkIdentity {
-    Offline,
-    Online,
+pub(crate) enum SandboxNetworkGuard {
+    Guarded,
+    Direct,
 }
 
-impl SandboxNetworkIdentity {
+impl SandboxNetworkGuard {
     pub(crate) fn from_permissions(
         permissions: &ResolvedWindowsSandboxPermissions,
         proxy_enforced: bool,
     ) -> Self {
         if proxy_enforced || !permissions.network_policy().is_enabled() {
-            Self::Offline
+            Self::Guarded
         } else {
-            Self::Online
+            Self::Direct
         }
     }
 
-    pub(crate) fn uses_offline_identity(self) -> bool {
-        matches!(self, Self::Offline)
+    pub(crate) fn uses_network_guard(self) -> bool {
+        matches!(self, Self::Guarded)
     }
 }
 
@@ -570,17 +570,17 @@ const PROXY_ENV_KEYS: &[&str] = &[
 ];
 const ALLOW_LOCAL_BINDING_ENV_KEY: &str = "CODEX_NETWORK_ALLOW_LOCAL_BINDING";
 
-pub(crate) fn offline_proxy_settings_from_env(
+pub(crate) fn sandbox_proxy_settings_from_env(
     env_map: &HashMap<String, String>,
-    network_identity: SandboxNetworkIdentity,
-) -> OfflineProxySettings {
-    if !network_identity.uses_offline_identity() {
-        return OfflineProxySettings {
+    network_guard: SandboxNetworkGuard,
+) -> SandboxProxySettings {
+    if !network_guard.uses_network_guard() {
+        return SandboxProxySettings {
             proxy_ports: vec![],
             allow_local_binding: false,
         };
     }
-    OfflineProxySettings {
+    SandboxProxySettings {
         proxy_ports: proxy_ports_from_env(env_map),
         allow_local_binding: env_map
             .get(ALLOW_LOCAL_BINDING_ENV_KEY)
@@ -831,9 +831,9 @@ pub fn run_elevated_setup(
     let (read_roots, write_roots) = build_payload_roots(&request, &overrides);
     let deny_read_paths = build_payload_deny_read_paths(overrides.deny_read_paths);
     let deny_write_paths = build_payload_deny_write_paths(&request, overrides.deny_write_paths);
-    let network_identity =
-        SandboxNetworkIdentity::from_permissions(request.permissions, request.proxy_enforced);
-    let offline_proxy_settings = offline_proxy_settings_from_env(request.env_map, network_identity);
+    let network_guard =
+        SandboxNetworkGuard::from_permissions(request.permissions, request.proxy_enforced);
+    let sandbox_proxy_settings = sandbox_proxy_settings_from_env(request.env_map, network_guard);
     let payload = ElevationPayload {
         version: SETUP_VERSION,
         sandbox_username: SANDBOX_USERNAME.to_string(),
@@ -843,8 +843,8 @@ pub fn run_elevated_setup(
         write_roots,
         deny_read_paths,
         deny_write_paths,
-        proxy_ports: offline_proxy_settings.proxy_ports,
-        allow_local_binding: offline_proxy_settings.allow_local_binding,
+        proxy_ports: sandbox_proxy_settings.proxy_ports,
+        allow_local_binding: sandbox_proxy_settings.allow_local_binding,
         real_user: std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string()),
         otel: codex_otel::global_statsig_metrics_settings(),
         mode: SetupMode::Full,
@@ -1093,7 +1093,7 @@ mod tests {
     use super::gather_full_read_roots_for_permissions;
     use super::gather_read_roots;
     use super::loopback_proxy_port_from_url;
-    use super::offline_proxy_settings_from_env;
+    use super::sandbox_proxy_settings_from_env;
     use super::profile_read_roots;
     use super::proxy_ports_from_env;
     use super::verify_setup_completed;
@@ -1323,7 +1323,7 @@ mod tests {
     }
 
     #[test]
-    fn offline_proxy_settings_ignore_proxy_env_when_online_identity_selected() {
+    fn sandbox_proxy_settings_ignore_proxy_env_without_network_guard() {
         let mut env = HashMap::new();
         env.insert(
             "HTTP_PROXY".to_string(),
@@ -1335,8 +1335,8 @@ mod tests {
         );
 
         assert_eq!(
-            offline_proxy_settings_from_env(&env, super::SandboxNetworkIdentity::Online),
-            super::OfflineProxySettings {
+            sandbox_proxy_settings_from_env(&env, super::SandboxNetworkGuard::Direct),
+            super::SandboxProxySettings {
                 proxy_ports: vec![],
                 allow_local_binding: false,
             }
@@ -1344,7 +1344,7 @@ mod tests {
     }
 
     #[test]
-    fn offline_proxy_settings_capture_proxy_ports_and_local_binding_for_offline_identity() {
+    fn sandbox_proxy_settings_capture_proxy_ports_and_local_binding_for_network_guard() {
         let mut env = HashMap::new();
         env.insert(
             "HTTP_PROXY".to_string(),
@@ -1360,8 +1360,8 @@ mod tests {
         );
 
         assert_eq!(
-            offline_proxy_settings_from_env(&env, super::SandboxNetworkIdentity::Offline),
-            super::OfflineProxySettings {
+            sandbox_proxy_settings_from_env(&env, super::SandboxNetworkGuard::Guarded),
+            super::SandboxProxySettings {
                 proxy_ports: vec![1081, 8080],
                 allow_local_binding: true,
             }
@@ -1369,7 +1369,7 @@ mod tests {
     }
 
     #[test]
-    fn setup_marker_request_mismatch_reason_ignores_proxy_drift_for_online_identity() {
+    fn setup_marker_request_mismatch_reason_ignores_proxy_drift_without_network_guard() {
         let marker = super::SetupMarker {
             version: super::SETUP_VERSION,
             sandbox_username: "sandbox".to_string(),
@@ -1377,13 +1377,13 @@ mod tests {
             proxy_ports: vec![3128],
             allow_local_binding: false,
         };
-        let desired = super::OfflineProxySettings {
+        let desired = super::SandboxProxySettings {
             proxy_ports: vec![1081, 8080],
             allow_local_binding: true,
         };
 
         assert_eq!(
-            marker.request_mismatch_reason(super::SandboxNetworkIdentity::Online, &desired),
+            marker.request_mismatch_reason(super::SandboxNetworkGuard::Direct, &desired),
             None
         );
     }
@@ -1397,13 +1397,13 @@ mod tests {
             proxy_ports: vec![3128],
             allow_local_binding: false,
         };
-        let desired = super::OfflineProxySettings {
+        let desired = super::SandboxProxySettings {
             proxy_ports: vec![1081, 8080],
             allow_local_binding: true,
         };
 
         assert_eq!(
-            marker.request_mismatch_reason(super::SandboxNetworkIdentity::Offline, &desired),
+            marker.request_mismatch_reason(super::SandboxNetworkGuard::Guarded, &desired),
             Some(
                 "sandbox network guard settings changed (stored_ports=[3128], desired_ports=[1081, 8080], stored_allow_local_binding=false, desired_allow_local_binding=true)"
                     .to_string()

@@ -1,15 +1,15 @@
 use crate::dpapi;
 use crate::logging::debug_log;
 use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
-use crate::setup::SandboxNetworkIdentity;
+use crate::setup::SandboxNetworkGuard;
 use crate::setup::SandboxUserRecord;
 use crate::setup::SandboxUsersFile;
 use crate::setup::SetupMarker;
 use crate::setup::gather_read_roots;
 use crate::setup::gather_write_roots_for_permissions;
-use crate::setup::offline_proxy_settings_from_env;
 use crate::setup::run_elevated_setup;
 use crate::setup::run_setup_refresh_with_overrides;
+use crate::setup::sandbox_proxy_settings_from_env;
 use crate::setup::sandbox_users_path;
 use crate::setup::setup_marker_path;
 use anyhow::Context;
@@ -120,7 +120,7 @@ fn decode_password(record: &SandboxUserRecord) -> Result<String> {
 }
 
 fn select_identity(
-    _network_identity: SandboxNetworkIdentity,
+    _network_guard: SandboxNetworkGuard,
     codex_home: &Path,
 ) -> Result<Option<SandboxIdentity>> {
     let _marker = match load_marker(codex_home)? {
@@ -159,8 +159,8 @@ pub fn require_logon_sandbox_creds(
     let needed_write = write_roots_override
         .map(<[PathBuf]>::to_vec)
         .unwrap_or_else(|| gather_write_roots_for_permissions(permissions, command_cwd, env_map));
-    let network_identity = SandboxNetworkIdentity::from_permissions(permissions, proxy_enforced);
-    let desired_offline_proxy_settings = offline_proxy_settings_from_env(env_map, network_identity);
+    let network_guard = SandboxNetworkGuard::from_permissions(permissions, proxy_enforced);
+    let desired_sandbox_proxy_settings = sandbox_proxy_settings_from_env(env_map, network_guard);
     // NOTE: Do not add CODEX_HOME/.sandbox to `needed_write`; it must remain non-writable by the
     // restricted capability token. The setup helper's `lock_sandbox_dir` is responsible for
     // granting the sandbox group access to this directory without granting the capability SID.
@@ -169,12 +169,12 @@ pub fn require_logon_sandbox_creds(
     let mut identity = match load_marker(codex_home)? {
         Some(marker) if marker.version_matches() => {
             if let Some(reason) =
-                marker.request_mismatch_reason(network_identity, &desired_offline_proxy_settings)
+                marker.request_mismatch_reason(network_guard, &desired_sandbox_proxy_settings)
             {
                 setup_reason = Some(reason);
                 None
             } else {
-                let selected = select_identity(network_identity, codex_home)?;
+                let selected = select_identity(network_guard, codex_home)?;
                 if selected.is_none() {
                     setup_reason = Some(
                         "sandbox users missing or incompatible with marker version".to_string(),

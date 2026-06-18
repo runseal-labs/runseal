@@ -583,13 +583,13 @@ fn provision_and_hide_sandbox_users(
     Ok(())
 }
 
-fn configure_offline_sandbox_network(
+fn configure_sandbox_network_guard(
     payload: &Payload,
-    offline_sid_str: &str,
+    sandbox_sid_str: &str,
     log: &mut dyn Write,
 ) -> Result<()> {
     let proxy_allowlist_result = firewall::ensure_offline_proxy_allowlist(
-        offline_sid_str,
+        sandbox_sid_str,
         &payload.proxy_ports,
         payload.allow_local_binding,
         log,
@@ -603,14 +603,14 @@ fn configure_offline_sandbox_network(
             format!("ensure sandbox proxy allowlist failed: {err}"),
         )));
     }
-    let firewall_result = firewall::ensure_offline_outbound_block(offline_sid_str, log);
+    let firewall_result = firewall::ensure_offline_outbound_block(sandbox_sid_str, log);
     if let Err(err) = firewall_result {
         if extract_setup_failure(&err).is_some() {
             return Err(err);
         }
         return Err(anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
-            format!("ensure offline outbound block failed: {err}"),
+            format!("ensure sandbox outbound block failed: {err}"),
         )));
     }
     install_wfp_filters(
@@ -699,7 +699,7 @@ fn lock_sandbox_bin_dir(
 
 fn run_provision_only(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Result<()> {
     provision_and_hide_sandbox_users(payload, log, sbx_dir)?;
-    let offline_sid = resolve_sid(&payload.sandbox_username).map_err(|err| {
+    let sandbox_sid = resolve_sid(&payload.sandbox_username).map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperSidResolveFailed,
             format!(
@@ -708,7 +708,7 @@ fn run_provision_only(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) ->
             ),
         ))
     })?;
-    let offline_sid_str = string_from_sid_bytes(&offline_sid).map_err(anyhow::Error::msg)?;
+    let sandbox_sid_str = string_from_sid_bytes(&sandbox_sid).map_err(anyhow::Error::msg)?;
 
     let sandbox_group_sid = resolve_sandbox_users_group_sid().map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
@@ -717,7 +717,7 @@ fn run_provision_only(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) ->
         ))
     })?;
 
-    configure_offline_sandbox_network(payload, &offline_sid_str, log)?;
+    configure_sandbox_network_guard(payload, &sandbox_sid_str, log)?;
 
     lock_sandbox_bin_dir(payload, &sandbox_group_sid, log)?;
     lock_persistent_sandbox_dirs(payload, &sandbox_group_sid, log)?;
@@ -730,7 +730,7 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
     if !refresh_only {
         provision_and_hide_sandbox_users(payload, log, sbx_dir)?;
     }
-    let offline_sid = resolve_sid(&payload.sandbox_username).map_err(|err| {
+    let sandbox_sid = resolve_sid(&payload.sandbox_username).map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperSidResolveFailed,
             format!(
@@ -739,7 +739,7 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
             ),
         ))
     })?;
-    let offline_sid_str = string_from_sid_bytes(&offline_sid).map_err(anyhow::Error::msg)?;
+    let sandbox_sid_str = string_from_sid_bytes(&sandbox_sid).map_err(anyhow::Error::msg)?;
 
     let sandbox_group_sid = resolve_sandbox_users_group_sid().map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
@@ -758,7 +758,7 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
 
     let mut refresh_errors: Vec<String> = Vec::new();
     if !refresh_only {
-        configure_offline_sandbox_network(payload, &offline_sid_str, log)?;
+        configure_sandbox_network_guard(payload, &sandbox_sid_str, log)?;
     }
 
     // Deny-read ACEs must be present before the sandboxed command starts. Apply

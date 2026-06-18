@@ -29,6 +29,11 @@ fn vendored_windows_setup_state_uses_single_user_schema() {
             "CodexSandboxOnline",
             "offline: SandboxUserRecord",
             "online: SandboxUserRecord",
+            "SandboxNetworkIdentity",
+            "OfflineProxySettings",
+            "offline_proxy_settings_from_env",
+            "uses_offline_identity",
+            "configure_offline_sandbox_network",
         ] {
             assert!(
                 !source.contains(forbidden),

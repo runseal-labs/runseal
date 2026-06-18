@@ -16,6 +16,8 @@ Local vendor patches:
 
 - Collapse setup payload, setup marker, and sandbox user secrets to the RunSeal
   single-user schema; guarded by `tests/vendor_boundary.rs`.
+- Collapse setup readiness vocabulary from offline/online identities to one
+  sandbox identity plus a network guard; guarded by `tests/vendor_boundary.rs`.
 
 Prior non-public integrations may be used as pitfall evidence only after
 redaction. Land those lessons as public acceptance criteria, adapter behavior,
