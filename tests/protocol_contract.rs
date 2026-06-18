@@ -206,10 +206,7 @@ fn dispose_session_is_noop_for_stdio_mvp() -> Result<()> {
 #[test]
 fn execute_rejects_unsupported_request_fields() -> Result<()> {
     let tmp = TempDir::new()?;
-    let unsupported_cases = [
-        ("env", json!({"CI": "1"})),
-        ("metadata", json!({"agent_id": "agent_test"})),
-    ];
+    let unsupported_cases = [("env", json!({"CI": "1"}))];
 
     for (field, value) in unsupported_cases {
         let mut request = json!({
@@ -238,6 +235,101 @@ fn execute_rejects_unsupported_request_fields() -> Result<()> {
                 .as_str()
                 .unwrap_or_default()
                 .contains(&format!("params.{field} is not supported"))
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn execute_copies_metadata_to_audit_events() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let metadata = json!({
+        "agent_id": "agent_test",
+        "skill_id": "skill_test_runner"
+    });
+    let output = run_rpc(&rpc_request(
+        "execute",
+        json!({
+            "command": ["python3", "-c", "print('metadata ok')"],
+            "cwd": tmp.path(),
+            "policy": "danger-full-access",
+            "metadata": metadata
+        }),
+    ))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = messages
+        .iter()
+        .find(|message| message.get("id") == Some(&json!(1)))
+        .unwrap();
+
+    assert_eq!(response["result"]["status"], "finished");
+    assert!(response["result"].get("metadata").is_none());
+    assert!(
+        messages
+            .iter()
+            .filter(|message| message.get("method") == Some(&json!("event")))
+            .all(|message| message
+                .get("params")
+                .and_then(|params| params.get("metadata"))
+                .is_none())
+    );
+
+    let audit_path = response["result"]["audit_path"]
+        .as_str()
+        .expect("execution result must include audit_path");
+    let audit_events = read_audit_events(tmp.path(), audit_path)?;
+    for event_type in ["execution.started", "execution.finished"] {
+        let event = audit_events
+            .iter()
+            .find(|event| event["type"] == event_type)
+            .with_context(|| format!("audit event {event_type} must exist"))?;
+        assert_eq!(event["metadata"], metadata);
+    }
+    Ok(())
+}
+
+#[test]
+fn execute_rejects_invalid_metadata() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let cases = vec![
+        (json!("agent_test"), "params.metadata must be an object"),
+        (
+            json!({"payload": "x".repeat(5000)}),
+            "params.metadata must be at most",
+        ),
+    ];
+
+    for (metadata, expected_reason) in cases {
+        let output = run_rpc(&rpc_request(
+            "execute",
+            json!({
+                "command": ["python3", "-c", "print('must not run')"],
+                "cwd": tmp.path(),
+                "policy": "danger-full-access",
+                "metadata": metadata
+            }),
+        ))?;
+
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let messages = stdout_json_lines(&output)?;
+        let response = &messages[0];
+
+        assert_eq!(response["error"]["data"]["code"], "INVALID_REQUEST");
+        assert!(
+            response["error"]["data"]["reason"]
+                .as_str()
+                .unwrap_or_default()
+                .contains(expected_reason)
         );
     }
     Ok(())

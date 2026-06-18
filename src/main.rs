@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const PROTOCOL_VERSION: &str = "runseal.protocol/v1";
+const MAX_METADATA_BYTES: usize = 4096;
 
 fn main() {
     if let Err(err) = run() {
@@ -155,6 +156,7 @@ fn run_exec(args: &[String]) -> Result<(), String> {
         &request.cwd,
         &policy,
         ExecutionStdin::Empty,
+        None,
         request.timeout,
     )
     .map_err(|err| err.message)?;
@@ -346,10 +348,12 @@ fn execute_from_params(params: &Value) -> Result<(Vec<Value>, Value), RunSealErr
             "network_mode",
             "stdin",
             "timeout_ms",
+            "metadata",
         ],
     )?;
     let stdin = stdin_from_params(params)?;
     let timeout = timeout_from_params(params)?;
+    let metadata = metadata_from_params(params)?;
     let command = params
         .get("command")
         .and_then(Value::as_array)
@@ -373,7 +377,7 @@ fn execute_from_params(params: &Value) -> Result<(Vec<Value>, Value), RunSealErr
     let network = network_override_from_params(params)?;
     let policy = normalize_policy(&policy, &cwd, network)?;
 
-    execute_command(&command, &cwd, &policy, stdin, timeout)
+    execute_command(&command, &cwd, &policy, stdin, metadata, timeout)
 }
 
 fn execution_not_found_from_params(params: &Value) -> Result<Value, RunSealError> {
@@ -497,11 +501,41 @@ fn stdin_from_params(params: &Map<String, Value>) -> Result<ExecutionStdin, RunS
     }
 }
 
+fn metadata_from_params(params: &Map<String, Value>) -> Result<Option<Value>, RunSealError> {
+    let Some(metadata) = params.get("metadata") else {
+        return Ok(None);
+    };
+    let Some(object) = metadata.as_object() else {
+        return Err(RunSealError::new(
+            "INVALID_REQUEST",
+            "params.metadata must be an object",
+        ));
+    };
+    let metadata = Value::Object(object.clone());
+    let metadata_len = serde_json::to_vec(&metadata)
+        .map_err(|err| {
+            RunSealError::new(
+                "INVALID_REQUEST",
+                format!("params.metadata could not be serialized: {err}"),
+            )
+        })?
+        .len();
+    if metadata_len > MAX_METADATA_BYTES {
+        return Err(RunSealError::new(
+            "INVALID_REQUEST",
+            format!("params.metadata must be at most {MAX_METADATA_BYTES} bytes"),
+        ));
+    }
+
+    Ok(Some(metadata))
+}
+
 fn execute_command(
     command: &[String],
     cwd: &Path,
     policy: &SandboxPolicy,
     stdin: ExecutionStdin,
+    metadata: Option<Value>,
     timeout: Option<Duration>,
 ) -> Result<(Vec<Value>, Value), RunSealError> {
     if command.is_empty() {
@@ -525,7 +559,7 @@ fn execute_command(
             "decision": "denied",
             "reason": reason,
         });
-        write_audit_event(&mut audit, &event)?;
+        write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
 
         return Err(RunSealError::with_details(
             "POLICY_DENIED",
@@ -554,7 +588,7 @@ fn execute_command(
                             "prepared_roots": prepared_roots,
                             "platform_plan": plan.json(),
                         });
-                        write_audit_event(&mut audit, &event)?;
+                        write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
                     }
                     Err(setup_err) => {
                         let event = json!({
@@ -567,7 +601,7 @@ fn execute_command(
                             "reason": setup_err.to_string(),
                             "platform_plan": plan.json(),
                         });
-                        write_audit_event(&mut audit, &event)?;
+                        write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
 
                         let mut details = details;
                         if let Some(details) = details.as_object_mut() {
@@ -597,7 +631,7 @@ fn execute_command(
                 "missing_features": details.get("missing_features").cloned().unwrap_or_else(|| json!([])),
                 "platform_plan": details.get("platform_plan").cloned().unwrap_or(Value::Null),
             });
-            write_audit_event(&mut audit, &event)?;
+            write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
 
             if let Some(plan) = err.plan.as_deref() {
                 match plan.cleanup_runtime_roots() {
@@ -612,7 +646,7 @@ fn execute_command(
                             "cleaned_roots": cleaned_roots,
                             "platform_plan": plan.json(),
                         });
-                        write_audit_event(&mut audit, &event)?;
+                        write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
                     }
                     Err(cleanup_err) => {
                         let event = json!({
@@ -625,7 +659,7 @@ fn execute_command(
                             "reason": cleanup_err.to_string(),
                             "platform_plan": plan.json(),
                         });
-                        write_audit_event(&mut audit, &event)?;
+                        write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
 
                         let mut details = details;
                         if let Some(details) = details.as_object_mut() {
@@ -675,7 +709,7 @@ fn execute_command(
         },
         "platform_plan": plan.json(),
     });
-    write_audit_event(&mut audit, &started)?;
+    write_audit_event_with_metadata(&mut audit, &started, &metadata)?;
 
     let timer = Instant::now();
     let execution_output = backend
@@ -701,7 +735,7 @@ fn execute_command(
             "timeout_ms": timeout_ms,
             "duration_ms": duration_ms,
         });
-        write_audit_event(&mut audit, &failed)?;
+        write_audit_event_with_metadata(&mut audit, &failed, &metadata)?;
 
         return Err(RunSealError::with_details(
             "EXECUTION_TIMEOUT",
@@ -727,7 +761,7 @@ fn execute_command(
             "text": stdout,
             "bytes": output.stdout.len(),
         });
-        write_audit_event(&mut audit, &event)?;
+        write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
         events.push(event);
     }
     if !stderr.is_empty() {
@@ -737,7 +771,7 @@ fn execute_command(
             "text": stderr,
             "bytes": output.stderr.len(),
         });
-        write_audit_event(&mut audit, &event)?;
+        write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
         events.push(event);
     }
     let finished = json!({
@@ -746,7 +780,7 @@ fn execute_command(
         "exit_code": exit_code,
         "status": "finished",
     });
-    write_audit_event(&mut audit, &finished)?;
+    write_audit_event_with_metadata(&mut audit, &finished, &metadata)?;
     events.push(finished);
 
     let result = json!({
@@ -798,6 +832,22 @@ fn write_audit_event(audit: &mut AuditWriter, event: &Value) -> Result<(), RunSe
             format!("failed to write audit event: {err}"),
         )
     })
+}
+
+fn write_audit_event_with_metadata(
+    audit: &mut AuditWriter,
+    event: &Value,
+    metadata: &Option<Value>,
+) -> Result<(), RunSealError> {
+    let Some(metadata) = metadata else {
+        return write_audit_event(audit, event);
+    };
+
+    let mut audit_event = event.clone();
+    if let Some(object) = audit_event.as_object_mut() {
+        object.insert("metadata".to_string(), metadata.clone());
+    }
+    write_audit_event(audit, &audit_event)
 }
 
 fn new_execution_id() -> String {
