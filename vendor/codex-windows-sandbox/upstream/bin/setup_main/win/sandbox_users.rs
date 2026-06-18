@@ -51,8 +51,8 @@ use codex_windows_sandbox::sandbox_secrets_dir;
 use codex_windows_sandbox::string_from_sid_bytes;
 use codex_windows_sandbox::to_wide;
 
-pub const SANDBOX_USERS_GROUP: &str = "CodexSandboxUsers";
-const SANDBOX_USERS_GROUP_COMMENT: &str = "Codex sandbox internal group (managed)";
+pub const SANDBOX_USERS_GROUP: &str = "RunSealSandboxUsers";
+const SANDBOX_USERS_GROUP_COMMENT: &str = "RunSeal sandbox internal group (managed)";
 const SID_ADMINISTRATORS: &str = "S-1-5-32-544";
 const SID_USERS: &str = "S-1-5-32-545";
 const SID_AUTHENTICATED_USERS: &str = "S-1-5-11";
@@ -69,26 +69,17 @@ pub fn resolve_sandbox_users_group_sid() -> Result<Vec<u8>> {
 
 pub fn provision_sandbox_users(
     codex_home: &Path,
-    offline_username: &str,
-    online_username: &str,
+    sandbox_username: &str,
     log: &mut dyn Write,
 ) -> Result<()> {
     ensure_sandbox_users_group(log)?;
     super::log_line(
         log,
-        &format!("ensuring sandbox users offline={offline_username} online={online_username}"),
+        &format!("ensuring single sandbox user {sandbox_username}"),
     )?;
-    let offline_password = random_password();
-    let online_password = random_password();
-    ensure_sandbox_user(offline_username, &offline_password, log)?;
-    ensure_sandbox_user(online_username, &online_password, log)?;
-    write_secrets(
-        codex_home,
-        offline_username,
-        &offline_password,
-        online_username,
-        &online_password,
-    )?;
+    let sandbox_password = random_password();
+    ensure_sandbox_user(sandbox_username, &sandbox_password, log)?;
+    write_secrets(codex_home, sandbox_username, &sandbox_password)?;
     Ok(())
 }
 
@@ -386,15 +377,13 @@ struct SandboxUserRecord {
 #[derive(Serialize)]
 struct SandboxUsersFile {
     version: u32,
-    offline: SandboxUserRecord,
-    online: SandboxUserRecord,
+    user: SandboxUserRecord,
 }
 
 #[derive(Serialize)]
 struct SetupMarker {
     version: u32,
-    offline_username: String,
-    online_username: String,
+    sandbox_username: String,
     created_at: String,
     proxy_ports: Vec<u16>,
     allow_local_binding: bool,
@@ -404,10 +393,8 @@ struct SetupMarker {
 
 fn write_secrets(
     codex_home: &Path,
-    offline_user: &str,
-    offline_pwd: &str,
-    online_user: &str,
-    online_pwd: &str,
+    sandbox_user: &str,
+    sandbox_pwd: &str,
 ) -> Result<()> {
     let secrets_dir = sandbox_secrets_dir(codex_home);
     std::fs::create_dir_all(&secrets_dir).map_err(|err| {
@@ -419,27 +406,17 @@ fn write_secrets(
             ),
         ))
     })?;
-    let offline_blob = dpapi_protect(offline_pwd.as_bytes()).map_err(|err| {
+    let sandbox_blob = dpapi_protect(sandbox_pwd.as_bytes()).map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperDpapiProtectFailed,
-            format!("dpapi protect failed for offline user: {err}"),
-        ))
-    })?;
-    let online_blob = dpapi_protect(online_pwd.as_bytes()).map_err(|err| {
-        anyhow::Error::new(SetupFailure::new(
-            SetupErrorCode::HelperDpapiProtectFailed,
-            format!("dpapi protect failed for online user: {err}"),
+            format!("dpapi protect failed for sandbox user: {err}"),
         ))
     })?;
     let users = SandboxUsersFile {
         version: SETUP_VERSION,
-        offline: SandboxUserRecord {
-            username: offline_user.to_string(),
-            password: BASE64.encode(offline_blob),
-        },
-        online: SandboxUserRecord {
-            username: online_user.to_string(),
-            password: BASE64.encode(online_blob),
+        user: SandboxUserRecord {
+            username: sandbox_user.to_string(),
+            password: BASE64.encode(sandbox_blob),
         },
     };
     let users_path = secrets_dir.join("sandbox_users.json");
@@ -550,15 +527,13 @@ pub(super) fn prepare_setup_marker(codex_home: &Path, real_user: &str) -> Result
 
 pub(super) fn commit_setup_marker(
     codex_home: &Path,
-    offline_user: &str,
-    online_user: &str,
+    sandbox_user: &str,
     proxy_ports: &[u16],
     allow_local_binding: bool,
 ) -> Result<()> {
     let marker = SetupMarker {
         version: SETUP_VERSION,
-        offline_username: offline_user.to_string(),
-        online_username: online_user.to_string(),
+        sandbox_username: sandbox_user.to_string(),
         created_at: chrono::Utc::now().to_rfc3339(),
         proxy_ports: proxy_ports.to_vec(),
         allow_local_binding,

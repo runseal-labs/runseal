@@ -12,6 +12,11 @@ vendored crate into the build when the adapter is ready.
 Keep local RunSeal changes outside `upstream/` unless they are deliberately
 tracked as vendor patches.
 
+Local vendor patches:
+
+- Collapse setup payload, setup marker, and sandbox user secrets to the RunSeal
+  single-user schema; guarded by `tests/vendor_boundary.rs`.
+
 Prior non-public integrations may be used as pitfall evidence only after
 redaction. Land those lessons as public acceptance criteria, adapter behavior,
 or conformance tests; do not copy product-specific names, local paths, account

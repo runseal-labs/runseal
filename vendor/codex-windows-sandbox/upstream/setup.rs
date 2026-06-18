@@ -41,8 +41,7 @@ use windows_sys::Win32::Security::FreeSid;
 use windows_sys::Win32::Security::SECURITY_NT_AUTHORITY;
 
 pub const SETUP_VERSION: u32 = 5;
-pub const OFFLINE_USERNAME: &str = "CodexSandboxOffline";
-pub const ONLINE_USERNAME: &str = "CodexSandboxOnline";
+pub const SANDBOX_USERNAME: &str = "RunSealSandbox";
 const ERROR_CANCELLED: u32 = 1223;
 const SECURITY_BUILTIN_DOMAIN_RID: u32 = 0x0000_0020;
 const DOMAIN_ALIAS_RID_ADMINS: u32 = 0x0000_0220;
@@ -192,8 +191,7 @@ fn run_setup_refresh_inner(
     let offline_proxy_settings = offline_proxy_settings_from_env(request.env_map, network_identity);
     let payload = ElevationPayload {
         version: SETUP_VERSION,
-        offline_username: OFFLINE_USERNAME.to_string(),
-        online_username: ONLINE_USERNAME.to_string(),
+        sandbox_username: SANDBOX_USERNAME.to_string(),
         codex_home: request.codex_home.to_path_buf(),
         command_cwd: request.command_cwd.to_path_buf(),
         read_roots,
@@ -268,8 +266,7 @@ fn run_setup_refresh_inner(
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SetupMarker {
     pub version: u32,
-    pub offline_username: String,
-    pub online_username: String,
+    pub sandbox_username: String,
     #[serde(default)]
     pub created_at: Option<String>,
     #[serde(default)]
@@ -297,7 +294,7 @@ impl SetupMarker {
             return None;
         }
         Some(format!(
-            "offline firewall settings changed (stored_ports={:?}, desired_ports={:?}, stored_allow_local_binding={}, desired_allow_local_binding={})",
+            "sandbox network guard settings changed (stored_ports={:?}, desired_ports={:?}, stored_allow_local_binding={}, desired_allow_local_binding={})",
             self.proxy_ports,
             offline_proxy_settings.proxy_ports,
             self.allow_local_binding,
@@ -316,8 +313,7 @@ pub struct SandboxUserRecord {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SandboxUsersFile {
     pub version: u32,
-    pub offline: SandboxUserRecord,
-    pub online: SandboxUserRecord,
+    pub user: SandboxUserRecord,
 }
 
 impl SandboxUsersFile {
@@ -505,8 +501,7 @@ pub(crate) fn effective_write_roots_for_permissions(
 #[derive(Serialize)]
 struct ElevationPayload {
     version: u32,
-    offline_username: String,
-    online_username: String,
+    sandbox_username: String,
     codex_home: PathBuf,
     command_cwd: PathBuf,
     read_roots: Vec<PathBuf>,
@@ -841,8 +836,7 @@ pub fn run_elevated_setup(
     let offline_proxy_settings = offline_proxy_settings_from_env(request.env_map, network_identity);
     let payload = ElevationPayload {
         version: SETUP_VERSION,
-        offline_username: OFFLINE_USERNAME.to_string(),
-        online_username: ONLINE_USERNAME.to_string(),
+        sandbox_username: SANDBOX_USERNAME.to_string(),
         codex_home: request.codex_home.to_path_buf(),
         command_cwd: request.command_cwd.to_path_buf(),
         read_roots,
@@ -886,8 +880,7 @@ pub fn run_elevated_provisioning_setup(codex_home: &Path, real_user: &str) -> Re
     }
     let payload = ElevationPayload {
         version: SETUP_VERSION,
-        offline_username: OFFLINE_USERNAME.to_string(),
-        online_username: ONLINE_USERNAME.to_string(),
+        sandbox_username: SANDBOX_USERNAME.to_string(),
         codex_home: codex_home.to_path_buf(),
         command_cwd: codex_home.to_path_buf(),
         read_roots: Vec::new(),
@@ -1379,8 +1372,7 @@ mod tests {
     fn setup_marker_request_mismatch_reason_ignores_proxy_drift_for_online_identity() {
         let marker = super::SetupMarker {
             version: super::SETUP_VERSION,
-            offline_username: "offline".to_string(),
-            online_username: "online".to_string(),
+            sandbox_username: "sandbox".to_string(),
             created_at: None,
             proxy_ports: vec![3128],
             allow_local_binding: false,
@@ -1397,11 +1389,10 @@ mod tests {
     }
 
     #[test]
-    fn setup_marker_request_mismatch_reason_reports_offline_firewall_drift() {
+    fn setup_marker_request_mismatch_reason_reports_network_guard_drift() {
         let marker = super::SetupMarker {
             version: super::SETUP_VERSION,
-            offline_username: "offline".to_string(),
-            online_username: "online".to_string(),
+            sandbox_username: "sandbox".to_string(),
             created_at: None,
             proxy_ports: vec![3128],
             allow_local_binding: false,
@@ -1414,7 +1405,7 @@ mod tests {
         assert_eq!(
             marker.request_mismatch_reason(super::SandboxNetworkIdentity::Offline, &desired),
             Some(
-                "offline firewall settings changed (stored_ports=[3128], desired_ports=[1081, 8080], stored_allow_local_binding=false, desired_allow_local_binding=true)"
+                "sandbox network guard settings changed (stored_ports=[3128], desired_ports=[1081, 8080], stored_allow_local_binding=false, desired_allow_local_binding=true)"
                     .to_string()
             )
         );

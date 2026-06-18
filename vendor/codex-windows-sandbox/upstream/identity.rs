@@ -38,7 +38,7 @@ pub struct SandboxCreds {
 /// setup version.
 ///
 /// This is a coarse readiness check; `require_logon_sandbox_creds` performs the
-/// additional runtime validation for offline firewall settings.
+/// additional runtime validation for sandbox network guard settings.
 pub fn sandbox_setup_is_complete(codex_home: &Path) -> bool {
     let marker_ok = matches!(load_marker(codex_home), Ok(Some(marker)) if marker.version_matches());
     if !marker_ok {
@@ -120,7 +120,7 @@ fn decode_password(record: &SandboxUserRecord) -> Result<String> {
 }
 
 fn select_identity(
-    network_identity: SandboxNetworkIdentity,
+    _network_identity: SandboxNetworkIdentity,
     codex_home: &Path,
 ) -> Result<Option<SandboxIdentity>> {
     let _marker = match load_marker(codex_home)? {
@@ -131,10 +131,7 @@ fn select_identity(
         Some(u) if u.version_matches() => u,
         _ => return Ok(None),
     };
-    let chosen = match network_identity {
-        SandboxNetworkIdentity::Offline => users.offline,
-        SandboxNetworkIdentity::Online => users.online,
-    };
+    let chosen = users.user;
     let password = decode_password(&chosen)?;
     Ok(Some(SandboxIdentity {
         username: chosen.username,

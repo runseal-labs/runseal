@@ -80,8 +80,7 @@ use sandbox_users::sid_bytes_to_psid;
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct Payload {
     version: u32,
-    offline_username: String,
-    online_username: String,
+    sandbox_username: String,
     codex_home: PathBuf,
     command_cwd: PathBuf,
     read_roots: Vec<PathBuf>,
@@ -489,8 +488,7 @@ fn run_setup(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Result<(
     if writes_setup_marker {
         commit_setup_marker(
             &payload.codex_home,
-            &payload.offline_username,
-            &payload.online_username,
+            &payload.sandbox_username,
             &payload.proxy_ports,
             payload.allow_local_binding,
         )?;
@@ -568,8 +566,7 @@ fn provision_and_hide_sandbox_users(
 ) -> Result<()> {
     let provision_result = provision_sandbox_users(
         &payload.codex_home,
-        &payload.offline_username,
-        &payload.online_username,
+        &payload.sandbox_username,
         log,
     );
     if let Err(err) = provision_result {
@@ -581,10 +578,7 @@ fn provision_and_hide_sandbox_users(
             format!("provision sandbox users failed: {err}"),
         )));
     }
-    let users = vec![
-        payload.offline_username.clone(),
-        payload.online_username.clone(),
-    ];
+    let users = vec![payload.sandbox_username.clone()];
     hide_newly_created_users(&users, sbx_dir);
     Ok(())
 }
@@ -606,7 +600,7 @@ fn configure_offline_sandbox_network(
         }
         return Err(anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
-            format!("ensure offline proxy allowlist failed: {err}"),
+            format!("ensure sandbox proxy allowlist failed: {err}"),
         )));
     }
     let firewall_result = firewall::ensure_offline_outbound_block(offline_sid_str, log);
@@ -621,7 +615,7 @@ fn configure_offline_sandbox_network(
     }
     install_wfp_filters(
         &payload.codex_home,
-        &payload.offline_username,
+        &payload.sandbox_username,
         payload.otel.as_ref(),
         |message| {
             let _ = log_line(log, message);
@@ -705,12 +699,12 @@ fn lock_sandbox_bin_dir(
 
 fn run_provision_only(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Result<()> {
     provision_and_hide_sandbox_users(payload, log, sbx_dir)?;
-    let offline_sid = resolve_sid(&payload.offline_username).map_err(|err| {
+    let offline_sid = resolve_sid(&payload.sandbox_username).map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperSidResolveFailed,
             format!(
-                "resolve SID for offline user {} failed: {err}",
-                payload.offline_username
+                "resolve SID for sandbox user {} failed: {err}",
+                payload.sandbox_username
             ),
         ))
     })?;
@@ -736,12 +730,12 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
     if !refresh_only {
         provision_and_hide_sandbox_users(payload, log, sbx_dir)?;
     }
-    let offline_sid = resolve_sid(&payload.offline_username).map_err(|err| {
+    let offline_sid = resolve_sid(&payload.sandbox_username).map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperSidResolveFailed,
             format!(
-                "resolve SID for offline user {} failed: {err}",
-                payload.offline_username
+                "resolve SID for sandbox user {} failed: {err}",
+                payload.sandbox_username
             ),
         ))
     })?;
@@ -1047,8 +1041,7 @@ mod tests {
     fn payload_json() -> serde_json::Value {
         json!({
             "version": SETUP_VERSION,
-            "offline_username": "CodexSandboxOffline",
-            "online_username": "CodexSandboxOnline",
+            "sandbox_username": "RunSealSandbox",
             "codex_home": "C:\\codex-home",
             "command_cwd": "C:\\workspace",
             "read_roots": [],
