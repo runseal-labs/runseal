@@ -8,7 +8,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 const MAX_HEADER_BYTES: usize = 64 * 1024;
-const NO_PROXY: &str = "localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16";
+const NO_PROXY: &str = "";
 const PROXY_KEYS: &[&str] = &[
     "HTTP_PROXY",
     "HTTPS_PROXY",
@@ -272,6 +272,12 @@ mod tests {
             env.iter()
                 .any(|(key, value)| key == "RUNSEAL_NETWORK_ALLOW_LOCAL_BINDING" && value == "0")
         );
+        for key in ["NO_PROXY", "no_proxy"] {
+            assert!(
+                env.iter()
+                    .any(|(name, value)| name == key && value.is_empty())
+            );
+        }
         assert!(!env.iter().any(|(key, _)| key.starts_with("CODEX_")));
     }
 
