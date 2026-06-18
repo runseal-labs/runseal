@@ -2020,12 +2020,21 @@ fn execute_rpc_streams_events_and_final_result() -> Result<()> {
 }
 
 #[test]
-fn completed_policy_change_activates_new_epoch() -> Result<()> {
+fn policy_epoch_tracks_effective_policy() -> Result<()> {
     let tmp = TempDir::new()?;
     let first = run_rpc(&rpc_request(
         "execute",
         json!({
             "command": [python_bin(), "-c", "print('first')"],
+            "cwd": tmp.path(),
+            "policy": "danger-full-access",
+            "network": {"mode": "disabled"}
+        }),
+    ))?;
+    let same = run_rpc(&rpc_request(
+        "execute",
+        json!({
+            "command": [python_bin(), "-c", "print('same')"],
             "cwd": tmp.path(),
             "policy": "danger-full-access",
             "network": {"mode": "disabled"}
@@ -2042,22 +2051,32 @@ fn completed_policy_change_activates_new_epoch() -> Result<()> {
     ))?;
 
     assert!(first.status.success());
+    assert!(same.status.success());
     assert!(second.status.success());
     let first_messages = stdout_json_lines(&first)?;
+    let same_messages = stdout_json_lines(&same)?;
     let second_messages = stdout_json_lines(&second)?;
     let first_result = &first_messages
         .iter()
         .find(|message| message.get("id") == Some(&json!(1)))
         .context("first response with id 1 must exist")?["result"];
+    let same_result = &same_messages
+        .iter()
+        .find(|message| message.get("id") == Some(&json!(1)))
+        .context("same-policy response with id 1 must exist")?["result"];
     let second_result = &second_messages
         .iter()
         .find(|message| message.get("id") == Some(&json!(1)))
         .context("second response with id 1 must exist")?["result"];
 
     assert_eq!(first_result["status"], "finished");
+    assert_eq!(same_result["status"], "finished");
     assert_eq!(second_result["status"], "finished");
     assert_eq!(first_result["policy_epoch"], first_result["policy_hash"]);
+    assert_eq!(same_result["policy_epoch"], same_result["policy_hash"]);
     assert_eq!(second_result["policy_epoch"], second_result["policy_hash"]);
+    assert_eq!(first_result["policy_hash"], same_result["policy_hash"]);
+    assert_eq!(first_result["policy_epoch"], same_result["policy_epoch"]);
     assert_ne!(first_result["policy_hash"], second_result["policy_hash"]);
     assert_ne!(first_result["policy_epoch"], second_result["policy_epoch"]);
     Ok(())
