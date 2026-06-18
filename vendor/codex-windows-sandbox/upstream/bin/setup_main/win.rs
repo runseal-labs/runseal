@@ -662,6 +662,15 @@ fn run_scheduled_setup_task(broker_home: &Path) -> Result<()> {
                 continue;
             }
         };
+        if let Err(err) = remove_setup_payload_file(&path) {
+            let result_path = scheduled_setup_result_path(broker_home, &request_id);
+            let result = ScheduledSetupTaskResult {
+                ok: false,
+                message: Some(format!("failed to remove scheduled setup payload: {err}")),
+            };
+            let _ = std::fs::write(&result_path, serde_json::to_vec(&result)?);
+            continue;
+        }
         let result = run_payload_json(payload_json.as_slice());
         let task_result = match result {
             Ok(()) => ScheduledSetupTaskResult {
@@ -680,7 +689,6 @@ fn run_scheduled_setup_task(broker_home: &Path) -> Result<()> {
                 result_path.display()
             )
         })?;
-        let _ = std::fs::remove_file(&path);
     }
     log_line(
         &mut log,
@@ -1405,6 +1413,31 @@ mod tests {
         assert_eq!(
             super::setup_task_request_id(PathBuf::from("setup-task-payload-abc.tmp").as_path()),
             None
+        );
+    }
+
+    #[test]
+    fn scheduled_setup_task_removes_payload_before_processing() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let broker_home = temp.path().join("broker");
+        let sbx_dir = codex_windows_sandbox::sandbox_dir(&broker_home);
+        fs::create_dir_all(&sbx_dir).expect("create broker dir");
+        let payload_path = sbx_dir.join("setup-task-payload-invalid.json");
+        fs::write(&payload_path, b"{not-json").expect("write invalid payload");
+
+        super::run_scheduled_setup_task(&broker_home).expect("run scheduled task");
+
+        assert!(!payload_path.exists());
+        let result_path = super::scheduled_setup_result_path(&broker_home, "invalid");
+        let result: serde_json::Value =
+            serde_json::from_slice(&fs::read(&result_path).expect("read result"))
+                .expect("parse result");
+        assert_eq!(result["ok"], false);
+        assert!(
+            result["message"]
+                .as_str()
+                .expect("result message")
+                .contains("failed to parse payload json")
         );
     }
 
