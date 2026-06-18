@@ -112,12 +112,11 @@ fn assert_backend_missing(response: &Value, root: &Path) -> Result<()> {
 }
 
 fn expected_missing_features(additional: &[&'static str]) -> Vec<&'static str> {
-    let mut features = vec![
-        "filesystem_policy",
-        "runtime_roots",
-        "runtime_environment",
-        "process_isolation",
-    ];
+    let mut features = vec!["filesystem_policy"];
+    if !cfg!(windows) {
+        features.push("runtime_roots");
+    }
+    features.extend_from_slice(&["runtime_environment", "process_isolation"]);
     if !cfg!(windows) {
         features.push("process_cleanup");
     }
