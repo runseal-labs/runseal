@@ -68,35 +68,36 @@ pub trait SandboxBackend {
 pub enum ActiveBackend {
     Local(LocalBackend),
     WindowsReference(WindowsReferenceBackend),
+    MacosExperimental(MacosExperimentalBackend),
+    LinuxCommunity(LinuxCommunityBackend),
+}
+
+impl ActiveBackend {
+    fn as_backend(&self) -> &dyn SandboxBackend {
+        match self {
+            Self::Local(backend) => backend,
+            Self::WindowsReference(backend) => backend,
+            Self::MacosExperimental(backend) => backend,
+            Self::LinuxCommunity(backend) => backend,
+        }
+    }
 }
 
 impl SandboxBackend for ActiveBackend {
     fn name(&self) -> &'static str {
-        match self {
-            Self::Local(backend) => backend.name(),
-            Self::WindowsReference(backend) => backend.name(),
-        }
+        self.as_backend().name()
     }
 
     fn status(&self) -> &'static str {
-        match self {
-            Self::Local(backend) => backend.status(),
-            Self::WindowsReference(backend) => backend.status(),
-        }
+        self.as_backend().status()
     }
 
     fn platform(&self) -> &'static str {
-        match self {
-            Self::Local(backend) => backend.platform(),
-            Self::WindowsReference(backend) => backend.platform(),
-        }
+        self.as_backend().platform()
     }
 
     fn supported_features(&self) -> &'static [BackendFeature] {
-        match self {
-            Self::Local(backend) => backend.supported_features(),
-            Self::WindowsReference(backend) => backend.supported_features(),
-        }
+        self.as_backend().supported_features()
     }
 
     fn compile_plan(
@@ -105,10 +106,7 @@ impl SandboxBackend for ActiveBackend {
         cwd: &Path,
         policy: &SandboxPolicy,
     ) -> Result<PlatformSandboxPlan, BackendError> {
-        match self {
-            Self::Local(backend) => backend.compile_plan(execution_id, cwd, policy),
-            Self::WindowsReference(backend) => backend.compile_plan(execution_id, cwd, policy),
-        }
+        self.as_backend().compile_plan(execution_id, cwd, policy)
     }
 
     fn execute_plan(
@@ -117,17 +115,11 @@ impl SandboxBackend for ActiveBackend {
         command: &[String],
         cwd: &Path,
     ) -> io::Result<Output> {
-        match self {
-            Self::Local(backend) => backend.execute_plan(plan, command, cwd),
-            Self::WindowsReference(backend) => backend.execute_plan(plan, command, cwd),
-        }
+        self.as_backend().execute_plan(plan, command, cwd)
     }
 
     fn capabilities_json(&self) -> Value {
-        match self {
-            Self::Local(backend) => backend.capabilities_json(),
-            Self::WindowsReference(backend) => backend.capabilities_json(),
-        }
+        self.as_backend().capabilities_json()
     }
 }
 
@@ -328,16 +320,7 @@ impl SandboxBackend for LocalBackend {
         cwd: &Path,
         policy: &SandboxPolicy,
     ) -> Result<PlatformSandboxPlan, BackendError> {
-        if self.supports_policy(policy).is_supported() {
-            Ok(PlatformSandboxPlan::local_execution(
-                self,
-                execution_id,
-                cwd,
-                policy,
-            ))
-        } else {
-            Err(BackendError::unsupported(self, policy))
-        }
+        compile_local_execution_or_unsupported(self, execution_id, cwd, policy)
     }
 
     fn execute_plan(
@@ -350,34 +333,13 @@ impl SandboxBackend for LocalBackend {
     }
 
     fn capabilities_json(&self) -> Value {
-        json!({
-            "backend": self.name(),
-            "backend_status": self.status(),
-            "platform": self.platform(),
-            "features": {
-                "local_execution": true,
-                "filesystem_policy": false,
-                "network_disabled": false,
-                "network_proxy": false,
-                "resource_limits": false,
-                "audit_jsonl": true,
-                "otel_export": false,
-            },
-            "sandbox_levels": {
-                "read-only": CapabilityStatus::Unsupported.as_str(),
-                "workspace-contained": CapabilityStatus::Unsupported.as_str(),
-                "workspace-write": CapabilityStatus::Unsupported.as_str(),
-                "danger-full-access": CapabilityStatus::Supported.as_str(),
-            },
-            "network_modes": {
-                "disabled": CapabilityStatus::Unsupported.as_str(),
-                "proxy": CapabilityStatus::Unsupported.as_str(),
-            },
-            "notes": [
+        capabilities_json_for(
+            self,
+            &[
                 "danger-full-access is explicit local execution with no sandbox guarantee",
-                "sandboxed policies require a platform backend and fail closed in this build"
-            ]
-        })
+                "sandboxed policies require a platform backend and fail closed in this build",
+            ],
+        )
     }
 }
 
@@ -469,41 +431,122 @@ impl SandboxBackend for WindowsReferenceBackend {
     }
 
     fn capabilities_json(&self) -> Value {
-        json!({
-            "backend": self.name(),
-            "backend_status": self.status(),
-            "platform": self.platform(),
-            "features": {
-                "local_execution": true,
-                "filesystem_policy": false,
-                "network_disabled": false,
-                "network_proxy": false,
-                "resource_limits": false,
-                "audit_jsonl": true,
-                "otel_export": false,
-            },
-            "sandbox_levels": {
-                "read-only": CapabilityStatus::Unsupported.as_str(),
-                "workspace-contained": CapabilityStatus::Unsupported.as_str(),
-                "workspace-write": CapabilityStatus::Unsupported.as_str(),
-                "danger-full-access": CapabilityStatus::Supported.as_str(),
-            },
-            "network_modes": {
-                "disabled": CapabilityStatus::Unsupported.as_str(),
-                "proxy": CapabilityStatus::Unsupported.as_str(),
-            },
-            "notes": [
+        capabilities_json_for(
+            self,
+            &[
                 "Windows reference backend scaffold is present",
                 "filesystem and network enforcement are not implemented yet",
-                "sandboxed policies fail closed until conformance tests prove enforcement"
-            ]
-        })
+                "sandboxed policies fail closed until conformance tests prove enforcement",
+            ],
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct MacosExperimentalBackend;
+
+impl SandboxBackend for MacosExperimentalBackend {
+    fn name(&self) -> &'static str {
+        "runseal-macos-experimental"
+    }
+
+    fn status(&self) -> &'static str {
+        "experimental"
+    }
+
+    fn platform(&self) -> &'static str {
+        "macos"
+    }
+
+    fn supported_features(&self) -> &'static [BackendFeature] {
+        &[]
+    }
+
+    fn compile_plan(
+        &self,
+        execution_id: &str,
+        cwd: &Path,
+        policy: &SandboxPolicy,
+    ) -> Result<PlatformSandboxPlan, BackendError> {
+        compile_local_execution_or_unsupported(self, execution_id, cwd, policy)
+    }
+
+    fn execute_plan(
+        &self,
+        _plan: &PlatformSandboxPlan,
+        command: &[String],
+        cwd: &Path,
+    ) -> io::Result<Output> {
+        spawn_local_command(command, cwd)
+    }
+
+    fn capabilities_json(&self) -> Value {
+        capabilities_json_for(
+            self,
+            &[
+                "macOS backend is an experimental contribution track",
+                "sandboxed policies fail closed until conformance tests prove enforcement",
+            ],
+        )
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct LinuxCommunityBackend;
+
+impl SandboxBackend for LinuxCommunityBackend {
+    fn name(&self) -> &'static str {
+        "runseal-linux-community"
+    }
+
+    fn status(&self) -> &'static str {
+        "future-community"
+    }
+
+    fn platform(&self) -> &'static str {
+        "linux"
+    }
+
+    fn supported_features(&self) -> &'static [BackendFeature] {
+        &[]
+    }
+
+    fn compile_plan(
+        &self,
+        execution_id: &str,
+        cwd: &Path,
+        policy: &SandboxPolicy,
+    ) -> Result<PlatformSandboxPlan, BackendError> {
+        compile_local_execution_or_unsupported(self, execution_id, cwd, policy)
+    }
+
+    fn execute_plan(
+        &self,
+        _plan: &PlatformSandboxPlan,
+        command: &[String],
+        cwd: &Path,
+    ) -> io::Result<Output> {
+        spawn_local_command(command, cwd)
+    }
+
+    fn capabilities_json(&self) -> Value {
+        capabilities_json_for(
+            self,
+            &[
+                "Linux backend is a future community contribution track",
+                "sandboxed policies fail closed until conformance tests prove enforcement",
+            ],
+        )
     }
 }
 
 pub fn active_backend() -> ActiveBackend {
     if cfg!(windows) {
         ActiveBackend::WindowsReference(WindowsReferenceBackend)
+    } else if cfg!(target_os = "macos") {
+        ActiveBackend::MacosExperimental(MacosExperimentalBackend)
+    } else if cfg!(target_os = "linux") {
+        ActiveBackend::LinuxCommunity(LinuxCommunityBackend)
     } else {
         ActiveBackend::Local(LocalBackend)
     }
@@ -527,6 +570,53 @@ fn spawn_local_command(command: &[String], cwd: &Path) -> io::Result<Output> {
         .args(&command[1..])
         .current_dir(cwd)
         .output()
+}
+
+fn compile_local_execution_or_unsupported(
+    backend: &dyn SandboxBackend,
+    execution_id: &str,
+    cwd: &Path,
+    policy: &SandboxPolicy,
+) -> Result<PlatformSandboxPlan, BackendError> {
+    if backend.supports_policy(policy).is_supported() {
+        Ok(PlatformSandboxPlan::local_execution(
+            backend,
+            execution_id,
+            cwd,
+            policy,
+        ))
+    } else {
+        Err(BackendError::unsupported(backend, policy))
+    }
+}
+
+fn capabilities_json_for(backend: &dyn SandboxBackend, notes: &[&'static str]) -> Value {
+    let supported_features = backend.supported_features();
+    json!({
+        "backend": backend.name(),
+        "backend_status": backend.status(),
+        "platform": backend.platform(),
+        "features": {
+            "local_execution": true,
+            "filesystem_policy": supported_features.contains(&BackendFeature::FilesystemPolicy),
+            "network_disabled": supported_features.contains(&BackendFeature::NetworkDisabled),
+            "network_proxy": supported_features.contains(&BackendFeature::NetworkProxy),
+            "resource_limits": false,
+            "audit_jsonl": true,
+            "otel_export": false,
+        },
+        "sandbox_levels": {
+            "read-only": CapabilityStatus::Unsupported.as_str(),
+            "workspace-contained": CapabilityStatus::Unsupported.as_str(),
+            "workspace-write": CapabilityStatus::Unsupported.as_str(),
+            "danger-full-access": CapabilityStatus::Supported.as_str(),
+        },
+        "network_modes": {
+            "disabled": CapabilityStatus::Unsupported.as_str(),
+            "proxy": CapabilityStatus::Unsupported.as_str(),
+        },
+        "notes": notes,
+    })
 }
 
 fn missing_backend_features(
@@ -570,5 +660,22 @@ mod tests {
 
         assert!(missing_backend_features(&policy, &[]).is_empty());
         assert!(LocalBackend.supports_policy(&policy).is_supported());
+    }
+
+    #[test]
+    fn linux_skeleton_reports_community_track_without_sandbox_features() {
+        assert_eq!(LinuxCommunityBackend.name(), "runseal-linux-community");
+        assert_eq!(LinuxCommunityBackend.status(), "future-community");
+        assert!(LinuxCommunityBackend.supported_features().is_empty());
+    }
+
+    #[test]
+    fn macos_skeleton_reports_experimental_track_without_sandbox_features() {
+        assert_eq!(
+            MacosExperimentalBackend.name(),
+            "runseal-macos-experimental"
+        );
+        assert_eq!(MacosExperimentalBackend.status(), "experimental");
+        assert!(MacosExperimentalBackend.supported_features().is_empty());
     }
 }

@@ -14,6 +14,8 @@ Current execution support is intentionally narrow: only explicit `danger-full-ac
 
 On Windows, fail-closed sandbox requests include a `PlatformSandboxPlan` preview for runtime root, synthetic home, profile root, temp root, and policy path planning. The scaffold creates and cleans those runtime roots before returning unsupported, but this is not an enforcement claim.
 
+On macOS and Linux, RunSeal reports explicit experimental/community skeleton backends. They support only explicit `danger-full-access` local execution until contributed backend implementations pass the shared conformance gates.
+
 The design lives in the RFC repository:
 
 - https://github.com/runseal-labs/rfcs

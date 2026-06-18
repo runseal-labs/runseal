@@ -77,6 +77,10 @@ fn read_audit_events(root: &std::path::Path, audit_path: &str) -> Result<Vec<Val
 fn expected_backend_name() -> &'static str {
     if cfg!(windows) {
         "runseal-windows-reference"
+    } else if cfg!(target_os = "macos") {
+        "runseal-macos-experimental"
+    } else if cfg!(target_os = "linux") {
+        "runseal-linux-community"
     } else {
         "runseal-local"
     }
@@ -85,6 +89,10 @@ fn expected_backend_name() -> &'static str {
 fn expected_backend_status() -> &'static str {
     if cfg!(windows) {
         "scaffold"
+    } else if cfg!(target_os = "macos") {
+        "experimental"
+    } else if cfg!(target_os = "linux") {
+        "future-community"
     } else {
         "local-baseline"
     }
