@@ -48,6 +48,13 @@ Commands:
   rpc --stdio
   version
 ";
+const SETUP_HELP_TEXT: &str = "\
+Usage: runseal setup windows-sandbox [--cwd <path>]
+
+Windows sandbox setup:
+  Run from an elevated PowerShell to install or repair the sandbox broker.
+  Sandboxed exec fails closed when setup is missing or stale.
+";
 
 pub fn run_cli() {
     if let Err(err) = run() {
@@ -202,7 +209,15 @@ fn run_exec(args: &[String]) -> Result<(), String> {
 
 fn run_setup(args: &[String]) -> Result<(), String> {
     match args {
+        [flag] if flag == "--help" || flag == "-h" => {
+            print!("{SETUP_HELP_TEXT}");
+            Ok(())
+        }
         [target] if target == "windows-sandbox" => run_windows_sandbox_setup(&current_dir()),
+        [target, flag] if target == "windows-sandbox" && (flag == "--help" || flag == "-h") => {
+            print!("{SETUP_HELP_TEXT}");
+            Ok(())
+        }
         [target, flag, cwd] if target == "windows-sandbox" && flag == "--cwd" => {
             run_windows_sandbox_setup(&PathBuf::from(cwd))
         }
