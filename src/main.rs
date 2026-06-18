@@ -434,6 +434,7 @@ fn execute_command(
                 "reason": err.reason,
                 "backend": details.get("backend").cloned().unwrap_or_else(|| json!({})),
                 "support": details.get("support").cloned().unwrap_or_else(|| json!("unsupported")),
+                "missing_features": details.get("missing_features").cloned().unwrap_or_else(|| json!([])),
                 "platform_plan": details.get("platform_plan").cloned().unwrap_or(Value::Null),
             });
             write_audit_event(&mut audit, &event)?;
