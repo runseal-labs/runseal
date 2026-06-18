@@ -371,9 +371,21 @@ impl PlatformSandboxPlan {
         let transaction = WindowsFilesystemAclTransactionPlan::from_acl_plan(&acl_plan);
         validate_private_filesystem_acl_transaction(&transaction)?;
         validate_private_filesystem_acl_entries(&transaction)?;
-        apply_private_filesystem_acl_transaction(&transaction, driver)?;
+        let subject = self.private_filesystem_acl_subject(&transaction)?;
+        apply_private_filesystem_acl_transaction(&transaction, subject, driver)?;
 
         Ok(transaction.rollback_roots().to_vec())
+    }
+
+    fn private_filesystem_acl_subject(
+        &self,
+        transaction: &WindowsFilesystemAclTransactionPlan,
+    ) -> io::Result<Option<WindowsFilesystemAclSubject>> {
+        if transaction.apply_entries().next().is_none() {
+            return Ok(None);
+        }
+        WindowsFilesystemAclSubject::from_plan(self.process_identity, self.private_process_token)
+            .map(Some)
     }
 
     fn cleanup_sandbox_setup_with_driver(
@@ -535,8 +547,36 @@ fn validate_private_filesystem_acl_entries(
 
 trait WindowsFilesystemAclDriver {
     fn capture_rollback(&mut self, root: &str) -> io::Result<()>;
-    fn apply_entry(&mut self, entry: &WindowsFilesystemAclEntry) -> io::Result<()>;
+    fn apply_entry(
+        &mut self,
+        subject: WindowsFilesystemAclSubject,
+        entry: &WindowsFilesystemAclEntry,
+    ) -> io::Result<()>;
     fn rollback(&mut self) -> io::Result<()>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WindowsFilesystemAclSubject {
+    RestrictedToken,
+}
+
+impl WindowsFilesystemAclSubject {
+    fn from_plan(process_identity: &str, private_process_token: &str) -> io::Result<Self> {
+        if process_identity == "low-privilege" && private_process_token == "restricted-token" {
+            return Ok(Self::RestrictedToken);
+        }
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "private filesystem ACL rules require a restricted process identity",
+        ))
+    }
+
+    #[cfg(test)]
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::RestrictedToken => "restricted-token",
+        }
+    }
 }
 
 fn new_windows_filesystem_acl_driver() -> Box<dyn WindowsFilesystemAclDriver> {
@@ -551,7 +591,11 @@ impl WindowsFilesystemAclDriver for ValidateOnlyWindowsFilesystemAclDriver {
         Ok(())
     }
 
-    fn apply_entry(&mut self, _entry: &WindowsFilesystemAclEntry) -> io::Result<()> {
+    fn apply_entry(
+        &mut self,
+        _subject: WindowsFilesystemAclSubject,
+        _entry: &WindowsFilesystemAclEntry,
+    ) -> io::Result<()> {
         Ok(())
     }
 
@@ -562,6 +606,7 @@ impl WindowsFilesystemAclDriver for ValidateOnlyWindowsFilesystemAclDriver {
 
 fn apply_private_filesystem_acl_transaction(
     transaction: &WindowsFilesystemAclTransactionPlan,
+    subject: Option<WindowsFilesystemAclSubject>,
     driver: &mut dyn WindowsFilesystemAclDriver,
 ) -> io::Result<()> {
     for step in transaction.steps() {
@@ -570,7 +615,13 @@ fn apply_private_filesystem_acl_transaction(
                 driver.capture_rollback(root)?;
             }
             WindowsFilesystemAclTransactionStep::ApplyEntry { entry } => {
-                if let Err(apply_err) = driver.apply_entry(entry) {
+                let Some(subject) = subject else {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "private filesystem ACL entry requires a restricted process identity",
+                    ));
+                };
+                if let Err(apply_err) = driver.apply_entry(subject, entry) {
                     return rollback_private_filesystem_acl_transaction(driver, apply_err);
                 }
             }
@@ -1458,6 +1509,7 @@ mod tests {
     #[derive(Default)]
     struct RecordingAclDriver {
         events: Vec<String>,
+        subjects: Vec<String>,
         fail_on_capture_root: Option<String>,
         fail_on_apply_root: Option<String>,
         fail_rollback: bool,
@@ -1487,8 +1539,13 @@ mod tests {
             Ok(())
         }
 
-        fn apply_entry(&mut self, entry: &WindowsFilesystemAclEntry) -> io::Result<()> {
+        fn apply_entry(
+            &mut self,
+            subject: WindowsFilesystemAclSubject,
+            entry: &WindowsFilesystemAclEntry,
+        ) -> io::Result<()> {
             self.events.push(format!("apply:{}", entry.root()));
+            self.subjects.push(subject.as_str().to_string());
             if self
                 .fail_on_apply_root
                 .as_deref()
@@ -1921,6 +1978,31 @@ mod tests {
                 format!("apply:{}", path_string(&cwd)),
             ]
         );
+        assert_eq!(driver.subjects, vec!["restricted-token"]);
+        Ok(())
+    }
+
+    #[test]
+    fn filesystem_rule_setup_rejects_unbound_acl_subject() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&cwd)?;
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+        let mut plan = WindowsReferenceBackend.fail_closed_plan("exec_unbound_acl", &cwd, &policy);
+        plan.private_process_token = "none";
+        plan.private_filesystem_rules = vec![WindowsFilesystemRule {
+            access: WindowsFilesystemAccess::ReadWrite,
+            source: WindowsFilesystemRuleSource::PolicyWrite,
+            root: path_string(&cwd),
+        }];
+
+        let err = plan.prepare_filesystem_rules().unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(
+            err.to_string()
+                .contains("require a restricted process identity")
+        );
         Ok(())
     }
 
@@ -1956,6 +2038,10 @@ mod tests {
                 "apply:C:/Workspace/.Git/",
                 "apply:c:\\workspace\\.git",
             ]
+        );
+        assert_eq!(
+            driver.subjects,
+            vec!["restricted-token", "restricted-token"]
         );
         Ok(())
     }
@@ -2155,7 +2241,11 @@ mod tests {
         let transaction = WindowsFilesystemAclTransactionPlan::from_acl_plan(&acl_plan);
         let mut driver = RecordingAclDriver::default();
 
-        apply_private_filesystem_acl_transaction(&transaction, &mut driver)?;
+        apply_private_filesystem_acl_transaction(
+            &transaction,
+            Some(WindowsFilesystemAclSubject::RestrictedToken),
+            &mut driver,
+        )?;
 
         assert_eq!(
             driver.events,
@@ -2191,8 +2281,12 @@ mod tests {
             ..RecordingAclDriver::default()
         };
 
-        let err = apply_private_filesystem_acl_transaction(&transaction, &mut driver)
-            .expect_err("apply failure must be returned");
+        let err = apply_private_filesystem_acl_transaction(
+            &transaction,
+            Some(WindowsFilesystemAclSubject::RestrictedToken),
+            &mut driver,
+        )
+        .expect_err("apply failure must be returned");
 
         assert_eq!(err.kind(), io::ErrorKind::Other);
         assert!(err.to_string().contains("apply failed for C:/Workspace"));
@@ -2229,8 +2323,12 @@ mod tests {
             ..RecordingAclDriver::default()
         };
 
-        let err = apply_private_filesystem_acl_transaction(&transaction, &mut driver)
-            .expect_err("capture failure must be returned");
+        let err = apply_private_filesystem_acl_transaction(
+            &transaction,
+            Some(WindowsFilesystemAclSubject::RestrictedToken),
+            &mut driver,
+        )
+        .expect_err("capture failure must be returned");
 
         assert_eq!(err.kind(), io::ErrorKind::Other);
         assert!(
@@ -2262,8 +2360,12 @@ mod tests {
             ..RecordingAclDriver::default()
         };
 
-        let err = apply_private_filesystem_acl_transaction(&transaction, &mut driver)
-            .expect_err("rollback failure must be returned");
+        let err = apply_private_filesystem_acl_transaction(
+            &transaction,
+            Some(WindowsFilesystemAclSubject::RestrictedToken),
+            &mut driver,
+        )
+        .expect_err("rollback failure must be returned");
 
         assert_eq!(err.kind(), io::ErrorKind::Other);
         assert!(
