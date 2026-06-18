@@ -101,6 +101,16 @@ fn handle_rpc_request(request: &Value) -> Vec<Value> {
             }
             Err(err) => vec![rpc_error(id, err)],
         },
+        "getExecution" | "cancelExecution" | "subscribeEvents" => {
+            match execution_not_found_from_params(&params) {
+                Ok(result) => vec![rpc_result(id, result)],
+                Err(err) => vec![rpc_error(id, err)],
+            }
+        }
+        "disposeSession" => match dispose_session_from_params(&params) {
+            Ok(result) => vec![rpc_result(id, result)],
+            Err(err) => vec![rpc_error(id, err)],
+        },
         _ => vec![rpc_error(
             id,
             RunSealError::new("INVALID_REQUEST", format!("unknown method: {method}")),
@@ -320,6 +330,36 @@ fn execute_from_params(params: &Value) -> Result<(Vec<Value>, Value), RunSealErr
     let policy = normalize_policy(&policy, &cwd, network)?;
 
     execute_command(&command, &cwd, &policy)
+}
+
+fn execution_not_found_from_params(params: &Value) -> Result<Value, RunSealError> {
+    let execution_id = required_string_param(params, "execution_id")?;
+
+    Err(RunSealError::with_details(
+        "EXECUTION_NOT_FOUND",
+        format!("execution not found: {execution_id}"),
+        json!({
+            "execution_id": execution_id,
+        }),
+    ))
+}
+
+fn dispose_session_from_params(params: &Value) -> Result<Value, RunSealError> {
+    let session_id = required_string_param(params, "session_id")?;
+
+    Ok(json!({
+        "session_id": session_id,
+        "status": "disposed",
+    }))
+}
+
+fn required_string_param(params: &Value, field: &'static str) -> Result<String, RunSealError> {
+    params
+        .get(field)
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| RunSealError::new("INVALID_REQUEST", format!("params.{field} is required")))
 }
 
 fn network_override_from_params(params: &Value) -> Result<Option<NetworkMode>, RunSealError> {

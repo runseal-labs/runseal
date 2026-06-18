@@ -162,6 +162,48 @@ fn get_capabilities_rpc_contract() -> Result<()> {
 }
 
 #[test]
+fn execution_lookup_methods_return_stable_not_found() -> Result<()> {
+    for method in ["getExecution", "cancelExecution", "subscribeEvents"] {
+        let output = run_rpc(&rpc_request(
+            method,
+            json!({"execution_id": "exec_missing"}),
+        ))?;
+
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let messages = stdout_json_lines(&output)?;
+        let response = &messages[0];
+
+        assert_eq!(response["error"]["data"]["code"], "EXECUTION_NOT_FOUND");
+        assert_eq!(response["error"]["data"]["execution_id"], "exec_missing");
+    }
+    Ok(())
+}
+
+#[test]
+fn dispose_session_is_noop_for_stdio_mvp() -> Result<()> {
+    let output = run_rpc(&rpc_request(
+        "disposeSession",
+        json!({"session_id": "sess_missing"}),
+    ))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = &messages[0];
+
+    assert_eq!(response["result"]["session_id"], "sess_missing");
+    assert_eq!(response["result"]["status"], "disposed");
+    Ok(())
+}
+
+#[test]
 fn explain_policy_returns_effective_hash_and_network_mode() -> Result<()> {
     let tmp = TempDir::new()?;
     let cwd = tmp.path().to_string_lossy().to_string();
