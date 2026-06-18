@@ -11,6 +11,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::process::Stdio;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 use crate::allow::AllowDenyPaths;
 use crate::allow::compute_allow_paths_for_permissions;
@@ -761,6 +763,7 @@ fn verify_setup_completed(codex_home: &Path) -> Result<()> {
 const SCHEDULED_SETUP_TASK_NAME: &str = r"\RunSeal\WindowsSandboxSetup";
 const SCHEDULED_SETUP_PAYLOAD_PREFIX: &str = "setup-task-payload-";
 const SCHEDULED_SETUP_RESULT_PREFIX: &str = "setup-task-result-";
+static SCHEDULED_SETUP_REQUEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Deserialize)]
 struct ScheduledSetupTaskResult {
@@ -773,7 +776,8 @@ fn scheduled_setup_request_id() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis())
         .unwrap_or_default();
-    format!("{}-{millis}", std::process::id())
+    let sequence = SCHEDULED_SETUP_REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{}-{millis}-{sequence}", std::process::id())
 }
 
 fn scheduled_setup_broker_home(fallback: &Path) -> PathBuf {
@@ -1421,6 +1425,17 @@ mod tests {
             result_path.file_name().and_then(|name| name.to_str()),
             Some("setup-task-result-req-1.json")
         );
+    }
+
+    #[test]
+    fn scheduled_setup_request_id_includes_process_local_sequence() {
+        let request_id = super::scheduled_setup_request_id();
+        let parts = request_id.split('-').collect::<Vec<_>>();
+
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[0], std::process::id().to_string());
+        assert!(parts[1].parse::<u128>().is_ok());
+        assert!(parts[2].parse::<u64>().is_ok());
     }
 
     #[test]

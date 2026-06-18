@@ -704,7 +704,7 @@ fn run_payload_file(payload_path: &Path) -> Result<()> {
 }
 
 fn run_payload_json(payload_json: &[u8]) -> Result<()> {
-    let payload: Payload = serde_json::from_slice(&payload_json).map_err(|err| {
+    let payload: Payload = serde_json::from_slice(payload_json).map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperRequestArgsFailed,
             format!("failed to parse payload json: {err}"),
