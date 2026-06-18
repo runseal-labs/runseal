@@ -1219,6 +1219,11 @@ fn inline_policy_accepts_environment_controls() -> Result<()> {
                     "mode": "proxy",
                     "routes": ["github-api"],
                     "direct_allow_hosts": []
+                },
+                "approval": {
+                    "on_violation": "deny",
+                    "on_network_route_missing": "deny",
+                    "on_broad_write": "deny"
                 }
             }
         }),
@@ -1240,6 +1245,9 @@ fn inline_policy_accepts_environment_controls() -> Result<()> {
     assert_eq!(payload["network"]["direct_allow_hosts"], json!([]));
     assert_eq!(payload["resources"]["timeout_ms"], 1000);
     assert_eq!(payload["resources"]["max_output_bytes"], 2048);
+    assert_eq!(payload["approval"]["on_violation"], "deny");
+    assert_eq!(payload["approval"]["on_network_route_missing"], "deny");
+    assert_eq!(payload["approval"]["on_broad_write"], "deny");
     assert_eq!(
         payload["canonical_policy"]["environment"]["scrub"],
         json!(["RUNSEAL_SECRET_*"])
@@ -1253,6 +1261,10 @@ fn inline_policy_accepts_environment_controls() -> Result<()> {
     assert_eq!(
         payload["canonical_policy"]["resources"]["max_output_bytes"],
         2048
+    );
+    assert_eq!(
+        payload["canonical_policy"]["approval"]["on_broad_write"],
+        "deny"
     );
     Ok(())
 }

@@ -123,6 +123,13 @@ pub struct ResourcePolicy {
     pub max_output_bytes: Option<u64>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ApprovalPolicy {
+    pub on_violation: String,
+    pub on_network_route_missing: String,
+    pub on_broad_write: String,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PolicySource {
     Named,
@@ -137,6 +144,7 @@ pub struct SandboxPolicy {
     pub network: NetworkPolicy,
     pub environment: EnvironmentPolicy,
     pub resources: ResourcePolicy,
+    pub approval: ApprovalPolicy,
     pub source: PolicySource,
 }
 
@@ -168,6 +176,11 @@ impl SandboxPolicy {
             "resources": {
                 "timeout_ms": self.resources.timeout_ms,
                 "max_output_bytes": self.resources.max_output_bytes,
+            },
+            "approval": {
+                "on_violation": self.approval.on_violation.clone(),
+                "on_network_route_missing": self.approval.on_network_route_missing.clone(),
+                "on_broad_write": self.approval.on_broad_write.clone(),
             }
         })
     }
@@ -207,6 +220,11 @@ impl SandboxPolicy {
             "resources": {
                 "timeout_ms": self.resources.timeout_ms,
                 "max_output_bytes": self.resources.max_output_bytes,
+            },
+            "approval": {
+                "on_violation": self.approval.on_violation.clone(),
+                "on_network_route_missing": self.approval.on_network_route_missing.clone(),
+                "on_broad_write": self.approval.on_broad_write.clone(),
             },
             "backend_requirement": if self.allows_local_execution() {
                 "local-execution"
@@ -319,7 +337,6 @@ pub fn normalize_policy(
     optional_string(object, "description")?;
     reject_non_empty_section(object, "process")?;
     reject_non_empty_section(object, "audit")?;
-    reject_non_empty_section(object, "approval")?;
     reject_non_empty_section(object, "backend")?;
 
     let id = optional_string(object, "id")?
@@ -349,6 +366,7 @@ pub fn normalize_policy(
     let network = inline_network_policy(object.get("network"), network)?;
     let environment = inline_environment(optional_object(object, "environment")?, network.mode)?;
     let resources = inline_resources(optional_object(object, "resources")?)?;
+    let approval = inline_approval(optional_object(object, "approval")?)?;
 
     Ok(SandboxPolicy {
         id,
@@ -357,6 +375,7 @@ pub fn normalize_policy(
         network,
         environment,
         resources,
+        approval,
         source: PolicySource::Inline,
     })
 }
@@ -377,6 +396,7 @@ fn named_profile(
         network: default_network(network),
         environment: default_environment(network),
         resources: default_resources(),
+        approval: default_approval(),
         source: PolicySource::Named,
     })
 }
@@ -613,6 +633,45 @@ fn inline_resources(resources: Option<&Map<String, Value>>) -> Result<ResourcePo
     })
 }
 
+fn inline_approval(approval: Option<&Map<String, Value>>) -> Result<ApprovalPolicy, PolicyError> {
+    let mut policy = default_approval();
+    let Some(approval) = approval else {
+        return Ok(policy);
+    };
+    validate_keys(
+        approval,
+        "approval",
+        &["on_violation", "on_network_route_missing", "on_broad_write"],
+    )?;
+
+    if let Some(action) = optional_string(approval, "on_violation")? {
+        policy.on_violation = approval_action("approval.on_violation", action)?;
+    }
+    if let Some(action) = optional_string(approval, "on_network_route_missing")? {
+        policy.on_network_route_missing =
+            approval_action("approval.on_network_route_missing", action)?;
+    }
+    if let Some(action) = optional_string(approval, "on_broad_write")? {
+        policy.on_broad_write = approval_action("approval.on_broad_write", action)?;
+    }
+
+    Ok(policy)
+}
+
+fn approval_action(field: &'static str, action: &str) -> Result<String, PolicyError> {
+    if action == "deny" {
+        Ok(action.to_string())
+    } else if action == "request" {
+        Err(PolicyError::invalid(format!(
+            "{field}=request is not supported in this build"
+        )))
+    } else {
+        Err(PolicyError::invalid(format!(
+            "{field} must be deny, got {action}"
+        )))
+    }
+}
+
 fn environment_set(
     value: Option<&Value>,
     scrub: &[String],
@@ -688,6 +747,14 @@ fn default_resources() -> ResourcePolicy {
     ResourcePolicy {
         timeout_ms: None,
         max_output_bytes: None,
+    }
+}
+
+fn default_approval() -> ApprovalPolicy {
+    ApprovalPolicy {
+        on_violation: "deny".to_string(),
+        on_network_route_missing: "deny".to_string(),
+        on_broad_write: "deny".to_string(),
     }
 }
 
@@ -1120,6 +1187,30 @@ mod tests {
     }
 
     #[test]
+    fn inline_policy_materializes_deny_only_approval() {
+        let cwd = PathBuf::from("/workspace");
+        let policy = normalize_policy(
+            &json!({
+                "version": POLICY_VERSION,
+                "approval": {
+                    "on_violation": "deny",
+                    "on_network_route_missing": "deny",
+                    "on_broad_write": "deny"
+                }
+            }),
+            &cwd,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(policy.approval.on_violation, "deny");
+        assert_eq!(
+            policy.canonical_json()["approval"]["on_network_route_missing"],
+            "deny"
+        );
+    }
+
+    #[test]
     fn network_override_does_not_skip_inline_network_validation() {
         let cwd = PathBuf::from("/workspace");
         let err = normalize_policy(
@@ -1190,6 +1281,15 @@ mod tests {
                 }
             }),
             "network.direct_allow_hosts is not supported",
+        );
+        assert_policy_invalid(
+            json!({
+                "version": POLICY_VERSION,
+                "approval": {
+                    "on_broad_write": "request"
+                }
+            }),
+            "approval.on_broad_write=request is not supported",
         );
     }
 
