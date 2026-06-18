@@ -26,6 +26,19 @@ pub(crate) enum WindowsFilesystemMode {
     WritableRootsCapability,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WindowsFilesystemRule {
+    pub(crate) access: WindowsFilesystemAccess,
+    pub(crate) root: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WindowsFilesystemAccess {
+    Deny,
+    ReadWrite,
+    ReadOnly,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct WindowsNetworkPlan {
     pub(crate) guard: WindowsNetworkGuard,
@@ -309,6 +322,39 @@ impl WindowsFilesystemPlan {
         }
         roots
     }
+
+    pub(crate) fn enforcement_rules(&self) -> Vec<WindowsFilesystemRule> {
+        let mut rules = Vec::new();
+        let mut deny_roots = Vec::new();
+        for root in self
+            .protected_roots
+            .iter()
+            .chain(self.private_protected_roots.iter())
+        {
+            push_unique_root(&mut deny_roots, root.clone());
+            push_filesystem_rule(&mut rules, WindowsFilesystemAccess::Deny, root.clone());
+        }
+
+        let mut writable_roots = Vec::new();
+        for root in self.effective_write_roots() {
+            if contains_windows_root(&deny_roots, &root) {
+                continue;
+            }
+            push_unique_root(&mut writable_roots, root.clone());
+            push_filesystem_rule(&mut rules, WindowsFilesystemAccess::ReadWrite, root);
+        }
+
+        for root in &self.read_roots {
+            if contains_windows_root(&deny_roots, root)
+                || contains_windows_root(&writable_roots, root)
+            {
+                continue;
+            }
+            push_filesystem_rule(&mut rules, WindowsFilesystemAccess::ReadOnly, root.clone());
+        }
+
+        rules
+    }
 }
 
 impl WindowsRuntimeRoots {
@@ -363,6 +409,43 @@ fn push_unique(roots: &mut Vec<String>, root: String) {
     if !roots.contains(&root) {
         roots.push(root);
     }
+}
+
+fn push_unique_root(roots: &mut Vec<String>, root: String) {
+    if !contains_windows_root(roots, &root) {
+        roots.push(root);
+    }
+}
+
+fn push_filesystem_rule(
+    rules: &mut Vec<WindowsFilesystemRule>,
+    access: WindowsFilesystemAccess,
+    root: String,
+) {
+    if rules
+        .iter()
+        .any(|rule| rule.access == access && same_windows_root(&rule.root, &root))
+    {
+        return;
+    }
+
+    rules.push(WindowsFilesystemRule { access, root });
+}
+
+fn contains_windows_root(roots: &[String], candidate: &str) -> bool {
+    roots.iter().any(|root| same_windows_root(root, candidate))
+}
+
+fn same_windows_root(left: &str, right: &str) -> bool {
+    windows_root_key(left) == windows_root_key(right)
+}
+
+fn windows_root_key(root: &str) -> String {
+    let mut normalized = root.replace('/', "\\");
+    while normalized.len() > 3 && normalized.ends_with('\\') {
+        normalized.pop();
+    }
+    normalized.to_ascii_lowercase()
 }
 
 fn join_runtime_path(root: &str, child: &str) -> String {
@@ -443,6 +526,76 @@ mod tests {
         assert_eq!(plan.network.managed_proxy, WindowsManagedProxy::Required);
         assert!(plan.network.inject_proxy_environment);
         assert!(plan.environment.runtime.is_empty());
+    }
+
+    #[test]
+    fn filesystem_rules_prioritize_denies_over_workspace_writes() {
+        let cwd = PathBuf::from("/workspace");
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+
+        let plan = WindowsPolicyPlan::from_policy_and_runtime_roots(&policy, None);
+        let rules = plan.filesystem.enforcement_rules();
+
+        assert_eq!(
+            rules[0],
+            WindowsFilesystemRule {
+                access: WindowsFilesystemAccess::Deny,
+                root: cwd.join(".git").to_string_lossy().to_string(),
+            }
+        );
+        assert_eq!(
+            rules[3],
+            WindowsFilesystemRule {
+                access: WindowsFilesystemAccess::ReadWrite,
+                root: "/workspace".to_string(),
+            }
+        );
+        assert!(
+            rules.iter().all(|rule| rule.root != "/workspace"
+                || rule.access != WindowsFilesystemAccess::ReadOnly)
+        );
+    }
+
+    #[test]
+    fn filesystem_rules_deduplicate_windows_root_spellings() {
+        let filesystem = WindowsFilesystemPlan {
+            mode: WindowsFilesystemMode::WritableRootsCapability,
+            read_roots: vec!["C:/Workspace".to_string(), "c:\\workspace\\".to_string()],
+            write_roots: vec!["C:/Workspace".to_string(), "c:\\workspace\\".to_string()],
+            runtime_write_roots: Vec::new(),
+            protected_roots: vec![
+                "C:/Workspace/.Git/".to_string(),
+                "c:\\workspace\\.git".to_string(),
+            ],
+            private_protected_roots: Vec::new(),
+        };
+
+        let rules = filesystem.enforcement_rules();
+
+        assert_eq!(
+            rules
+                .iter()
+                .filter(|rule| rule.access == WindowsFilesystemAccess::Deny
+                    && same_windows_root(&rule.root, "c:\\workspace\\.git"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            rules
+                .iter()
+                .filter(|rule| rule.access == WindowsFilesystemAccess::ReadWrite
+                    && same_windows_root(&rule.root, "c:\\workspace"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            rules
+                .iter()
+                .filter(|rule| rule.access == WindowsFilesystemAccess::ReadOnly
+                    && same_windows_root(&rule.root, "c:\\workspace"))
+                .count(),
+            0
+        );
     }
 
     #[test]
@@ -548,6 +701,21 @@ mod tests {
                     "/workspace/.runseal/runtime/exec_1/temp".to_string()
                 ),
             ]
+        );
+
+        let rules = plan.filesystem.enforcement_rules();
+        assert!(rules.iter().any(|rule| {
+            rule.access == WindowsFilesystemAccess::ReadOnly && rule.root == "/workspace"
+        }));
+        assert!(
+            rules.iter().all(|rule| rule.root != "/workspace"
+                || rule.access != WindowsFilesystemAccess::ReadWrite)
+        );
+        assert!(
+            rules
+                .iter()
+                .any(|rule| rule.access == WindowsFilesystemAccess::ReadWrite
+                    && rule.root == "/workspace/.runseal/runtime/exec_1/temp")
         );
     }
 

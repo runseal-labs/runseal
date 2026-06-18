@@ -1,5 +1,7 @@
 use crate::policy::{BackendFeature, SandboxLevel, SandboxPolicy};
-use crate::windows_plan::{WindowsHostRoots, WindowsPolicyPlan, WindowsRuntimeRoots};
+use crate::windows_plan::{
+    WindowsFilesystemRule, WindowsHostRoots, WindowsPolicyPlan, WindowsRuntimeRoots,
+};
 use serde_json::Map;
 use serde_json::{Value, json};
 use std::env;
@@ -181,6 +183,7 @@ pub struct PlatformSandboxPlan {
     pub filesystem_deny: Vec<String>,
     pub filesystem_protected: Vec<&'static str>,
     private_filesystem_deny: Vec<String>,
+    private_filesystem_rules: Vec<WindowsFilesystemRule>,
     pub process_boundary: &'static str,
     pub process_identity: &'static str,
     pub process_cleanup: &'static str,
@@ -222,6 +225,7 @@ impl PlatformSandboxPlan {
             filesystem_deny: policy.filesystem.deny.clone(),
             filesystem_protected: protected_filesystem_labels(policy),
             private_filesystem_deny: Vec::new(),
+            private_filesystem_rules: Vec::new(),
             process_boundary: "local-process",
             process_identity: "current-user",
             process_cleanup: "direct-child",
@@ -562,6 +566,7 @@ impl WindowsReferenceBackend {
             host_roots,
         );
         let private_filesystem_deny = windows_policy.filesystem.private_protected_roots.clone();
+        let private_filesystem_rules = windows_policy.filesystem.enforcement_rules();
         let private_process_token = windows_policy.process.token.as_str();
         let private_process_job = windows_policy.process.job.as_str();
         let filesystem_write = windows_policy.filesystem.effective_write_roots();
@@ -585,6 +590,7 @@ impl WindowsReferenceBackend {
             filesystem_deny: windows_policy.filesystem.protected_roots,
             filesystem_protected: protected_filesystem_labels(policy),
             private_filesystem_deny,
+            private_filesystem_rules,
             process_boundary: windows_policy.process.boundary.as_str(),
             process_identity: windows_policy.process.identity.as_str(),
             process_cleanup: windows_policy.process.cleanup.as_str(),
@@ -1030,6 +1036,7 @@ fn missing_backend_features(
 mod tests {
     use super::*;
     use crate::policy::{NetworkMode, normalize_policy};
+    use crate::windows_plan::WindowsFilesystemAccess;
     use serde_json::json;
     use std::fs;
     use std::io;
@@ -1257,6 +1264,9 @@ mod tests {
                 .iter()
                 .any(|root| root == private_profile)
         );
+        assert!(plan.private_filesystem_rules.iter().any(|rule| {
+            rule.access == WindowsFilesystemAccess::Deny && rule.root == private_profile
+        }));
         let public_plan = plan.json().to_string();
         assert!(!public_plan.contains("RunSealPrivateProfile"));
         assert_eq!(
