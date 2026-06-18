@@ -115,6 +115,11 @@ pub struct EnvironmentPolicy {
     pub proxy: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResourcePolicy {
+    pub timeout_ms: Option<u64>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PolicySource {
     Named,
@@ -128,6 +133,7 @@ pub struct SandboxPolicy {
     pub filesystem: FilesystemPolicy,
     pub network: NetworkPolicy,
     pub environment: EnvironmentPolicy,
+    pub resources: ResourcePolicy,
     pub source: PolicySource,
 }
 
@@ -153,6 +159,9 @@ impl SandboxPolicy {
                 "scrub": self.environment.scrub.clone(),
                 "set": environment_set_json(&self.environment.set),
                 "proxy": self.environment.proxy,
+            },
+            "resources": {
+                "timeout_ms": self.resources.timeout_ms,
             }
         })
     }
@@ -186,6 +195,9 @@ impl SandboxPolicy {
                 "scrub": self.environment.scrub.clone(),
                 "set": environment_set_json(&self.environment.set),
                 "proxy": self.environment.proxy,
+            },
+            "resources": {
+                "timeout_ms": self.resources.timeout_ms,
             },
             "backend_requirement": if self.allows_local_execution() {
                 "local-execution"
@@ -297,7 +309,6 @@ pub fn normalize_policy(
     }
     optional_string(object, "description")?;
     reject_non_empty_section(object, "process")?;
-    reject_non_empty_section(object, "resources")?;
     reject_non_empty_section(object, "audit")?;
     reject_non_empty_section(object, "approval")?;
     reject_non_empty_section(object, "backend")?;
@@ -327,6 +338,7 @@ pub fn normalize_policy(
         default_network_mode(sandbox_level)
     };
     let environment = inline_environment(optional_object(object, "environment")?, network)?;
+    let resources = inline_resources(optional_object(object, "resources")?)?;
 
     Ok(SandboxPolicy {
         id,
@@ -334,6 +346,7 @@ pub fn normalize_policy(
         filesystem: inline_filesystem(filesystem, cwd, sandbox_level)?,
         network: NetworkPolicy { mode: network },
         environment,
+        resources,
         source: PolicySource::Inline,
     })
 }
@@ -353,6 +366,7 @@ fn named_profile(
         filesystem: profile_filesystem(cwd, sandbox_level),
         network: NetworkPolicy { mode: network },
         environment: default_environment(network),
+        resources: default_resources(),
         source: PolicySource::Named,
     })
 }
@@ -531,6 +545,31 @@ fn inline_environment(
     Ok(policy)
 }
 
+fn inline_resources(resources: Option<&Map<String, Value>>) -> Result<ResourcePolicy, PolicyError> {
+    let Some(resources) = resources else {
+        return Ok(default_resources());
+    };
+    validate_keys(
+        resources,
+        "resources",
+        &[
+            "timeout_ms",
+            "memory_bytes",
+            "cpu_percent",
+            "max_output_bytes",
+        ],
+    )?;
+    reject_present_fields(
+        resources,
+        &["memory_bytes", "cpu_percent", "max_output_bytes"],
+        "resources",
+    )?;
+
+    Ok(ResourcePolicy {
+        timeout_ms: optional_u64(resources, "resources", "timeout_ms")?,
+    })
+}
+
 fn environment_set(
     value: Option<&Value>,
     scrub: &[String],
@@ -592,6 +631,10 @@ fn default_environment(network: NetworkMode) -> EnvironmentPolicy {
         set: Vec::new(),
         proxy: network == NetworkMode::Proxy,
     }
+}
+
+fn default_resources() -> ResourcePolicy {
+    ResourcePolicy { timeout_ms: None }
 }
 
 fn infer_level(filesystem: Option<&Map<String, Value>>) -> SandboxLevel {
@@ -779,6 +822,20 @@ fn optional_bool_for(
         .ok_or_else(|| PolicyError::invalid(format!("{context}.{field} must be a boolean")))
 }
 
+fn optional_u64(
+    object: &Map<String, Value>,
+    context: &'static str,
+    field: &'static str,
+) -> Result<Option<u64>, PolicyError> {
+    let Some(value) = object.get(field) else {
+        return Ok(None);
+    };
+    value
+        .as_u64()
+        .map(Some)
+        .ok_or_else(|| PolicyError::invalid(format!("{context}.{field} must be an integer")))
+}
+
 fn reject_non_empty_section(
     object: &Map<String, Value>,
     field: &'static str,
@@ -793,6 +850,21 @@ fn reject_non_empty_section(
             "{field} requirements are not supported in this build"
         )))
     }
+}
+
+fn reject_present_fields(
+    object: &Map<String, Value>,
+    fields: &[&'static str],
+    context: &'static str,
+) -> Result<(), PolicyError> {
+    for field in fields {
+        if object.contains_key(*field) {
+            return Err(PolicyError::invalid(format!(
+                "{context}.{field} is not supported in this build"
+            )));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -932,6 +1004,25 @@ mod tests {
     }
 
     #[test]
+    fn inline_policy_materializes_resource_timeout() {
+        let cwd = PathBuf::from("/workspace");
+        let policy = normalize_policy(
+            &json!({
+                "version": POLICY_VERSION,
+                "resources": {
+                    "timeout_ms": 1000
+                }
+            }),
+            &cwd,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(policy.resources.timeout_ms, Some(1000));
+        assert_eq!(policy.canonical_json()["resources"]["timeout_ms"], 1000);
+    }
+
+    #[test]
     fn inline_policy_rejects_unsupported_network_routes() {
         assert_policy_invalid(
             json!({
@@ -992,10 +1083,10 @@ mod tests {
             json!({
                 "version": POLICY_VERSION,
                 "resources": {
-                    "timeout_ms": 1000
+                    "memory_bytes": 1000
                 }
             }),
-            "resources requirements are not supported",
+            "resources.memory_bytes is not supported",
         );
     }
 

@@ -856,6 +856,70 @@ fn execute_timeout_returns_stable_error_and_audit_event() -> Result<()> {
 }
 
 #[test]
+fn execute_uses_policy_resource_timeout() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let output = run_rpc(&rpc_request(
+        "execute",
+        json!({
+            "command": [python_bin(), "-c", "import time; time.sleep(1)"],
+            "cwd": tmp.path(),
+            "policy": {
+                "version": "runseal.policy/v1",
+                "sandbox_level": "danger-full-access",
+                "resources": {"timeout_ms": 10}
+            }
+        }),
+    ))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = &messages[0];
+
+    assert_eq!(response["error"]["data"]["code"], "EXECUTION_TIMEOUT");
+    assert_eq!(response["error"]["data"]["timeout_ms"], 10);
+    Ok(())
+}
+
+#[test]
+fn execute_rejects_timeout_above_policy_limit() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let output = run_rpc(&rpc_request(
+        "execute",
+        json!({
+            "command": [python_bin(), "-c", "print('must not run')"],
+            "cwd": tmp.path(),
+            "policy": {
+                "version": "runseal.policy/v1",
+                "sandbox_level": "danger-full-access",
+                "resources": {"timeout_ms": 10}
+            },
+            "timeout_ms": 20
+        }),
+    ))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = &messages[0];
+
+    assert_eq!(response["error"]["data"]["code"], "INVALID_REQUEST");
+    assert!(
+        response["error"]["data"]["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("params.timeout_ms exceeds policy resources.timeout_ms")
+    );
+    Ok(())
+}
+
+#[test]
 fn explain_policy_rejects_unsupported_request_fields() -> Result<()> {
     let tmp = TempDir::new()?;
     let output = run_rpc(&rpc_request(
@@ -1107,6 +1171,9 @@ fn inline_policy_accepts_environment_controls() -> Result<()> {
                     },
                     "proxy": false
                 },
+                "resources": {
+                    "timeout_ms": 1000
+                },
                 "network": {"mode": "proxy"}
             }
         }),
@@ -1124,11 +1191,13 @@ fn inline_policy_accepts_environment_controls() -> Result<()> {
     assert_eq!(payload["environment"]["scrub"], json!(["RUNSEAL_SECRET_*"]));
     assert_eq!(payload["environment"]["set"]["CI"], "1");
     assert_eq!(payload["environment"]["proxy"], false);
+    assert_eq!(payload["resources"]["timeout_ms"], 1000);
     assert_eq!(
         payload["canonical_policy"]["environment"]["scrub"],
         json!(["RUNSEAL_SECRET_*"])
     );
     assert_eq!(payload["canonical_policy"]["environment"]["set"]["CI"], "1");
+    assert_eq!(payload["canonical_policy"]["resources"]["timeout_ms"], 1000);
     Ok(())
 }
 

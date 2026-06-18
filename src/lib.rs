@@ -228,7 +228,6 @@ fn execute_from_params(params: &Value) -> Result<(Vec<Value>, Value), RunSealErr
         ],
     )?;
     let stdin = stdin_from_params(params)?;
-    let timeout = timeout_from_params(params)?;
     let metadata = metadata_from_params(params)?;
     let command = params
         .get("command")
@@ -252,6 +251,7 @@ fn execute_from_params(params: &Value) -> Result<(Vec<Value>, Value), RunSealErr
         .unwrap_or_else(|| json!("read-only"));
     let network = network_override_from_params(params)?;
     let policy = normalize_policy(&policy, &cwd, network)?;
+    let timeout = timeout_from_params(params, &policy)?;
     let env = env_from_params(params, &policy)?;
 
     execute_command(&command, &cwd, &policy, stdin, env, metadata, timeout)
@@ -341,15 +341,28 @@ fn network_override_from_params(
     })
 }
 
-fn timeout_from_params(params: &Map<String, Value>) -> Result<Option<Duration>, RunSealError> {
-    let Some(value) = params.get("timeout_ms") else {
-        return Ok(None);
+fn timeout_from_params(
+    params: &Map<String, Value>,
+    policy: &SandboxPolicy,
+) -> Result<Option<Duration>, RunSealError> {
+    let requested_timeout = match params.get("timeout_ms") {
+        Some(value) => Some(value.as_u64().ok_or_else(|| {
+            RunSealError::new("INVALID_REQUEST", "params.timeout_ms must be an integer")
+        })?),
+        None => None,
     };
-    let timeout_ms = value.as_u64().ok_or_else(|| {
-        RunSealError::new("INVALID_REQUEST", "params.timeout_ms must be an integer")
-    })?;
+    let timeout_ms = match (requested_timeout, policy.resources.timeout_ms) {
+        (Some(requested), Some(limit)) if requested > limit => {
+            return Err(RunSealError::new(
+                "INVALID_REQUEST",
+                "params.timeout_ms exceeds policy resources.timeout_ms",
+            ));
+        }
+        (Some(requested), _) => Some(requested),
+        (None, policy_timeout) => policy_timeout,
+    };
 
-    Ok(Some(Duration::from_millis(timeout_ms)))
+    Ok(timeout_ms.map(Duration::from_millis))
 }
 
 fn metadata_from_params(params: &Map<String, Value>) -> Result<Option<Value>, RunSealError> {
