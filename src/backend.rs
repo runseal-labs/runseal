@@ -335,14 +335,19 @@ impl PlatformSandboxPlan {
     }
 
     pub fn prepare_filesystem_rules(&self) -> io::Result<Vec<String>> {
+        let mut driver = ValidateOnlyWindowsFilesystemAclDriver;
+        self.prepare_filesystem_rules_with_driver(&mut driver)
+    }
+
+    fn prepare_filesystem_rules_with_driver(
+        &self,
+        driver: &mut dyn WindowsFilesystemAclDriver,
+    ) -> io::Result<Vec<String>> {
         let acl_plan = WindowsFilesystemAclPlan::from_rules(&self.private_filesystem_rules);
         let transaction = WindowsFilesystemAclTransactionPlan::from_acl_plan(&acl_plan);
         validate_private_filesystem_acl_transaction(&transaction)?;
         validate_private_filesystem_acl_entries(&transaction)?;
-        apply_private_filesystem_acl_transaction(
-            &transaction,
-            &mut ValidateOnlyWindowsFilesystemAclDriver,
-        )?;
+        apply_private_filesystem_acl_transaction(&transaction, driver)?;
 
         let mut prepared = Vec::new();
         for entry in transaction.apply_entries() {
@@ -488,18 +493,30 @@ fn apply_private_filesystem_acl_transaction(
     driver: &mut dyn WindowsFilesystemAclDriver,
 ) -> io::Result<()> {
     for step in transaction.steps() {
-        let result = match step {
+        match step {
             WindowsFilesystemAclTransactionStep::CaptureRollback { root } => {
-                driver.capture_rollback(root)
+                driver.capture_rollback(root)?;
             }
-            WindowsFilesystemAclTransactionStep::ApplyEntry { entry } => driver.apply_entry(entry),
-        };
-        if let Err(apply_err) = result {
-            driver.rollback()?;
-            return Err(apply_err);
+            WindowsFilesystemAclTransactionStep::ApplyEntry { entry } => {
+                if let Err(apply_err) = driver.apply_entry(entry) {
+                    return rollback_private_filesystem_acl_transaction(driver, apply_err);
+                }
+            }
         }
     }
     Ok(())
+}
+
+fn rollback_private_filesystem_acl_transaction(
+    driver: &mut dyn WindowsFilesystemAclDriver,
+    apply_err: io::Error,
+) -> io::Result<()> {
+    if let Err(rollback_err) = driver.rollback() {
+        return Err(io::Error::other(format!(
+            "private filesystem ACL transaction failed ({apply_err}); rollback failed ({rollback_err})"
+        )));
+    }
+    Err(apply_err)
 }
 
 fn validate_private_filesystem_acl_entry(entry: &WindowsFilesystemAclEntry) -> io::Result<()> {
@@ -1258,12 +1275,21 @@ mod tests {
     #[derive(Default)]
     struct RecordingAclDriver {
         events: Vec<String>,
+        fail_on_capture_root: Option<String>,
         fail_on_apply_root: Option<String>,
+        fail_rollback: bool,
     }
 
     impl WindowsFilesystemAclDriver for RecordingAclDriver {
         fn capture_rollback(&mut self, root: &str) -> io::Result<()> {
             self.events.push(format!("capture:{root}"));
+            if self
+                .fail_on_capture_root
+                .as_deref()
+                .is_some_and(|failed_root| failed_root == root)
+            {
+                return Err(io::Error::other(format!("capture failed for {root}")));
+            }
             Ok(())
         }
 
@@ -1284,6 +1310,9 @@ mod tests {
 
         fn rollback(&mut self) -> io::Result<()> {
             self.events.push("rollback".to_string());
+            if self.fail_rollback {
+                return Err(io::Error::other("rollback failed"));
+            }
             Ok(())
         }
     }
@@ -1616,6 +1645,33 @@ mod tests {
     }
 
     #[test]
+    fn filesystem_rule_setup_uses_injected_acl_driver() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&cwd)?;
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+        let mut plan = WindowsReferenceBackend.fail_closed_plan("exec_driver", &cwd, &policy);
+        plan.private_filesystem_rules = vec![WindowsFilesystemRule {
+            access: WindowsFilesystemAccess::ReadWrite,
+            source: WindowsFilesystemRuleSource::PolicyWrite,
+            root: path_string(&cwd),
+        }];
+        let mut driver = RecordingAclDriver::default();
+
+        let prepared = plan.prepare_filesystem_rules_with_driver(&mut driver)?;
+
+        assert_eq!(prepared, vec![path_string(&cwd)]);
+        assert_eq!(
+            driver.events,
+            vec![
+                format!("capture:{}", path_string(&cwd)),
+                format!("apply:{}", path_string(&cwd)),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
     fn filesystem_acl_transaction_executor_captures_before_apply() -> io::Result<()> {
         let rules = vec![
             WindowsFilesystemRule {
@@ -1666,6 +1722,7 @@ mod tests {
         let mut driver = RecordingAclDriver {
             events: Vec::new(),
             fail_on_apply_root: Some("C:/Workspace".to_string()),
+            ..RecordingAclDriver::default()
         };
 
         let err = apply_private_filesystem_acl_transaction(&transaction, &mut driver)
@@ -1673,6 +1730,82 @@ mod tests {
 
         assert_eq!(err.kind(), io::ErrorKind::Other);
         assert!(err.to_string().contains("apply failed for C:/Workspace"));
+        assert_eq!(
+            driver.events,
+            vec![
+                "capture:C:/Workspace/.git",
+                "apply:C:/Workspace/.git",
+                "capture:C:/Workspace",
+                "apply:C:/Workspace",
+                "rollback",
+            ]
+        );
+    }
+
+    #[test]
+    fn filesystem_acl_transaction_executor_does_not_rollback_after_capture_failure() {
+        let rules = vec![
+            WindowsFilesystemRule {
+                access: WindowsFilesystemAccess::Deny,
+                source: WindowsFilesystemRuleSource::ProtectedDeny,
+                root: "C:/Workspace/.git".to_string(),
+            },
+            WindowsFilesystemRule {
+                access: WindowsFilesystemAccess::ReadWrite,
+                source: WindowsFilesystemRuleSource::PolicyWrite,
+                root: "C:/Workspace".to_string(),
+            },
+        ];
+        let acl_plan = WindowsFilesystemAclPlan::from_rules(&rules);
+        let transaction = WindowsFilesystemAclTransactionPlan::from_acl_plan(&acl_plan);
+        let mut driver = RecordingAclDriver {
+            fail_on_capture_root: Some("C:/Workspace/.git".to_string()),
+            ..RecordingAclDriver::default()
+        };
+
+        let err = apply_private_filesystem_acl_transaction(&transaction, &mut driver)
+            .expect_err("capture failure must be returned");
+
+        assert_eq!(err.kind(), io::ErrorKind::Other);
+        assert!(
+            err.to_string()
+                .contains("capture failed for C:/Workspace/.git")
+        );
+        assert_eq!(driver.events, vec!["capture:C:/Workspace/.git"]);
+    }
+
+    #[test]
+    fn filesystem_acl_transaction_executor_reports_rollback_failure() {
+        let rules = vec![
+            WindowsFilesystemRule {
+                access: WindowsFilesystemAccess::Deny,
+                source: WindowsFilesystemRuleSource::ProtectedDeny,
+                root: "C:/Workspace/.git".to_string(),
+            },
+            WindowsFilesystemRule {
+                access: WindowsFilesystemAccess::ReadWrite,
+                source: WindowsFilesystemRuleSource::PolicyWrite,
+                root: "C:/Workspace".to_string(),
+            },
+        ];
+        let acl_plan = WindowsFilesystemAclPlan::from_rules(&rules);
+        let transaction = WindowsFilesystemAclTransactionPlan::from_acl_plan(&acl_plan);
+        let mut driver = RecordingAclDriver {
+            fail_on_apply_root: Some("C:/Workspace".to_string()),
+            fail_rollback: true,
+            ..RecordingAclDriver::default()
+        };
+
+        let err = apply_private_filesystem_acl_transaction(&transaction, &mut driver)
+            .expect_err("rollback failure must be returned");
+
+        assert_eq!(err.kind(), io::ErrorKind::Other);
+        assert!(
+            err.to_string()
+                .contains("private filesystem ACL transaction failed")
+        );
+        assert!(err.to_string().contains("apply failed for C:/Workspace"));
+        assert!(err.to_string().contains("rollback failed"));
         assert_eq!(
             driver.events,
             vec![
