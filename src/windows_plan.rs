@@ -63,6 +63,19 @@ pub(crate) struct WindowsFilesystemAclEntry {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WindowsFilesystemAclEffect {
+    Allow,
+    Deny,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WindowsFilesystemAclRights {
+    FullControl,
+    Modify,
+    ReadExecute,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WindowsFilesystemAclScope {
     RootAndDescendants,
 }
@@ -163,6 +176,23 @@ impl WindowsFilesystemAclEntry {
 
     pub(crate) fn root(&self) -> &str {
         &self.root
+    }
+
+    pub(crate) fn effect(&self) -> WindowsFilesystemAclEffect {
+        match self.access {
+            WindowsFilesystemAccess::Deny => WindowsFilesystemAclEffect::Deny,
+            WindowsFilesystemAccess::ReadWrite | WindowsFilesystemAccess::ReadOnly => {
+                WindowsFilesystemAclEffect::Allow
+            }
+        }
+    }
+
+    pub(crate) fn rights(&self) -> WindowsFilesystemAclRights {
+        match self.access {
+            WindowsFilesystemAccess::Deny => WindowsFilesystemAclRights::FullControl,
+            WindowsFilesystemAccess::ReadWrite => WindowsFilesystemAclRights::Modify,
+            WindowsFilesystemAccess::ReadOnly => WindowsFilesystemAclRights::ReadExecute,
+        }
     }
 
     pub(crate) fn requires_existing_root(&self) -> bool {
@@ -772,6 +802,22 @@ mod tests {
         );
         assert_eq!(acl_plan.entries().len(), rules.len());
         assert_eq!(acl_plan.entries()[0].root(), rules[0].root.as_str());
+        assert_eq!(
+            acl_plan.entries()[0].effect(),
+            WindowsFilesystemAclEffect::Deny
+        );
+        assert_eq!(
+            acl_plan.entries()[0].rights(),
+            WindowsFilesystemAclRights::FullControl
+        );
+        assert!(
+            acl_plan
+                .entries()
+                .iter()
+                .any(|entry| entry.root() == "/workspace"
+                    && entry.effect() == WindowsFilesystemAclEffect::Allow
+                    && entry.rights() == WindowsFilesystemAclRights::Modify)
+        );
         assert!(!acl_plan.entries()[0].requires_existing_root());
         assert!(acl_plan.entries()[0].has_consistent_access_source());
         assert!(acl_plan.entries()[0].is_tree_scoped());
@@ -974,6 +1020,12 @@ mod tests {
         let rules = plan.filesystem.enforcement_rules();
         assert!(rules.iter().any(|rule| {
             rule.access == WindowsFilesystemAccess::ReadOnly && rule.root == "/workspace"
+        }));
+        let acl_plan = WindowsFilesystemAclPlan::from_rules(&rules);
+        assert!(acl_plan.entries().iter().any(|entry| {
+            entry.root() == "/workspace"
+                && entry.effect() == WindowsFilesystemAclEffect::Allow
+                && entry.rights() == WindowsFilesystemAclRights::ReadExecute
         }));
         assert!(
             rules.iter().all(|rule| rule.root != "/workspace"

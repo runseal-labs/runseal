@@ -1,6 +1,7 @@
 use crate::policy::{BackendFeature, SandboxLevel, SandboxPolicy};
 use crate::windows_plan::{
-    WindowsFilesystemAclEntry, WindowsFilesystemAclPlan, WindowsFilesystemAclTransactionPlan,
+    WindowsFilesystemAclEffect, WindowsFilesystemAclEntry, WindowsFilesystemAclPlan,
+    WindowsFilesystemAclRights, WindowsFilesystemAclTransactionPlan,
     WindowsFilesystemAclTransactionStep, WindowsFilesystemRule, WindowsHostRoots,
     WindowsPolicyPlan, WindowsRuntimeRoots,
 };
@@ -644,6 +645,7 @@ fn rollback_private_filesystem_acl_transaction(
 
 fn validate_private_filesystem_acl_entry(entry: &WindowsFilesystemAclEntry) -> io::Result<()> {
     validate_private_filesystem_rule_root(entry.root())?;
+    validate_private_filesystem_acl_operation(entry)?;
     if !entry.has_consistent_access_source() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -666,6 +668,21 @@ fn validate_private_filesystem_acl_entry(entry: &WindowsFilesystemAclEntry) -> i
         validate_existing_filesystem_rule_root(entry)?;
     }
     Ok(())
+}
+
+fn validate_private_filesystem_acl_operation(entry: &WindowsFilesystemAclEntry) -> io::Result<()> {
+    match (entry.effect(), entry.rights()) {
+        (WindowsFilesystemAclEffect::Deny, WindowsFilesystemAclRights::FullControl)
+        | (WindowsFilesystemAclEffect::Allow, WindowsFilesystemAclRights::Modify)
+        | (WindowsFilesystemAclEffect::Allow, WindowsFilesystemAclRights::ReadExecute) => Ok(()),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "private filesystem ACL entry has unsupported operation for root: {}",
+                entry.root()
+            ),
+        )),
+    }
 }
 
 fn validate_private_filesystem_rule_root(root: &str) -> io::Result<()> {
