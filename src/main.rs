@@ -4,6 +4,7 @@ mod policy;
 
 use audit::AuditWriter;
 use backend::{BackendError, ExecutionStdin, SandboxBackend, active_backend};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use policy::{NetworkMode, POLICY_VERSION, PolicyError, SandboxPolicy, normalize_policy};
 use serde_json::{Map, Value, json};
 use std::env;
@@ -749,31 +750,20 @@ fn execute_command(
             }),
         ));
     }
+    let mut events = vec![started];
+    if !output.stdout.is_empty() {
+        let event = stream_event("execution.stdout", &execution_id, &output.stdout, 0);
+        write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
+        events.push(event);
+    }
+    if !output.stderr.is_empty() {
+        let event = stream_event("execution.stderr", &execution_id, &output.stderr, 0);
+        write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
+        events.push(event);
+    }
     let exit_code = output.status.code().unwrap_or(1);
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-    let mut events = vec![started];
-    if !stdout.is_empty() {
-        let event = json!({
-            "type": "execution.stdout",
-            "execution_id": execution_id,
-            "text": stdout,
-            "bytes": output.stdout.len(),
-        });
-        write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
-        events.push(event);
-    }
-    if !stderr.is_empty() {
-        let event = json!({
-            "type": "execution.stderr",
-            "execution_id": execution_id,
-            "text": stderr,
-            "bytes": output.stderr.len(),
-        });
-        write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
-        events.push(event);
-    }
     let finished = json!({
         "type": "execution.finished",
         "execution_id": execution_id,
@@ -814,6 +804,18 @@ fn execute_command(
     });
 
     Ok((events, result))
+}
+
+fn stream_event(event_type: &'static str, execution_id: &str, bytes: &[u8], offset: u64) -> Value {
+    let encoded = STANDARD.encode(bytes);
+    json!({
+        "type": event_type,
+        "execution_id": execution_id,
+        "data": format!("base64:{encoded}"),
+        "encoding": "base64",
+        "stream_offset": offset,
+        "bytes": bytes.len(),
+    })
 }
 
 fn create_audit_writer(cwd: &Path, execution_id: &str) -> Result<AuditWriter, RunSealError> {

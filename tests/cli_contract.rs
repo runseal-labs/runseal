@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::Value;
 use std::env;
 use std::fs;
@@ -48,6 +49,20 @@ fn stdout_json_lines(output: &Output) -> Result<Vec<Value>> {
         .filter(|line| !line.trim().is_empty())
         .map(|line| serde_json::from_str(line).context("stdout line was not valid JSON"))
         .collect()
+}
+
+fn decode_stream_event(event: &Value) -> Result<String> {
+    assert_eq!(event["encoding"], "base64");
+    assert_eq!(event["stream_offset"], 0);
+    assert!(event.get("text").is_none());
+    let encoded = event["data"]
+        .as_str()
+        .and_then(|data| data.strip_prefix("base64:"))
+        .context("stream event must include base64-prefixed data")?;
+    let bytes = STANDARD
+        .decode(encoded)
+        .context("stream data must decode")?;
+    String::from_utf8(bytes).context("stream data must be UTF-8 for this test")
 }
 
 fn expected_backend_name() -> &'static str {
@@ -202,6 +217,11 @@ fn exec_events_stream_uses_execution_vocabulary() -> Result<()> {
     assert!(event_types.contains(&"execution.started"));
     assert!(event_types.contains(&"execution.stdout"));
     assert!(event_types.contains(&"execution.finished"));
+    let stdout_event = events
+        .iter()
+        .find(|event| event["type"] == "execution.stdout")
+        .context("execution.stdout event must exist")?;
+    assert!(decode_stream_event(stdout_event)?.contains("hello from runseal"));
     assert!(
         events
             .iter()
@@ -277,6 +297,11 @@ fn exec_json_returns_execution_result() -> Result<()> {
     assert!(audit_event_types.contains(&"execution.started"));
     assert!(audit_event_types.contains(&"execution.stdout"));
     assert!(audit_event_types.contains(&"execution.finished"));
+    let audit_stdout = audit_events
+        .iter()
+        .find(|event| event["type"] == "execution.stdout")
+        .context("execution.stdout audit event must exist")?;
+    assert!(decode_stream_event(audit_stdout)?.contains("42"));
     assert!(payload["stdout_bytes"].as_u64().unwrap_or_default() > 0);
     assert_eq!(payload["output_truncated"], false);
     assert!(payload["resource_usage"]["duration_ms"].as_u64().is_some());

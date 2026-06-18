@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use std::env;
 use std::fs;
@@ -67,6 +68,20 @@ fn stdout_json_lines(output: &Output) -> Result<Vec<Value>> {
         .filter(|line| !line.trim().is_empty())
         .map(|line| serde_json::from_str(line).context("stdout line was not valid JSON"))
         .collect()
+}
+
+fn decode_stream_event(event: &Value) -> Result<String> {
+    assert_eq!(event["encoding"], "base64");
+    assert_eq!(event["stream_offset"], 0);
+    assert!(event.get("text").is_none());
+    let encoded = event["data"]
+        .as_str()
+        .and_then(|data| data.strip_prefix("base64:"))
+        .context("stream event must include base64-prefixed data")?;
+    let bytes = STANDARD
+        .decode(encoded)
+        .context("stream data must decode")?;
+    String::from_utf8(bytes).context("stream data must be UTF-8 for this test")
 }
 
 fn read_audit_events(root: &std::path::Path, audit_path: &str) -> Result<Vec<Value>> {
@@ -792,6 +807,12 @@ fn execute_rpc_streams_events_and_final_result() -> Result<()> {
     assert!(event_types.contains(&"execution.started"));
     assert!(event_types.contains(&"execution.stdout"));
     assert!(event_types.contains(&"execution.finished"));
+    let stdout_event = notifications
+        .iter()
+        .map(|message| &message["params"])
+        .find(|event| event["type"] == "execution.stdout")
+        .context("execution.stdout notification must exist")?;
+    assert!(decode_stream_event(stdout_event)?.contains("protocol ok"));
     assert_eq!(response["result"]["status"], "finished");
     assert_eq!(response["result"]["exit_code"], 0);
     assert_eq!(
