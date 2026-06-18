@@ -823,7 +823,7 @@ impl WindowsReferenceBackend {
         let private_process_token = windows_policy.process.token.as_str();
         let private_process_job = windows_policy.process.job.as_str();
         let private_setup_payload = WindowsVendorSandboxProfile::from_policy(policy)
-            .single_user_setup_payload(&synthetic_home, cwd);
+            .single_user_setup_payload(&runtime_root, cwd, &windows_setup_real_user());
         let filesystem_write = windows_policy.filesystem.effective_write_roots();
 
         PlatformSandboxPlan {
@@ -877,8 +877,17 @@ fn has_single_user_setup_payload(payload: Option<&str>) -> bool {
     };
 
     payload.get("sandbox_username").and_then(Value::as_str) == Some("RunSealSandbox")
+        && payload.get("codex_home").and_then(Value::as_str).is_some()
+        && payload.get("command_cwd").and_then(Value::as_str).is_some()
+        && payload.get("real_user").and_then(Value::as_str).is_some()
+        && payload.get("sandbox_home").is_none()
+        && payload.get("network").is_none()
         && payload.get("offline_username").is_none()
         && payload.get("online_username").is_none()
+}
+
+fn windows_setup_real_user() -> String {
+    std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string())
 }
 
 fn environment_runtime_json(entries: &[(String, String)]) -> Value {
@@ -1506,6 +1515,20 @@ mod tests {
             plan.private_setup_identity_artifacts,
             "single-sandbox-user-artifacts"
         );
+        let private_setup_payload =
+            serde_json::from_str::<Value>(plan.private_setup_payload.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            private_setup_payload["codex_home"],
+            json!(plan.runtime_root.as_ref().unwrap())
+        );
+        assert_ne!(
+            private_setup_payload["codex_home"],
+            json!(plan.synthetic_home.as_ref().unwrap())
+        );
+        assert_eq!(private_setup_payload["sandbox_username"], "RunSealSandbox");
+        assert!(private_setup_payload["real_user"].is_string());
+        assert_eq!(private_setup_payload.get("sandbox_home"), None);
+        assert_eq!(private_setup_payload.get("network"), None);
         assert_eq!(plan.filesystem_protected, vec!["workspace_metadata"]);
         let plan_json = plan.json();
         let public_plan = plan_json.to_string();

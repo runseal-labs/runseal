@@ -2,7 +2,7 @@ use crate::policy::{NetworkMode, SandboxPolicy};
 use serde_json::{Value, json};
 use std::path::Path;
 
-const SETUP_PAYLOAD_VERSION: u32 = 1;
+const SETUP_PAYLOAD_VERSION: u32 = 5;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum WindowsVendorSandboxProfile {
@@ -124,8 +124,9 @@ impl WindowsVendorSandboxProfile {
 
     pub(crate) fn single_user_setup_payload(
         &self,
-        sandbox_home: &Path,
+        codex_home: &Path,
         command_cwd: &Path,
+        real_user: &str,
     ) -> Option<Value> {
         let Self::Managed {
             sandbox_user_model, ..
@@ -137,7 +138,7 @@ impl WindowsVendorSandboxProfile {
         Some(json!({
             "version": SETUP_PAYLOAD_VERSION,
             "sandbox_username": sandbox_user_model.local_account_name(),
-            "sandbox_home": path_string(sandbox_home),
+            "codex_home": path_string(codex_home),
             "command_cwd": path_string(command_cwd),
             "read_roots": self.read_roots(),
             "write_roots": self.write_roots(),
@@ -145,19 +146,10 @@ impl WindowsVendorSandboxProfile {
             "deny_write_paths": Vec::<String>::new(),
             "proxy_ports": Vec::<u16>::new(),
             "allow_local_binding": false,
-            "network": self.network_policy().map(WindowsVendorNetworkPolicy::as_str),
+            "real_user": real_user,
             "mode": "full",
             "refresh_only": true,
         }))
-    }
-}
-
-impl WindowsVendorNetworkPolicy {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Disabled => "disabled",
-            Self::Proxy => "proxy",
-        }
     }
 }
 
@@ -315,29 +307,31 @@ mod tests {
         assert!(profile.read_roots().is_empty());
         assert!(profile.write_roots().is_empty());
         assert!(profile.deny_roots().is_empty());
-        assert_eq!(profile.single_user_setup_payload(&cwd, &cwd), None);
+        assert_eq!(profile.single_user_setup_payload(&cwd, &cwd, "User"), None);
     }
 
     #[test]
     fn setup_payload_uses_one_sandbox_identity() {
         let cwd = PathBuf::from("C:/workspace");
-        let sandbox_home = PathBuf::from("C:/runseal/sandbox");
+        let codex_home = PathBuf::from("C:/runseal/sandbox");
         let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
         let profile = WindowsVendorSandboxProfile::from_policy(&policy);
         let payload = profile
-            .single_user_setup_payload(&sandbox_home, &cwd)
+            .single_user_setup_payload(&codex_home, &cwd, "User")
             .unwrap();
 
         assert_eq!(payload["version"], SETUP_PAYLOAD_VERSION);
         assert_eq!(payload["sandbox_username"], "RunSealSandbox");
-        assert_eq!(payload["sandbox_home"], "C:/runseal/sandbox");
+        assert_eq!(payload["codex_home"], "C:/runseal/sandbox");
         assert_eq!(payload["command_cwd"], "C:/workspace");
         assert_eq!(payload["deny_write_paths"], json!([]));
         assert_eq!(payload["proxy_ports"], json!([]));
         assert_eq!(payload["allow_local_binding"], false);
-        assert_eq!(payload["network"], "proxy");
+        assert_eq!(payload["real_user"], "User");
         assert_eq!(payload["mode"], "full");
         assert_eq!(payload["refresh_only"], true);
+        assert_eq!(payload.get("sandbox_home"), None);
+        assert_eq!(payload.get("network"), None);
         let serialized = payload.to_string();
         assert!(!serialized.contains("offline"));
         assert!(!serialized.contains("online"));
