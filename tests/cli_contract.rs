@@ -228,6 +228,12 @@ fn exec_json_returns_execution_result() -> Result<()> {
         .starts_with("exec_"));
     assert_eq!(payload["policy_id"], "danger-full-access");
     assert_eq!(payload["sandbox"]["enforced"], false);
+    assert_eq!(payload["platform_plan"]["enforcement"], "local-execution");
+    assert_eq!(
+        payload["platform_plan"]["backend"]["name"],
+        expected_backend_name()
+    );
+    assert_eq!(payload["platform_plan"]["filesystem"]["write"][0], "*");
     assert!(payload["policy_hash"]
         .as_str()
         .unwrap_or_default()

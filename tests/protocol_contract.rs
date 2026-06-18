@@ -265,6 +265,11 @@ fn sandboxed_policy_without_backend_fails_closed() -> Result<()> {
         response["error"]["data"]["code"],
         "BACKEND_CAPABILITY_MISSING"
     );
+    assert_eq!(
+        response["error"]["data"]["backend"]["name"],
+        expected_backend_name()
+    );
+    assert_eq!(response["error"]["data"]["support"], "unsupported");
     assert!(messages
         .iter()
         .all(|message| message.get("method") != Some(&json!("event"))));
@@ -307,6 +312,14 @@ fn execute_rpc_streams_events_and_final_result() -> Result<()> {
     assert!(event_types.contains(&"execution.finished"));
     assert_eq!(response["result"]["status"], "finished");
     assert_eq!(response["result"]["exit_code"], 0);
+    assert_eq!(
+        response["result"]["platform_plan"]["enforcement"],
+        "local-execution"
+    );
+    assert_eq!(
+        response["result"]["platform_plan"]["backend"]["name"],
+        expected_backend_name()
+    );
     assert!(response["result"]["audit_path"]
         .as_str()
         .unwrap_or_default()

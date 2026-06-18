@@ -1,5 +1,6 @@
 use crate::policy::{SandboxLevel, SandboxPolicy};
 use serde_json::{json, Value};
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CapabilityStatus {
@@ -25,6 +26,12 @@ pub trait SandboxBackend {
     fn status(&self) -> &'static str;
     fn platform(&self) -> &'static str;
     fn supports_policy(&self, policy: &SandboxPolicy) -> CapabilityStatus;
+    fn compile_plan(
+        &self,
+        execution_id: &str,
+        cwd: &Path,
+        policy: &SandboxPolicy,
+    ) -> Result<PlatformSandboxPlan, BackendError>;
     fn capabilities_json(&self) -> Value;
 }
 
@@ -63,11 +70,136 @@ impl SandboxBackend for ActiveBackend {
         }
     }
 
+    fn compile_plan(
+        &self,
+        execution_id: &str,
+        cwd: &Path,
+        policy: &SandboxPolicy,
+    ) -> Result<PlatformSandboxPlan, BackendError> {
+        match self {
+            Self::Local(backend) => backend.compile_plan(execution_id, cwd, policy),
+            Self::WindowsReference(backend) => backend.compile_plan(execution_id, cwd, policy),
+        }
+    }
+
     fn capabilities_json(&self) -> Value {
         match self {
             Self::Local(backend) => backend.capabilities_json(),
             Self::WindowsReference(backend) => backend.capabilities_json(),
         }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlatformSandboxPlan {
+    pub backend: &'static str,
+    pub backend_status: &'static str,
+    pub platform: &'static str,
+    pub execution_id: String,
+    pub policy_id: String,
+    pub policy_hash: String,
+    pub sandbox_level: &'static str,
+    pub enforcement: &'static str,
+    pub cwd: String,
+    pub runtime_root: Option<String>,
+    pub synthetic_home: Option<String>,
+    pub temp_root: Option<String>,
+    pub filesystem_read: Vec<String>,
+    pub filesystem_write: Vec<String>,
+    pub filesystem_deny: Vec<String>,
+    pub network_mode: &'static str,
+}
+
+impl PlatformSandboxPlan {
+    fn local_execution(
+        backend: &dyn SandboxBackend,
+        execution_id: &str,
+        cwd: &Path,
+        policy: &SandboxPolicy,
+    ) -> Self {
+        Self {
+            backend: backend.name(),
+            backend_status: backend.status(),
+            platform: backend.platform(),
+            execution_id: execution_id.to_string(),
+            policy_id: policy.id.clone(),
+            policy_hash: policy.hash(),
+            sandbox_level: policy.sandbox_level.as_str(),
+            enforcement: "local-execution",
+            cwd: path_string(cwd),
+            runtime_root: None,
+            synthetic_home: None,
+            temp_root: None,
+            filesystem_read: policy.filesystem.read.clone(),
+            filesystem_write: policy.filesystem.write.clone(),
+            filesystem_deny: policy.filesystem.deny.clone(),
+            network_mode: policy.network.mode.as_str(),
+        }
+    }
+
+    pub fn json(&self) -> Value {
+        json!({
+            "backend": {
+                "name": self.backend,
+                "status": self.backend_status,
+                "platform": self.platform,
+            },
+            "execution_id": self.execution_id,
+            "policy_id": self.policy_id,
+            "policy_hash": self.policy_hash,
+            "sandbox_level": self.sandbox_level,
+            "enforcement": self.enforcement,
+            "cwd": self.cwd.clone(),
+            "runtime_root": self.runtime_root.clone(),
+            "synthetic_home": self.synthetic_home.clone(),
+            "temp_root": self.temp_root.clone(),
+            "filesystem": {
+                "read": self.filesystem_read.clone(),
+                "write": self.filesystem_write.clone(),
+                "deny": self.filesystem_deny.clone(),
+            },
+            "network": {
+                "mode": self.network_mode,
+            }
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BackendError {
+    pub code: &'static str,
+    pub reason: String,
+    pub backend: &'static str,
+    pub backend_status: &'static str,
+    pub platform: &'static str,
+    pub support: &'static str,
+}
+
+impl BackendError {
+    fn unsupported(backend: &dyn SandboxBackend, policy: &SandboxPolicy) -> Self {
+        Self {
+            code: "BACKEND_CAPABILITY_MISSING",
+            reason: format!(
+                "backend {} cannot enforce policy {} in this build",
+                backend.name(),
+                policy.id
+            ),
+            backend: backend.name(),
+            backend_status: backend.status(),
+            platform: backend.platform(),
+            support: CapabilityStatus::Unsupported.as_str(),
+        }
+    }
+
+    pub fn details_json(&self) -> Value {
+        json!({
+            "backend": {
+                "name": self.backend,
+                "status": self.backend_status,
+                "platform": self.platform,
+            },
+            "support": self.support,
+        })
     }
 }
 
@@ -92,6 +224,24 @@ impl SandboxBackend for LocalBackend {
             CapabilityStatus::Supported
         } else {
             CapabilityStatus::Unsupported
+        }
+    }
+
+    fn compile_plan(
+        &self,
+        execution_id: &str,
+        cwd: &Path,
+        policy: &SandboxPolicy,
+    ) -> Result<PlatformSandboxPlan, BackendError> {
+        if self.supports_policy(policy).is_supported() {
+            Ok(PlatformSandboxPlan::local_execution(
+                self,
+                execution_id,
+                cwd,
+                policy,
+            ))
+        } else {
+            Err(BackendError::unsupported(self, policy))
         }
     }
 
@@ -151,6 +301,24 @@ impl SandboxBackend for WindowsReferenceBackend {
         }
     }
 
+    fn compile_plan(
+        &self,
+        execution_id: &str,
+        cwd: &Path,
+        policy: &SandboxPolicy,
+    ) -> Result<PlatformSandboxPlan, BackendError> {
+        if self.supports_policy(policy).is_supported() {
+            Ok(PlatformSandboxPlan::local_execution(
+                self,
+                execution_id,
+                cwd,
+                policy,
+            ))
+        } else {
+            Err(BackendError::unsupported(self, policy))
+        }
+    }
+
     fn capabilities_json(&self) -> Value {
         json!({
             "backend": self.name(),
@@ -199,4 +367,8 @@ fn host_platform() -> &'static str {
         "linux" => "linux",
         _ => "unknown",
     }
+}
+
+fn path_string(path: &Path) -> String {
+    PathBuf::from(path).to_string_lossy().to_string()
 }

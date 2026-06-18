@@ -3,7 +3,7 @@ mod backend;
 mod policy;
 
 use audit::AuditWriter;
-use backend::{active_backend, SandboxBackend};
+use backend::{active_backend, BackendError, SandboxBackend};
 use policy::{normalize_policy, NetworkMode, PolicyError, SandboxPolicy, POLICY_VERSION};
 use serde_json::{json, Value};
 use std::env;
@@ -114,16 +114,21 @@ fn rpc_result(id: Value, result: Value) -> Value {
 }
 
 fn rpc_error(id: Value, err: RunSealError) -> Value {
+    let mut data = json!({
+        "code": err.code,
+        "reason": err.reason,
+    });
+    if let (Some(data), Some(details)) = (data.as_object_mut(), err.details) {
+        data.extend(details.as_object().cloned().unwrap_or_default());
+    }
+
     json!({
         "jsonrpc": "2.0",
         "id": id,
         "error": {
             "code": -32000,
             "message": err.message,
-            "data": {
-                "code": err.code,
-                "reason": err.reason,
-            }
+            "data": data
         }
     })
 }
@@ -351,25 +356,11 @@ fn execute_command(
         ));
     }
 
-    let backend = active_backend();
-    let support = backend.supports_policy(policy);
-    if !support.is_supported() {
-        return Err(RunSealError::new(
-            "BACKEND_CAPABILITY_MISSING",
-            format!(
-                "backend {} cannot enforce policy {} in this build",
-                backend.name(),
-                policy.id
-            ),
-        ));
-    }
-
     let execution_id = new_execution_id();
+    let backend = active_backend();
+    let plan = backend.compile_plan(&execution_id, cwd, policy)?;
     let policy_id = policy.id.clone();
     let policy_hash = policy.hash();
-    let backend_name = backend.name();
-    let backend_status = backend.status();
-    let backend_platform = backend.platform();
     let mut audit = AuditWriter::create(cwd, &execution_id).map_err(|err| {
         RunSealError::new(
             "INTERNAL_ERROR",
@@ -391,10 +382,11 @@ fn execute_command(
             "mode": policy.network.mode.as_str(),
         },
         "backend": {
-            "name": backend_name,
-            "status": backend_status,
-            "platform": backend_platform,
-        }
+            "name": plan.backend,
+            "status": plan.backend_status,
+            "platform": plan.platform,
+        },
+        "platform_plan": plan.json(),
     });
     audit.write_event(&started).map_err(|err| {
         RunSealError::new(
@@ -470,10 +462,11 @@ fn execute_command(
             "mode": policy.network.mode.as_str(),
         },
         "backend": {
-            "name": backend_name,
-            "status": backend_status,
-            "platform": backend_platform,
+            "name": plan.backend,
+            "status": plan.backend_status,
+            "platform": plan.platform,
         },
+        "platform_plan": plan.json(),
         "stdout_bytes": output.stdout.len(),
         "stderr_bytes": output.stderr.len(),
         "stdout": stdout,
@@ -533,6 +526,7 @@ struct RunSealError {
     code: String,
     message: String,
     reason: String,
+    details: Option<Value>,
 }
 
 impl RunSealError {
@@ -543,6 +537,18 @@ impl RunSealError {
             message: reason.clone(),
             code,
             reason,
+            details: None,
+        }
+    }
+
+    fn with_details(code: impl Into<String>, reason: impl Into<String>, details: Value) -> Self {
+        let code = code.into();
+        let reason = reason.into();
+        Self {
+            message: reason.clone(),
+            code,
+            reason,
+            details: Some(details),
         }
     }
 }
@@ -550,5 +556,12 @@ impl RunSealError {
 impl From<PolicyError> for RunSealError {
     fn from(err: PolicyError) -> Self {
         Self::new(err.code, err.reason)
+    }
+}
+
+impl From<BackendError> for RunSealError {
+    fn from(err: BackendError) -> Self {
+        let details = err.details_json();
+        Self::with_details(err.code, err.reason, details)
     }
 }
