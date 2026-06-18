@@ -281,6 +281,14 @@ fn exec_json_returns_execution_result() -> Result<()> {
             .unwrap_or_default()
             .starts_with("exec_")
     );
+    let session_id = payload["session_id"]
+        .as_str()
+        .expect("ExecutionResult must include session_id");
+    let seal_id = payload["seal_id"]
+        .as_str()
+        .expect("ExecutionResult must include seal_id");
+    assert!(session_id.starts_with("sess_"));
+    assert!(seal_id.starts_with("seal_"));
     assert_eq!(payload["policy_id"], "danger-full-access");
     assert_eq!(payload["sandbox"]["enforced"], false);
     assert_eq!(payload["platform_plan"]["enforcement"], "local-execution");
@@ -298,6 +306,7 @@ fn exec_json_returns_execution_result() -> Result<()> {
     let audit_path = payload["audit_path"]
         .as_str()
         .expect("ExecutionResult must include audit_path");
+    assert_eq!(audit_path, format!(".runseal/audit/{session_id}.jsonl"));
     let audit_file = tmp.path().join(audit_path);
     let audit_jsonl = fs::read_to_string(&audit_file)
         .with_context(|| format!("audit file must exist at {}", audit_file.display()))?;
@@ -314,6 +323,8 @@ fn exec_json_returns_execution_result() -> Result<()> {
     assert!(audit_event_types.contains(&"execution.finished"));
     for event in &audit_events {
         assert_rfc3339_timestamp(&event["time"])?;
+        assert_eq!(event["session_id"], session_id);
+        assert_eq!(event["seal_id"], seal_id);
     }
     let audit_stdout = audit_events
         .iter()

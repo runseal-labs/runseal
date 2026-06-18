@@ -544,69 +544,84 @@ fn execute_command(
         return Err(RunSealError::new("INVALID_REQUEST", "command is empty"));
     }
 
-    let execution_id = new_execution_id();
+    let ids = new_execution_ids();
     let policy_id = policy.id.clone();
     let policy_hash = policy.hash();
-    let mut audit = create_audit_writer(cwd, &execution_id)?;
+    let mut audit = create_audit_writer(cwd, &ids.session_id)?;
     let audit_path = audit.relative_path().to_string();
 
     if policy.denies_execution_without_backend() {
         let reason = "filesystem write denied by policy";
-        let event = event_now(json!({
-            "type": "policy.denied",
-            "execution_id": execution_id,
-            "policy_id": policy_id,
-            "policy_hash": policy_hash,
-            "audit_path": audit_path,
-            "decision": "denied",
-            "reason": reason,
-        }));
+        let event = execution_event_now(
+            json!({
+                "type": "policy.denied",
+                "execution_id": ids.execution_id,
+                "policy_id": policy_id,
+                "policy_hash": policy_hash,
+                "audit_path": audit_path,
+                "decision": "denied",
+                "reason": reason,
+            }),
+            &ids,
+        );
         write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
 
         return Err(RunSealError::with_details(
             "POLICY_DENIED",
             reason,
             json!({
+                "execution_id": ids.execution_id,
+                "session_id": ids.session_id,
+                "seal_id": ids.seal_id,
                 "audit_path": audit_path,
             }),
         ));
     }
 
     let backend = active_backend();
-    let plan = match backend.compile_plan(&execution_id, cwd, policy) {
+    let plan = match backend.compile_plan(&ids.execution_id, cwd, policy) {
         Ok(plan) => plan,
         Err(err) => {
             let details = err.details_json();
             if let Some(plan) = err.plan.as_deref() {
                 match plan.prepare_runtime_roots() {
                     Ok(prepared_roots) => {
-                        let event = event_now(json!({
-                            "type": "sandbox.prepared",
-                            "execution_id": execution_id,
-                            "policy_id": policy_id,
-                            "policy_hash": policy_hash,
-                            "audit_path": audit_path,
-                            "decision": "prepared",
-                            "prepared_roots": prepared_roots,
-                            "platform_plan": plan.json(),
-                        }));
+                        let event = execution_event_now(
+                            json!({
+                                "type": "sandbox.prepared",
+                                "execution_id": ids.execution_id,
+                                "policy_id": policy_id,
+                                "policy_hash": policy_hash,
+                                "audit_path": audit_path,
+                                "decision": "prepared",
+                                "prepared_roots": prepared_roots,
+                                "platform_plan": plan.json(),
+                            }),
+                            &ids,
+                        );
                         write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
                     }
                     Err(setup_err) => {
-                        let event = event_now(json!({
-                            "type": "sandbox.setup_failed",
-                            "execution_id": execution_id,
-                            "policy_id": policy_id,
-                            "policy_hash": policy_hash,
-                            "audit_path": audit_path,
-                            "decision": "failed",
-                            "reason": setup_err.to_string(),
-                            "platform_plan": plan.json(),
-                        }));
+                        let event = execution_event_now(
+                            json!({
+                                "type": "sandbox.setup_failed",
+                                "execution_id": ids.execution_id,
+                                "policy_id": policy_id,
+                                "policy_hash": policy_hash,
+                                "audit_path": audit_path,
+                                "decision": "failed",
+                                "reason": setup_err.to_string(),
+                                "platform_plan": plan.json(),
+                            }),
+                            &ids,
+                        );
                         write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
 
                         let mut details = details;
                         if let Some(details) = details.as_object_mut() {
+                            details.insert("execution_id".to_string(), json!(ids.execution_id));
+                            details.insert("session_id".to_string(), json!(ids.session_id));
+                            details.insert("seal_id".to_string(), json!(ids.seal_id));
                             details.insert("audit_path".to_string(), json!(audit_path));
                             details.insert("setup_error".to_string(), json!(setup_err.to_string()));
                         }
@@ -620,51 +635,63 @@ fn execute_command(
                 }
             }
 
-            let event = event_now(json!({
-                "type": "sandbox.backend_capability",
-                "execution_id": execution_id,
-                "policy_id": policy_id,
-                "policy_hash": policy_hash,
-                "audit_path": audit_path,
-                "decision": "unsupported",
-                "reason": err.reason,
-                "backend": details.get("backend").cloned().unwrap_or_else(|| json!({})),
-                "support": details.get("support").cloned().unwrap_or_else(|| json!("unsupported")),
-                "missing_features": details.get("missing_features").cloned().unwrap_or_else(|| json!([])),
-                "platform_plan": details.get("platform_plan").cloned().unwrap_or(Value::Null),
-            }));
+            let event = execution_event_now(
+                json!({
+                    "type": "sandbox.backend_capability",
+                    "execution_id": ids.execution_id,
+                    "policy_id": policy_id,
+                    "policy_hash": policy_hash,
+                    "audit_path": audit_path,
+                    "decision": "unsupported",
+                    "reason": err.reason,
+                    "backend": details.get("backend").cloned().unwrap_or_else(|| json!({})),
+                    "support": details.get("support").cloned().unwrap_or_else(|| json!("unsupported")),
+                    "missing_features": details.get("missing_features").cloned().unwrap_or_else(|| json!([])),
+                    "platform_plan": details.get("platform_plan").cloned().unwrap_or(Value::Null),
+                }),
+                &ids,
+            );
             write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
 
             if let Some(plan) = err.plan.as_deref() {
                 match plan.cleanup_runtime_roots() {
                     Ok(cleaned_roots) => {
-                        let event = event_now(json!({
-                            "type": "sandbox.cleaned",
-                            "execution_id": execution_id,
-                            "policy_id": policy_id,
-                            "policy_hash": policy_hash,
-                            "audit_path": audit_path,
-                            "decision": "cleaned",
-                            "cleaned_roots": cleaned_roots,
-                            "platform_plan": plan.json(),
-                        }));
+                        let event = execution_event_now(
+                            json!({
+                                "type": "sandbox.cleaned",
+                                "execution_id": ids.execution_id,
+                                "policy_id": policy_id,
+                                "policy_hash": policy_hash,
+                                "audit_path": audit_path,
+                                "decision": "cleaned",
+                                "cleaned_roots": cleaned_roots,
+                                "platform_plan": plan.json(),
+                            }),
+                            &ids,
+                        );
                         write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
                     }
                     Err(cleanup_err) => {
-                        let event = event_now(json!({
-                            "type": "sandbox.cleanup_failed",
-                            "execution_id": execution_id,
-                            "policy_id": policy_id,
-                            "policy_hash": policy_hash,
-                            "audit_path": audit_path,
-                            "decision": "failed",
-                            "reason": cleanup_err.to_string(),
-                            "platform_plan": plan.json(),
-                        }));
+                        let event = execution_event_now(
+                            json!({
+                                "type": "sandbox.cleanup_failed",
+                                "execution_id": ids.execution_id,
+                                "policy_id": policy_id,
+                                "policy_hash": policy_hash,
+                                "audit_path": audit_path,
+                                "decision": "failed",
+                                "reason": cleanup_err.to_string(),
+                                "platform_plan": plan.json(),
+                            }),
+                            &ids,
+                        );
                         write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
 
                         let mut details = details;
                         if let Some(details) = details.as_object_mut() {
+                            details.insert("execution_id".to_string(), json!(ids.execution_id));
+                            details.insert("session_id".to_string(), json!(ids.session_id));
+                            details.insert("seal_id".to_string(), json!(ids.seal_id));
                             details.insert("audit_path".to_string(), json!(audit_path));
                             details.insert(
                                 "cleanup_error".to_string(),
@@ -683,6 +710,9 @@ fn execute_command(
 
             let mut details = details;
             if let Some(details) = details.as_object_mut() {
+                details.insert("execution_id".to_string(), json!(ids.execution_id));
+                details.insert("session_id".to_string(), json!(ids.session_id));
+                details.insert("seal_id".to_string(), json!(ids.seal_id));
                 details.insert("audit_path".to_string(), json!(audit_path));
             }
 
@@ -692,10 +722,10 @@ fn execute_command(
 
     let sandbox_enforced = plan.is_sandbox_enforced();
     let started_at = timestamp_now();
-    let started = event_at(
+    let started = execution_event_at(
         json!({
             "type": "execution.started",
-            "execution_id": execution_id,
+            "execution_id": ids.execution_id,
             "policy_id": policy_id,
             "policy_hash": policy_hash,
             "audit_path": audit_path,
@@ -714,6 +744,7 @@ fn execute_command(
             "platform_plan": plan.json(),
         }),
         &started_at,
+        &ids,
     );
     write_audit_event_with_metadata(&mut audit, &started, &metadata)?;
 
@@ -730,24 +761,29 @@ fn execute_command(
     let duration_ms = timer.elapsed().as_millis() as u64;
     if execution_output.timed_out {
         let timeout_ms = timeout.map(|duration| duration.as_millis() as u64);
-        let failed = event_now(json!({
-            "type": "execution.failed",
-            "execution_id": execution_id,
-            "policy_id": policy_id,
-            "policy_hash": policy_hash,
-            "audit_path": audit_path,
-            "status": "failed",
-            "reason": "execution timed out",
-            "timeout_ms": timeout_ms,
-            "duration_ms": duration_ms,
-        }));
+        let failed = execution_event_now(
+            json!({
+                "type": "execution.failed",
+                "execution_id": ids.execution_id,
+                "policy_id": policy_id,
+                "policy_hash": policy_hash,
+                "audit_path": audit_path,
+                "status": "failed",
+                "reason": "execution timed out",
+                "timeout_ms": timeout_ms,
+                "duration_ms": duration_ms,
+            }),
+            &ids,
+        );
         write_audit_event_with_metadata(&mut audit, &failed, &metadata)?;
 
         return Err(RunSealError::with_details(
             "EXECUTION_TIMEOUT",
             "execution timed out",
             json!({
-                "execution_id": execution_id,
+                "execution_id": ids.execution_id,
+                "session_id": ids.session_id,
+                "seal_id": ids.seal_id,
                 "audit_path": audit_path,
                 "timeout_ms": timeout_ms,
                 "stdout_bytes": output.stdout.len(),
@@ -757,12 +793,12 @@ fn execute_command(
     }
     let mut events = vec![started];
     if !output.stdout.is_empty() {
-        let event = stream_event("execution.stdout", &execution_id, &output.stdout, 0);
+        let event = stream_event("execution.stdout", &ids, &output.stdout, 0);
         write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
         events.push(event);
     }
     if !output.stderr.is_empty() {
-        let event = stream_event("execution.stderr", &execution_id, &output.stderr, 0);
+        let event = stream_event("execution.stderr", &ids, &output.stderr, 0);
         write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
         events.push(event);
     }
@@ -770,20 +806,23 @@ fn execute_command(
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     let finished_at = timestamp_now();
-    let finished = event_at(
+    let finished = execution_event_at(
         json!({
             "type": "execution.finished",
-            "execution_id": execution_id,
+            "execution_id": ids.execution_id,
             "exit_code": exit_code,
             "status": "finished",
         }),
         &finished_at,
+        &ids,
     );
     write_audit_event_with_metadata(&mut audit, &finished, &metadata)?;
     events.push(finished);
 
     let result = json!({
-        "execution_id": execution_id,
+        "execution_id": ids.execution_id,
+        "session_id": ids.session_id,
+        "seal_id": ids.seal_id,
         "status": "finished",
         "exit_code": exit_code,
         "signal": null,
@@ -818,21 +857,33 @@ fn execute_command(
     Ok((events, result))
 }
 
-fn stream_event(event_type: &'static str, execution_id: &str, bytes: &[u8], offset: u64) -> Value {
+fn stream_event(event_type: &'static str, ids: &ExecutionIds, bytes: &[u8], offset: u64) -> Value {
     let encoded = STANDARD.encode(bytes);
-    event_now(json!({
-        "type": event_type,
-        "execution_id": execution_id,
-        "data": format!("base64:{encoded}"),
-        "encoding": "base64",
-        "stream_offset": offset,
-        "bytes": bytes.len(),
-    }))
+    execution_event_now(
+        json!({
+            "type": event_type,
+            "execution_id": ids.execution_id,
+            "data": format!("base64:{encoded}"),
+            "encoding": "base64",
+            "stream_offset": offset,
+            "bytes": bytes.len(),
+        }),
+        ids,
+    )
 }
 
-fn event_now(event: Value) -> Value {
+fn execution_event_now(event: Value, ids: &ExecutionIds) -> Value {
     let time = timestamp_now();
-    event_at(event, &time)
+    execution_event_at(event, &time, ids)
+}
+
+fn execution_event_at(event: Value, time: &str, ids: &ExecutionIds) -> Value {
+    let mut event = event_at(event, time);
+    if let Some(object) = event.as_object_mut() {
+        object.insert("session_id".to_string(), json!(ids.session_id));
+        object.insert("seal_id".to_string(), json!(ids.seal_id));
+    }
+    event
 }
 
 fn event_at(mut event: Value, time: &str) -> Value {
@@ -849,8 +900,8 @@ fn timestamp_now() -> String {
     }
 }
 
-fn create_audit_writer(cwd: &Path, execution_id: &str) -> Result<AuditWriter, RunSealError> {
-    AuditWriter::create(cwd, execution_id).map_err(|err| {
+fn create_audit_writer(cwd: &Path, session_id: &str) -> Result<AuditWriter, RunSealError> {
+    AuditWriter::create(cwd, session_id).map_err(|err| {
         RunSealError::new(
             "INTERNAL_ERROR",
             format!("failed to create audit writer: {err}"),
@@ -883,12 +934,23 @@ fn write_audit_event_with_metadata(
     write_audit_event(audit, &audit_event)
 }
 
-fn new_execution_id() -> String {
+#[derive(Debug)]
+struct ExecutionIds {
+    execution_id: String,
+    session_id: String,
+    seal_id: String,
+}
+
+fn new_execution_ids() -> ExecutionIds {
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis())
         .unwrap_or_default();
-    format!("exec_{millis:x}")
+    ExecutionIds {
+        execution_id: format!("exec_{millis:x}"),
+        session_id: format!("sess_{millis:x}"),
+        seal_id: format!("seal_{millis:x}"),
+    }
 }
 
 fn current_dir() -> PathBuf {

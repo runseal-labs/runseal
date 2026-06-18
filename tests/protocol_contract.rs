@@ -822,8 +822,18 @@ fn execute_rpc_streams_events_and_final_result() -> Result<()> {
     assert!(event_types.contains(&"execution.started"));
     assert!(event_types.contains(&"execution.stdout"));
     assert!(event_types.contains(&"execution.finished"));
+    let session_id = response["result"]["session_id"]
+        .as_str()
+        .expect("ExecutionResult must include session_id");
+    let seal_id = response["result"]["seal_id"]
+        .as_str()
+        .expect("ExecutionResult must include seal_id");
+    assert!(session_id.starts_with("sess_"));
+    assert!(seal_id.starts_with("seal_"));
     for notification in &notifications {
         assert_rfc3339_timestamp(&notification["params"]["time"])?;
+        assert_eq!(notification["params"]["session_id"], session_id);
+        assert_eq!(notification["params"]["seal_id"], seal_id);
     }
     let stdout_event = notifications
         .iter()
@@ -852,7 +862,11 @@ fn execute_rpc_streams_events_and_final_result() -> Result<()> {
         response["result"]["audit_path"]
             .as_str()
             .unwrap_or_default()
-            .starts_with(".runseal/audit/exec_")
+            .starts_with(".runseal/audit/sess_")
+    );
+    assert_eq!(
+        response["result"]["audit_path"],
+        format!(".runseal/audit/{session_id}.jsonl")
     );
     assert_eq!(response["result"]["sandbox"]["enforced"], false);
     assert_eq!(
