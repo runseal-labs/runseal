@@ -107,18 +107,23 @@ fn execute_with_network(
 }
 
 fn assert_backend_missing(response: &Value, root: &Path) -> Result<()> {
-    assert_backend_missing_features(
-        response,
-        root,
-        &[
-            "filesystem_policy",
-            "runtime_roots",
-            "runtime_environment",
-            "process_isolation",
-            "process_cleanup",
-            "direct_network_deny",
-        ],
-    )
+    let expected_features = expected_missing_features(&[]);
+    assert_backend_missing_features(response, root, &expected_features)
+}
+
+fn expected_missing_features(additional: &[&'static str]) -> Vec<&'static str> {
+    let mut features = vec![
+        "filesystem_policy",
+        "runtime_roots",
+        "runtime_environment",
+        "process_isolation",
+    ];
+    if !cfg!(windows) {
+        features.push("process_cleanup");
+    }
+    features.push("direct_network_deny");
+    features.extend_from_slice(additional);
+    features
 }
 
 fn assert_backend_missing_features(
@@ -294,19 +299,8 @@ fn network_disabled_blocks_direct_egress_when_supported_or_fails_closed() -> Res
     let response = execute_with_network("workspace-write", &workspace, Some("disabled"), code)?;
 
     if is_backend_missing(&response) {
-        assert_backend_missing_features(
-            &response,
-            &workspace,
-            &[
-                "filesystem_policy",
-                "runtime_roots",
-                "runtime_environment",
-                "process_isolation",
-                "process_cleanup",
-                "direct_network_deny",
-                "network_disabled",
-            ],
-        )?;
+        let expected_features = expected_missing_features(&["network_disabled"]);
+        assert_backend_missing_features(&response, &workspace, &expected_features)?;
         return Ok(());
     }
 
@@ -330,20 +324,8 @@ fn network_proxy_blocks_direct_egress_when_supported_or_fails_closed() -> Result
     let response = execute_with_network("workspace-write", &workspace, Some("proxy"), code)?;
 
     if is_backend_missing(&response) {
-        assert_backend_missing_features(
-            &response,
-            &workspace,
-            &[
-                "filesystem_policy",
-                "runtime_roots",
-                "runtime_environment",
-                "process_isolation",
-                "process_cleanup",
-                "direct_network_deny",
-                "network_proxy",
-                "managed_proxy",
-            ],
-        )?;
+        let expected_features = expected_missing_features(&["network_proxy", "managed_proxy"]);
+        assert_backend_missing_features(&response, &workspace, &expected_features)?;
         return Ok(());
     }
 

@@ -141,6 +141,10 @@ fn expected_backend_status() -> &'static str {
     }
 }
 
+fn expected_process_cleanup_supported() -> bool {
+    cfg!(windows)
+}
+
 #[test]
 fn missing_binary_is_explicit_red_state() {
     if runseal_bin().exists() {
@@ -192,7 +196,10 @@ fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
     assert_eq!(payload["features"]["runtime_roots"], false);
     assert_eq!(payload["features"]["runtime_environment"], false);
     assert_eq!(payload["features"]["process_isolation"], false);
-    assert_eq!(payload["features"]["process_cleanup"], false);
+    assert_eq!(
+        payload["features"]["process_cleanup"],
+        expected_process_cleanup_supported()
+    );
     assert_eq!(payload["features"]["direct_network_deny"], false);
     assert_eq!(payload["features"]["managed_proxy"], false);
     assert_eq!(payload["features"]["audit_jsonl"], true);

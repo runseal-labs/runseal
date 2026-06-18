@@ -170,6 +170,25 @@ fn expected_backend_status() -> &'static str {
     }
 }
 
+fn expected_process_cleanup_supported() -> bool {
+    cfg!(windows)
+}
+
+fn expected_missing_features(additional: &[&'static str]) -> Vec<&'static str> {
+    let mut features = vec![
+        "filesystem_policy",
+        "runtime_roots",
+        "runtime_environment",
+        "process_isolation",
+    ];
+    if !expected_process_cleanup_supported() {
+        features.push("process_cleanup");
+    }
+    features.push("direct_network_deny");
+    features.extend_from_slice(additional);
+    features
+}
+
 #[test]
 fn rpc_missing_binary_is_explicit_red_state() {
     if runseal_bin().exists() {
@@ -227,7 +246,10 @@ fn get_capabilities_rpc_contract() -> Result<()> {
     assert_eq!(payload["features"]["runtime_roots"], false);
     assert_eq!(payload["features"]["runtime_environment"], false);
     assert_eq!(payload["features"]["process_isolation"], false);
-    assert_eq!(payload["features"]["process_cleanup"], false);
+    assert_eq!(
+        payload["features"]["process_cleanup"],
+        expected_process_cleanup_supported()
+    );
     assert_eq!(payload["features"]["direct_network_deny"], false);
     assert_eq!(payload["features"]["managed_proxy"], false);
     assert_eq!(payload["features"]["audit_jsonl"], true);
@@ -1001,15 +1023,7 @@ fn sandboxed_policy_without_backend_fails_closed() -> Result<()> {
     assert_eq!(response["error"]["data"]["support"], "unsupported");
     assert_eq!(
         response["error"]["data"]["missing_features"],
-        json!([
-            "filesystem_policy",
-            "runtime_roots",
-            "runtime_environment",
-            "process_isolation",
-            "process_cleanup",
-            "direct_network_deny",
-            "network_disabled"
-        ])
+        json!(expected_missing_features(&["network_disabled"]))
     );
     let audit_path = response["error"]["data"]["audit_path"]
         .as_str()

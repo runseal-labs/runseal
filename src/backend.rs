@@ -867,6 +867,8 @@ fn protected_filesystem_labels(policy: &SandboxPolicy) -> Vec<&'static str> {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct WindowsReferenceBackend;
 
+const WINDOWS_REFERENCE_SUPPORTED_FEATURES: &[BackendFeature] = &[BackendFeature::ProcessCleanup];
+
 impl SandboxBackend for WindowsReferenceBackend {
     fn name(&self) -> &'static str {
         "runseal-windows-reference"
@@ -881,7 +883,7 @@ impl SandboxBackend for WindowsReferenceBackend {
     }
 
     fn supported_features(&self) -> &'static [BackendFeature] {
-        &[]
+        WINDOWS_REFERENCE_SUPPORTED_FEATURES
     }
 
     fn compile_plan(
@@ -924,6 +926,7 @@ impl SandboxBackend for WindowsReferenceBackend {
             self,
             &[
                 "Windows reference backend scaffold is present",
+                "process cleanup is backed by Windows kill-on-close Job Objects",
                 "filesystem and network enforcement are not implemented yet",
                 "sandboxed policies fail closed until conformance tests prove enforcement",
             ],
@@ -1520,7 +1523,10 @@ mod tests {
             );
         }
         assert_eq!(plan.enforcement, "fail-closed-preview");
-        assert_eq!(WindowsReferenceBackend.supported_features(), &[]);
+        assert_eq!(
+            WindowsReferenceBackend.supported_features(),
+            &[BackendFeature::ProcessCleanup]
+        );
         Ok(())
     }
 
@@ -1609,7 +1615,10 @@ mod tests {
         assert_eq!(plan_json["setup"]["requires_managed_proxy"], true);
         assert_eq!(plan_json["setup"]["requires_process_boundary"], true);
         assert_eq!(plan_json["setup"]["fail_closed_on_setup_error"], true);
-        assert_eq!(WindowsReferenceBackend.supported_features(), &[]);
+        assert_eq!(
+            WindowsReferenceBackend.supported_features(),
+            &[BackendFeature::ProcessCleanup]
+        );
         Ok(())
     }
 
