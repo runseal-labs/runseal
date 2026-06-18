@@ -14,6 +14,7 @@ use serde_json::{Map, Value, json};
 use std::env;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
@@ -25,6 +26,7 @@ const MAX_STDIN_DATA_BYTES: usize = STDIN_BASE64_PREFIX.len() + 4 * MAX_STDIN_BY
 const MAX_ENV_ENTRIES: usize = 64;
 const MAX_ENV_KEY_BYTES: usize = 128;
 const MAX_ENV_VALUE_BYTES: usize = 4096;
+static EXECUTION_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn main() {
     if let Err(err) = run() {
@@ -1153,10 +1155,13 @@ fn new_execution_ids() -> ExecutionIds {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis())
         .unwrap_or_default();
+    let pid = std::process::id();
+    let counter = EXECUTION_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let suffix = format!("{millis:x}_{pid:x}_{counter:x}");
     ExecutionIds {
-        execution_id: format!("exec_{millis:x}"),
-        session_id: format!("sess_{millis:x}"),
-        seal_id: format!("seal_{millis:x}"),
+        execution_id: format!("exec_{suffix}"),
+        session_id: format!("sess_{suffix}"),
+        seal_id: format!("seal_{suffix}"),
     }
 }
 
@@ -1224,5 +1229,25 @@ impl From<BackendError> for RunSealError {
     fn from(err: BackendError) -> Self {
         let details = err.details_json();
         Self::with_details(err.code, err.reason, details)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn execution_ids_are_unique_for_fast_local_requests() {
+        let mut execution_ids = HashSet::new();
+        let mut session_ids = HashSet::new();
+        let mut seal_ids = HashSet::new();
+
+        for _ in 0..4096 {
+            let ids = new_execution_ids();
+            assert!(execution_ids.insert(ids.execution_id));
+            assert!(session_ids.insert(ids.session_id));
+            assert!(seal_ids.insert(ids.seal_id));
+        }
     }
 }
