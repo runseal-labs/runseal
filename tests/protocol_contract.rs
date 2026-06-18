@@ -45,7 +45,6 @@ fn run_rpc_with_env(message: &str, envs: &[(&str, &str)]) -> Result<Output> {
     let bin = require_runseal_bin()?;
     let mut child = Command::new(bin)
         .args(["rpc", "--stdio"])
-        .env("RUNSEAL_WINDOWS_SANDBOX_NO_UAC", "1")
         .envs(envs.iter().copied())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

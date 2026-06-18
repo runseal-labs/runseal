@@ -36,7 +36,6 @@ fn run_cli(args: &[&str]) -> Result<Output> {
     let bin = require_runseal_bin()?;
     Command::new(bin)
         .args(args)
-        .env("RUNSEAL_WINDOWS_SANDBOX_NO_UAC", "1")
         .output()
         .context("failed to spawn runseal")
 }
