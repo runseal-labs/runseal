@@ -1812,15 +1812,21 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn windows_kill_on_close_job_assigns_child_process() -> io::Result<()> {
+    fn windows_kill_on_close_job_terminates_child_process() -> io::Result<()> {
         let job = WindowsKillOnCloseJob::new()?;
-        let mut child = std::process::Command::new("cmd")
-            .args(["/C", "ping -n 2 127.0.0.1 >NUL"])
+        let mut child = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", "Start-Sleep -Seconds 30; exit 7"])
             .spawn()?;
 
         job.assign_child(&child)?;
+        let started = Instant::now();
         drop(job);
         child.wait()?;
+
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "kill-on-close job should terminate child before the command exits naturally"
+        );
         Ok(())
     }
 
