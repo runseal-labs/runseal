@@ -244,20 +244,26 @@ fn setup_help_describes_explicit_windows_setup() -> Result<()> {
 }
 
 #[test]
-fn setup_rejects_missing_cwd_before_windows_setup() -> Result<()> {
+fn setup_rejects_invalid_cwd_before_windows_setup() -> Result<()> {
     let tmp = TempDir::new()?;
     let missing = tmp.path().join("missing").to_string_lossy().to_string();
-    let output = run_cli(&["setup", "windows-sandbox", "--cwd", &missing])?;
+    let file = tmp.path().join("not-a-directory");
+    fs::write(&file, "not a directory")?;
+    let file = file.to_string_lossy().to_string();
 
-    assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("params.cwd must be an existing directory"),
-        "{stderr}"
-    );
-    assert!(!stderr.contains("windows sandbox setup failed"), "{stderr}");
-    assert_no_private_windows_setup_terms(&stderr);
+    for cwd in [missing, file] {
+        let output = run_cli(&["setup", "windows-sandbox", "--cwd", &cwd])?;
+
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("params.cwd must be an existing directory"),
+            "{stderr}"
+        );
+        assert!(!stderr.contains("windows sandbox setup failed"), "{stderr}");
+        assert_no_private_windows_setup_terms(&stderr);
+    }
     Ok(())
 }
 
