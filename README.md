@@ -14,6 +14,8 @@ Current execution support is intentionally narrow: only explicit `danger-full-ac
 
 On Windows, fail-closed sandbox requests include a `PlatformSandboxPlan` preview for runtime root, synthetic home, profile root, temp root, setup requirements, protected filesystem categories, process boundary state, network guard state, and policy path planning. Runtime root creation/cleanup, runtime environment redirects, and process cleanup are backed by verified Windows paths, but sandboxed policies remain unsupported until every required filesystem, process isolation, and network capability is implemented and covered by conformance tests.
 
+The Windows enforcement baseline is intended to come through a vendored upstream Windows sandbox crate. RunSeal-specific code should stay at the adapter layer: policy normalization, `PlatformSandboxPlan` mapping, audit events, capability reporting, and conformance gates. Low-level ACL, restricted-token, WFP, setup-helper, and command-runner code should not be reimplemented in this crate.
+
 On macOS and Linux, RunSeal reports explicit experimental/community skeleton backends. They support only explicit `danger-full-access` local execution until contributed backend implementations pass the shared conformance gates.
 
 The design lives in the RFC repository:

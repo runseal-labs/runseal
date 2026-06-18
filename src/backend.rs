@@ -1221,6 +1221,8 @@ impl SandboxBackend for WindowsReferenceBackend {
             self,
             &[
                 "Windows reference backend scaffold is present",
+                "Windows enforcement is intended to use a vendored upstream sandbox crate",
+                "RunSeal-specific code remains a policy, plan, audit, and conformance adapter",
                 "runtime roots are created, marked, and cleaned with containment checks",
                 "runtime environment redirects are injected into child process environments",
                 "process cleanup is backed by Windows kill-on-close Job Objects",
