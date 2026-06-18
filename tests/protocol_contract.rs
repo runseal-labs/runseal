@@ -425,6 +425,45 @@ fn execution_lookup_methods_return_stable_not_found() -> Result<()> {
 }
 
 #[test]
+fn lookup_and_session_methods_reject_malformed_ids() -> Result<()> {
+    let cases = [
+        ("getExecution", json!({"execution_id": "missing"}), "exec_"),
+        (
+            "cancelExecution",
+            json!({"execution_id": "missing", "reason": "user_requested"}),
+            "exec_",
+        ),
+        (
+            "subscribeEvents",
+            json!({"execution_id": "missing", "types": ["execution.*"]}),
+            "exec_",
+        ),
+        ("disposeSession", json!({"session_id": "missing"}), "sess_"),
+    ];
+
+    for (method, params, prefix) in cases {
+        let output = run_rpc(&rpc_request(method, params))?;
+
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let messages = stdout_json_lines(&output)?;
+        let response = &messages[0];
+
+        assert_eq!(response["error"]["data"]["code"], "INVALID_REQUEST");
+        assert!(
+            response["error"]["data"]["reason"]
+                .as_str()
+                .unwrap_or_default()
+                .contains(&format!("must start with {prefix}"))
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn dispose_session_is_noop_for_stdio_mvp() -> Result<()> {
     let output = run_rpc(&rpc_request(
         "disposeSession",

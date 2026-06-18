@@ -395,7 +395,7 @@ fn execution_not_found_from_params(
     let mut allowed_keys = vec!["execution_id"];
     allowed_keys.extend_from_slice(optional_keys);
     validate_param_keys(params, method, &allowed_keys)?;
-    let execution_id = required_string_param(params, "execution_id")?;
+    let execution_id = required_prefixed_string_param(params, "execution_id", "exec_")?;
     validate_optional_lookup_params(params)?;
 
     Err(RunSealError::with_details(
@@ -441,7 +441,7 @@ fn validate_optional_lookup_params(params: &Map<String, Value>) -> Result<(), Ru
 fn dispose_session_from_params(params: &Value) -> Result<Value, RunSealError> {
     let params = params_object(params, "disposeSession")?;
     validate_param_keys(params, "disposeSession", &["session_id"])?;
-    let session_id = required_string_param(params, "session_id")?;
+    let session_id = required_prefixed_string_param(params, "session_id", "sess_")?;
 
     Ok(json!({
         "session_id": session_id,
@@ -492,6 +492,21 @@ fn required_string_param(
         .filter(|value| !value.is_empty())
         .map(str::to_string)
         .ok_or_else(|| RunSealError::new("INVALID_REQUEST", format!("params.{field} is required")))
+}
+
+fn required_prefixed_string_param(
+    params: &Map<String, Value>,
+    field: &'static str,
+    prefix: &'static str,
+) -> Result<String, RunSealError> {
+    let value = required_string_param(params, field)?;
+    if !value.starts_with(prefix) {
+        return Err(RunSealError::new(
+            "INVALID_REQUEST",
+            format!("params.{field} must start with {prefix}"),
+        ));
+    }
+    Ok(value)
 }
 
 fn network_override_from_params(
