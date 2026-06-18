@@ -7,6 +7,7 @@ pub(crate) struct WindowsPolicyPlan {
     pub(crate) filesystem: WindowsFilesystemPlan,
     pub(crate) network: WindowsNetworkPlan,
     pub(crate) environment: WindowsEnvironmentPlan,
+    pub(crate) process: WindowsProcessPlan,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -55,6 +56,40 @@ pub(crate) struct WindowsEnvironmentPlan {
     pub(crate) runtime: Vec<(String, String)>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WindowsProcessPlan {
+    pub(crate) boundary: WindowsProcessBoundary,
+    pub(crate) identity: WindowsProcessIdentity,
+    pub(crate) cleanup: WindowsProcessCleanup,
+    pub(crate) token: WindowsProcessToken,
+    pub(crate) job: WindowsProcessJob,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WindowsProcessBoundary {
+    RestrictedLocalProcess,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WindowsProcessIdentity {
+    LowPrivilegeSandbox,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WindowsProcessCleanup {
+    ProcessTree,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WindowsProcessToken {
+    Restricted,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WindowsProcessJob {
+    KillOnClose,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WindowsRuntimeRoots {
     pub(crate) runtime_root: String,
@@ -92,6 +127,58 @@ impl WindowsManagedProxy {
         match self {
             Self::None => "none",
             Self::Required => "required",
+        }
+    }
+}
+
+impl WindowsProcessPlan {
+    fn sandboxed() -> Self {
+        Self {
+            boundary: WindowsProcessBoundary::RestrictedLocalProcess,
+            identity: WindowsProcessIdentity::LowPrivilegeSandbox,
+            cleanup: WindowsProcessCleanup::ProcessTree,
+            token: WindowsProcessToken::Restricted,
+            job: WindowsProcessJob::KillOnClose,
+        }
+    }
+}
+
+impl WindowsProcessBoundary {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::RestrictedLocalProcess => "restricted-local-process",
+        }
+    }
+}
+
+impl WindowsProcessIdentity {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::LowPrivilegeSandbox => "low-privilege",
+        }
+    }
+}
+
+impl WindowsProcessCleanup {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::ProcessTree => "process-tree",
+        }
+    }
+}
+
+impl WindowsProcessToken {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Restricted => "restricted-token",
+        }
+    }
+}
+
+impl WindowsProcessJob {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::KillOnClose => "kill-on-close-job",
         }
     }
 }
@@ -151,6 +238,7 @@ impl WindowsPolicyPlan {
             environment: WindowsEnvironmentPlan {
                 runtime: runtime_environment,
             },
+            process: WindowsProcessPlan::sandboxed(),
         }
     }
 }
@@ -316,6 +404,17 @@ mod tests {
         assert_eq!(plan.network.managed_proxy, WindowsManagedProxy::None);
         assert!(!plan.network.inject_proxy_environment);
         assert!(plan.environment.runtime.is_empty());
+        assert_eq!(
+            plan.process.boundary,
+            WindowsProcessBoundary::RestrictedLocalProcess
+        );
+        assert_eq!(
+            plan.process.identity,
+            WindowsProcessIdentity::LowPrivilegeSandbox
+        );
+        assert_eq!(plan.process.cleanup, WindowsProcessCleanup::ProcessTree);
+        assert_eq!(plan.process.token, WindowsProcessToken::Restricted);
+        assert_eq!(plan.process.job, WindowsProcessJob::KillOnClose);
     }
 
     #[test]

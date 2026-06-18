@@ -181,6 +181,11 @@ pub struct PlatformSandboxPlan {
     pub filesystem_deny: Vec<String>,
     pub filesystem_protected: Vec<&'static str>,
     private_filesystem_deny: Vec<String>,
+    pub process_boundary: &'static str,
+    pub process_identity: &'static str,
+    pub process_cleanup: &'static str,
+    private_process_token: &'static str,
+    private_process_job: &'static str,
     pub network_mode: &'static str,
     pub network_direct_egress: &'static str,
     pub network_managed_proxy: &'static str,
@@ -217,6 +222,11 @@ impl PlatformSandboxPlan {
             filesystem_deny: policy.filesystem.deny.clone(),
             filesystem_protected: protected_filesystem_labels(policy),
             private_filesystem_deny: Vec::new(),
+            process_boundary: "local-process",
+            process_identity: "current-user",
+            process_cleanup: "direct-child",
+            private_process_token: "none",
+            private_process_job: "none",
             network_mode: policy.network.mode.as_str(),
             network_direct_egress: "unmanaged",
             network_managed_proxy: "none",
@@ -251,6 +261,11 @@ impl PlatformSandboxPlan {
                 "deny": self.filesystem_deny.clone(),
                 "protected": self.filesystem_protected.clone(),
             },
+            "process": {
+                "boundary": self.process_boundary,
+                "identity": self.process_identity,
+                "cleanup": self.process_cleanup,
+            },
             "network": {
                 "mode": self.network_mode,
                 "direct_egress": self.network_direct_egress,
@@ -274,6 +289,7 @@ impl PlatformSandboxPlan {
             "requires_runtime_cleanup": self.runtime_root.is_some(),
             "requires_network_guard": self.network_direct_egress == "deny",
             "requires_managed_proxy": self.network_managed_proxy == "required",
+            "requires_process_boundary": self.process_boundary != "local-process",
             "fail_closed_on_setup_error": self.is_sandbox_enforced(),
         })
     }
@@ -546,6 +562,8 @@ impl WindowsReferenceBackend {
             host_roots,
         );
         let private_filesystem_deny = windows_policy.filesystem.private_protected_roots.clone();
+        let private_process_token = windows_policy.process.token.as_str();
+        let private_process_job = windows_policy.process.job.as_str();
         let filesystem_write = windows_policy.filesystem.effective_write_roots();
 
         PlatformSandboxPlan {
@@ -567,6 +585,11 @@ impl WindowsReferenceBackend {
             filesystem_deny: windows_policy.filesystem.protected_roots,
             filesystem_protected: protected_filesystem_labels(policy),
             private_filesystem_deny,
+            process_boundary: windows_policy.process.boundary.as_str(),
+            process_identity: windows_policy.process.identity.as_str(),
+            process_cleanup: windows_policy.process.cleanup.as_str(),
+            private_process_token,
+            private_process_job,
             network_mode: windows_policy.network.guard.as_str(),
             network_direct_egress: windows_policy.network.direct_egress.as_str(),
             network_managed_proxy: windows_policy.network.managed_proxy.as_str(),
@@ -1134,17 +1157,34 @@ mod tests {
         assert_eq!(plan.network_direct_egress, "deny");
         assert_eq!(plan.network_managed_proxy, "required");
         assert!(plan.environment_proxy);
+        assert_eq!(plan.process_boundary, "restricted-local-process");
+        assert_eq!(plan.process_identity, "low-privilege");
+        assert_eq!(plan.process_cleanup, "process-tree");
+        assert_eq!(plan.private_process_token, "restricted-token");
+        assert_eq!(plan.private_process_job, "kill-on-close-job");
         assert_eq!(plan.filesystem_protected, vec!["workspace_metadata"]);
         let plan_json = plan.json();
+        let public_plan = plan_json.to_string();
+        assert!(!public_plan.contains("restricted-token"));
+        assert!(!public_plan.contains("kill-on-close-job"));
         assert_eq!(
             plan_json["filesystem"]["protected"],
             json!(["workspace_metadata"])
+        );
+        assert_eq!(
+            plan_json["process"],
+            json!({
+                "boundary": "restricted-local-process",
+                "identity": "low-privilege",
+                "cleanup": "process-tree",
+            })
         );
         assert_eq!(plan_json["setup"]["requires_runtime_roots"], true);
         assert_eq!(plan_json["setup"]["requires_runtime_environment"], true);
         assert_eq!(plan_json["setup"]["requires_runtime_cleanup"], true);
         assert_eq!(plan_json["setup"]["requires_network_guard"], true);
         assert_eq!(plan_json["setup"]["requires_managed_proxy"], true);
+        assert_eq!(plan_json["setup"]["requires_process_boundary"], true);
         assert_eq!(plan_json["setup"]["fail_closed_on_setup_error"], true);
         assert_eq!(WindowsReferenceBackend.supported_features(), &[]);
         Ok(())
