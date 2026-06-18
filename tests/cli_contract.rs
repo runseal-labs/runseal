@@ -79,6 +79,7 @@ fn assert_rfc3339_timestamp(value: &Value) -> Result<()> {
 }
 
 fn assert_event_envelope(event: &Value) -> Result<()> {
+    assert!(event["type"].as_str().is_some());
     assert_rfc3339_timestamp(&event["time"])?;
     assert!(
         event["execution_id"]
@@ -105,6 +106,8 @@ fn assert_event_envelope(event: &Value) -> Result<()> {
             .unwrap_or_default()
             .starts_with("sha256:")
     );
+    assert!(event["policy_epoch"].as_str().is_some());
+    assert!(event["runseal_version"].as_str().is_some());
     assert!(
         event["audit_path"]
             .as_str()
@@ -553,6 +556,7 @@ fn exec_json_returns_execution_result() -> Result<()> {
             .unwrap_or_default()
             .starts_with("sha256:")
     );
+    assert_eq!(payload["policy_epoch"], payload["policy_hash"]);
     let audit_path = payload["audit_path"]
         .as_str()
         .expect("ExecutionResult must include audit_path");
@@ -575,6 +579,7 @@ fn exec_json_returns_execution_result() -> Result<()> {
         assert_event_envelope(event)?;
         assert_eq!(event["session_id"], session_id);
         assert_eq!(event["seal_id"], seal_id);
+        assert_eq!(event["policy_epoch"], payload["policy_epoch"]);
     }
     let audit_stdout = audit_events
         .iter()
