@@ -449,6 +449,8 @@ impl PlatformSandboxPlan {
             return Ok(());
         };
         let expected = normalize_lexical(&self.expected_runtime_root()?);
+        let workspace = normalize_lexical(Path::new(&self.cwd));
+        validate_runtime_setup_ancestors(&expected, &workspace)?;
         let runtime_root = Path::new(runtime_root);
         if normalize_lexical(runtime_root) != expected {
             return Err(io::Error::new(
@@ -551,6 +553,16 @@ impl PlatformSandboxPlan {
             .join("runtime")
             .join(&self.execution_id))
     }
+}
+
+fn validate_runtime_setup_ancestors(expected: &Path, workspace: &Path) -> io::Result<()> {
+    for ancestor in expected.ancestors() {
+        if !ancestor.starts_with(workspace) {
+            break;
+        }
+        validate_runtime_root_not_symlink(ancestor)?;
+    }
+    Ok(())
 }
 
 fn validate_runtime_root_not_symlink(root: &Path) -> io::Result<()> {
@@ -2703,6 +2715,33 @@ mod tests {
 
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
         assert!(!outside.join("child").exists());
+        Ok(())
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn runtime_setup_refuses_runtime_parent_symlink_before_creating_runtime_tree() -> io::Result<()>
+    {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(cwd.join(".runseal"))?;
+        let outside = tmp.path().join("outside-runtime-parent");
+        fs::create_dir_all(&outside)?;
+        let link = cwd.join(".runseal").join("runtime");
+        if let Err(err) = symlink_dir_for_test(&outside, &link) {
+            if err.kind() == io::ErrorKind::PermissionDenied {
+                return Ok(());
+            }
+            return Err(err);
+        }
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+        let plan =
+            WindowsReferenceBackend.fail_closed_plan("exec_runtime_parent_symlink", &cwd, &policy);
+
+        let err = plan.prepare_runtime_roots().unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        assert!(!outside.join("exec_runtime_parent_symlink").exists());
         Ok(())
     }
 
