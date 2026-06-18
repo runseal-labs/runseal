@@ -157,6 +157,10 @@ fn expected_windows_sandbox_supported() -> bool {
     cfg!(windows)
 }
 
+fn expected_resource_limits_supported() -> bool {
+    false
+}
+
 fn expected_status(supported: bool) -> &'static str {
     if supported {
         "supported"
@@ -361,7 +365,12 @@ fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
         payload["features"]["managed_proxy"],
         expected_windows_sandbox_supported()
     );
+    assert_eq!(
+        payload["features"]["resource_limits"],
+        expected_resource_limits_supported()
+    );
     assert_eq!(payload["features"]["audit_jsonl"], true);
+    assert_eq!(payload["features"]["otel_export"], false);
     assert_eq!(payload["sandbox_levels"]["danger-full-access"], "supported");
     assert_eq!(
         payload["sandbox_levels"]["read-only"],

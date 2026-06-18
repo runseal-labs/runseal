@@ -186,6 +186,10 @@ fn expected_windows_sandbox_supported() -> bool {
     cfg!(windows)
 }
 
+fn expected_resource_limits_supported() -> bool {
+    false
+}
+
 fn expected_status(supported: bool) -> &'static str {
     if supported {
         "supported"
@@ -336,7 +340,12 @@ fn get_capabilities_rpc_contract() -> Result<()> {
         payload["features"]["managed_proxy"],
         expected_windows_sandbox_supported()
     );
+    assert_eq!(
+        payload["features"]["resource_limits"],
+        expected_resource_limits_supported()
+    );
     assert_eq!(payload["features"]["audit_jsonl"], true);
+    assert_eq!(payload["features"]["otel_export"], false);
     assert_no_private_windows_setup_terms(payload);
     Ok(())
 }
