@@ -619,7 +619,12 @@ fn execute_copies_metadata_to_audit_events() -> Result<()> {
         .as_str()
         .expect("execution result must include audit_path");
     let audit_events = read_audit_events(tmp.path(), audit_path)?;
-    for event_type in ["execution.started", "execution.finished"] {
+    for event_type in [
+        "execution.requested",
+        "policy.resolved",
+        "execution.started",
+        "execution.finished",
+    ] {
         let event = audit_events
             .iter()
             .find(|event| event["type"] == event_type)
@@ -627,6 +632,19 @@ fn execute_copies_metadata_to_audit_events() -> Result<()> {
         assert_event_envelope(event)?;
         assert_eq!(event["metadata"], metadata);
     }
+    let requested = audit_events
+        .iter()
+        .find(|event| event["type"] == "execution.requested")
+        .unwrap();
+    assert_eq!(requested["decision"], "requested");
+    assert_eq!(requested["command_args"], 3);
+    let resolved = audit_events
+        .iter()
+        .find(|event| event["type"] == "policy.resolved")
+        .unwrap();
+    assert_eq!(resolved["decision"], "resolved");
+    assert_eq!(resolved["sandbox_level"], "danger-full-access");
+    assert_eq!(resolved["backend_requirement"], "local-execution");
     Ok(())
 }
 

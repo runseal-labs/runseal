@@ -521,6 +521,34 @@ fn execute_command(
         backend: backend_event_json(backend.name(), backend.status(), backend.platform()),
     };
 
+    let requested = execution_event_now(
+        json!({
+            "type": "execution.requested",
+            "decision": "requested",
+            "command_args": command.len(),
+        }),
+        &event_context,
+    );
+    write_audit_event_with_metadata(&mut audit, &requested, &metadata)?;
+    let resolved = execution_event_now(
+        json!({
+            "type": "policy.resolved",
+            "decision": "resolved",
+            "sandbox_level": policy.sandbox_level.as_str(),
+            "network": {
+                "mode": policy.network.mode.as_str(),
+            },
+            "backend_requirement": if policy.allows_local_execution() {
+                "local-execution"
+            } else {
+                "sandbox-backend"
+            },
+            "required_backend_features": policy.required_backend_feature_names(),
+        }),
+        &event_context,
+    );
+    write_audit_event_with_metadata(&mut audit, &resolved, &metadata)?;
+
     if policy.requires_broad_write_approval() {
         let reason = "filesystem broad write requires approval";
         let event = execution_event_now(
