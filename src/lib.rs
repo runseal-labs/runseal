@@ -1,15 +1,16 @@
 mod audit;
 mod backend;
+mod error;
 mod policy;
 mod windows;
 
 use audit::AuditWriter;
 use backend::{
-    BackendError, ExecutionEnv, ExecutionStdin, SandboxBackend, active_backend,
-    matches_environment_scrub_pattern,
+    ExecutionEnv, ExecutionStdin, SandboxBackend, active_backend, matches_environment_scrub_pattern,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use policy::{NetworkMode, POLICY_VERSION, PolicyError, SandboxPolicy, normalize_policy};
+use error::RunSealError;
+use policy::{NetworkMode, POLICY_VERSION, SandboxPolicy, normalize_policy};
 use serde_json::{Map, Value, json};
 use std::env;
 use std::fs;
@@ -1207,51 +1208,6 @@ struct CliPolicyRequest {
     policy: String,
     network: Option<NetworkMode>,
     cwd: PathBuf,
-}
-
-#[derive(Debug)]
-struct RunSealError {
-    code: String,
-    message: String,
-    reason: String,
-    details: Option<Value>,
-}
-
-impl RunSealError {
-    fn new(code: impl Into<String>, reason: impl Into<String>) -> Self {
-        let code = code.into();
-        let reason = reason.into();
-        Self {
-            message: reason.clone(),
-            code,
-            reason,
-            details: None,
-        }
-    }
-
-    fn with_details(code: impl Into<String>, reason: impl Into<String>, details: Value) -> Self {
-        let code = code.into();
-        let reason = reason.into();
-        Self {
-            message: reason.clone(),
-            code,
-            reason,
-            details: Some(details),
-        }
-    }
-}
-
-impl From<PolicyError> for RunSealError {
-    fn from(err: PolicyError) -> Self {
-        Self::new(err.code, err.reason)
-    }
-}
-
-impl From<BackendError> for RunSealError {
-    fn from(err: BackendError) -> Self {
-        let details = err.details_json();
-        Self::with_details(err.code, err.reason, details)
-    }
 }
 
 #[cfg(test)]
