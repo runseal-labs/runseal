@@ -737,6 +737,7 @@ fn execute_command(
         "platform_plan": plan.json(),
         "stdout_bytes": output.stdout.len(),
         "stderr_bytes": output.stderr.len(),
+        "output_truncated": false,
         "stdout": stdout,
         "stderr": stderr,
         "resource_usage": {

@@ -278,6 +278,7 @@ fn exec_json_returns_execution_result() -> Result<()> {
     assert!(audit_event_types.contains(&"execution.stdout"));
     assert!(audit_event_types.contains(&"execution.finished"));
     assert!(payload["stdout_bytes"].as_u64().unwrap_or_default() > 0);
+    assert_eq!(payload["output_truncated"], false);
     assert!(payload["resource_usage"]["duration_ms"].as_u64().is_some());
     Ok(())
 }

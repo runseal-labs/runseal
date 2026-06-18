@@ -658,6 +658,7 @@ fn execute_rpc_streams_events_and_final_result() -> Result<()> {
         response["result"]["backend"]["status"],
         expected_backend_status()
     );
+    assert_eq!(response["result"]["output_truncated"], false);
     Ok(())
 }
 
