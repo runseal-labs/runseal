@@ -124,6 +124,14 @@ pub struct ResourcePolicy {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProcessPolicy {
+    pub allow_child_processes: bool,
+    pub kill_on_parent_exit: bool,
+    pub max_processes: Option<u64>,
+    pub interactive: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ApprovalPolicy {
     pub on_violation: String,
     pub on_network_route_missing: String,
@@ -144,6 +152,7 @@ pub struct SandboxPolicy {
     pub network: NetworkPolicy,
     pub environment: EnvironmentPolicy,
     pub resources: ResourcePolicy,
+    pub process: ProcessPolicy,
     pub approval: ApprovalPolicy,
     pub source: PolicySource,
 }
@@ -176,6 +185,12 @@ impl SandboxPolicy {
             "resources": {
                 "timeout_ms": self.resources.timeout_ms,
                 "max_output_bytes": self.resources.max_output_bytes,
+            },
+            "process": {
+                "allow_child_processes": self.process.allow_child_processes,
+                "kill_on_parent_exit": self.process.kill_on_parent_exit,
+                "max_processes": self.process.max_processes,
+                "interactive": self.process.interactive,
             },
             "approval": {
                 "on_violation": self.approval.on_violation.clone(),
@@ -220,6 +235,12 @@ impl SandboxPolicy {
             "resources": {
                 "timeout_ms": self.resources.timeout_ms,
                 "max_output_bytes": self.resources.max_output_bytes,
+            },
+            "process": {
+                "allow_child_processes": self.process.allow_child_processes,
+                "kill_on_parent_exit": self.process.kill_on_parent_exit,
+                "max_processes": self.process.max_processes,
+                "interactive": self.process.interactive,
             },
             "approval": {
                 "on_violation": self.approval.on_violation.clone(),
@@ -335,7 +356,6 @@ pub fn normalize_policy(
         )));
     }
     optional_string(object, "description")?;
-    reject_non_empty_section(object, "process")?;
     reject_non_empty_section(object, "audit")?;
     reject_non_empty_section(object, "backend")?;
 
@@ -366,6 +386,7 @@ pub fn normalize_policy(
     let network = inline_network_policy(object.get("network"), network)?;
     let environment = inline_environment(optional_object(object, "environment")?, network.mode)?;
     let resources = inline_resources(optional_object(object, "resources")?)?;
+    let process = inline_process(optional_object(object, "process")?, sandbox_level)?;
     let approval = inline_approval(optional_object(object, "approval")?)?;
 
     Ok(SandboxPolicy {
@@ -375,6 +396,7 @@ pub fn normalize_policy(
         network,
         environment,
         resources,
+        process,
         approval,
         source: PolicySource::Inline,
     })
@@ -396,6 +418,7 @@ fn named_profile(
         network: default_network(network),
         environment: default_environment(network),
         resources: default_resources(),
+        process: default_process(sandbox_level),
         approval: default_approval(),
         source: PolicySource::Named,
     })
@@ -633,6 +656,67 @@ fn inline_resources(resources: Option<&Map<String, Value>>) -> Result<ResourcePo
     })
 }
 
+fn inline_process(
+    process: Option<&Map<String, Value>>,
+    sandbox_level: SandboxLevel,
+) -> Result<ProcessPolicy, PolicyError> {
+    let mut policy = default_process(sandbox_level);
+    let Some(process) = process else {
+        return Ok(policy);
+    };
+    validate_keys(
+        process,
+        "process",
+        &[
+            "allow_child_processes",
+            "kill_on_parent_exit",
+            "max_processes",
+            "interactive",
+        ],
+    )?;
+
+    if let Some(allow_child_processes) =
+        optional_bool_for(Some(process), "process", "allow_child_processes")?
+    {
+        if !allow_child_processes {
+            return Err(PolicyError::invalid(
+                "process.allow_child_processes=false is not supported in this build",
+            ));
+        }
+        policy.allow_child_processes = allow_child_processes;
+    }
+    if let Some(kill_on_parent_exit) =
+        optional_bool_for(Some(process), "process", "kill_on_parent_exit")?
+    {
+        if sandbox_level == SandboxLevel::DangerFullAccess && kill_on_parent_exit {
+            return Err(PolicyError::invalid(
+                "process.kill_on_parent_exit requires a sandbox backend",
+            ));
+        }
+        if sandbox_level != SandboxLevel::DangerFullAccess && !kill_on_parent_exit {
+            return Err(PolicyError::invalid(
+                "sandboxed process.kill_on_parent_exit must be true",
+            ));
+        }
+        policy.kill_on_parent_exit = kill_on_parent_exit;
+    }
+    if process.contains_key("max_processes") {
+        return Err(PolicyError::invalid(
+            "process.max_processes is not supported in this build",
+        ));
+    }
+    if let Some(interactive) = optional_bool_for(Some(process), "process", "interactive")? {
+        if interactive {
+            return Err(PolicyError::invalid(
+                "process.interactive is not supported in this build",
+            ));
+        }
+        policy.interactive = interactive;
+    }
+
+    Ok(policy)
+}
+
 fn inline_approval(approval: Option<&Map<String, Value>>) -> Result<ApprovalPolicy, PolicyError> {
     let mut policy = default_approval();
     let Some(approval) = approval else {
@@ -747,6 +831,15 @@ fn default_resources() -> ResourcePolicy {
     ResourcePolicy {
         timeout_ms: None,
         max_output_bytes: None,
+    }
+}
+
+fn default_process(sandbox_level: SandboxLevel) -> ProcessPolicy {
+    ProcessPolicy {
+        allow_child_processes: true,
+        kill_on_parent_exit: sandbox_level != SandboxLevel::DangerFullAccess,
+        max_processes: None,
+        interactive: false,
     }
 }
 
@@ -1211,6 +1304,34 @@ mod tests {
     }
 
     #[test]
+    fn inline_policy_materializes_sandbox_process_controls() {
+        let cwd = PathBuf::from("/workspace");
+        let policy = normalize_policy(
+            &json!({
+                "version": POLICY_VERSION,
+                "sandbox_level": "read-only",
+                "process": {
+                    "allow_child_processes": true,
+                    "kill_on_parent_exit": true,
+                    "interactive": false
+                }
+            }),
+            &cwd,
+            None,
+        )
+        .unwrap();
+
+        assert!(policy.process.allow_child_processes);
+        assert!(policy.process.kill_on_parent_exit);
+        assert_eq!(policy.process.max_processes, None);
+        assert!(!policy.process.interactive);
+        assert_eq!(
+            policy.canonical_json()["process"]["kill_on_parent_exit"],
+            true
+        );
+    }
+
+    #[test]
     fn network_override_does_not_skip_inline_network_validation() {
         let cwd = PathBuf::from("/workspace");
         let err = normalize_policy(
@@ -1290,6 +1411,52 @@ mod tests {
                 }
             }),
             "approval.on_broad_write=request is not supported",
+        );
+        assert_policy_invalid(
+            json!({
+                "version": POLICY_VERSION,
+                "sandbox_level": "danger-full-access",
+                "process": {
+                    "kill_on_parent_exit": true
+                }
+            }),
+            "process.kill_on_parent_exit requires a sandbox backend",
+        );
+        assert_policy_invalid(
+            json!({
+                "version": POLICY_VERSION,
+                "process": {
+                    "allow_child_processes": false
+                }
+            }),
+            "process.allow_child_processes=false is not supported",
+        );
+        assert_policy_invalid(
+            json!({
+                "version": POLICY_VERSION,
+                "process": {
+                    "kill_on_parent_exit": false
+                }
+            }),
+            "sandboxed process.kill_on_parent_exit must be true",
+        );
+        assert_policy_invalid(
+            json!({
+                "version": POLICY_VERSION,
+                "process": {
+                    "max_processes": 2
+                }
+            }),
+            "process.max_processes is not supported",
+        );
+        assert_policy_invalid(
+            json!({
+                "version": POLICY_VERSION,
+                "process": {
+                    "interactive": true
+                }
+            }),
+            "process.interactive is not supported",
         );
     }
 

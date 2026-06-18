@@ -1215,6 +1215,11 @@ fn inline_policy_accepts_environment_controls() -> Result<()> {
                     "timeout_ms": 1000,
                     "max_output_bytes": 2048
                 },
+                "process": {
+                    "allow_child_processes": true,
+                    "kill_on_parent_exit": true,
+                    "interactive": false
+                },
                 "network": {
                     "mode": "proxy",
                     "routes": ["github-api"],
@@ -1245,6 +1250,10 @@ fn inline_policy_accepts_environment_controls() -> Result<()> {
     assert_eq!(payload["network"]["direct_allow_hosts"], json!([]));
     assert_eq!(payload["resources"]["timeout_ms"], 1000);
     assert_eq!(payload["resources"]["max_output_bytes"], 2048);
+    assert_eq!(payload["process"]["allow_child_processes"], true);
+    assert_eq!(payload["process"]["kill_on_parent_exit"], true);
+    assert_eq!(payload["process"]["max_processes"], Value::Null);
+    assert_eq!(payload["process"]["interactive"], false);
     assert_eq!(payload["approval"]["on_violation"], "deny");
     assert_eq!(payload["approval"]["on_network_route_missing"], "deny");
     assert_eq!(payload["approval"]["on_broad_write"], "deny");
@@ -1261,6 +1270,10 @@ fn inline_policy_accepts_environment_controls() -> Result<()> {
     assert_eq!(
         payload["canonical_policy"]["resources"]["max_output_bytes"],
         2048
+    );
+    assert_eq!(
+        payload["canonical_policy"]["process"]["kill_on_parent_exit"],
+        true
     );
     assert_eq!(
         payload["canonical_policy"]["approval"]["on_broad_write"],
