@@ -1,5 +1,5 @@
 use crate::policy::{BackendFeature, SandboxLevel, SandboxPolicy};
-use crate::windows_plan::{WindowsPolicyPlan, WindowsRuntimeRoots};
+use crate::windows_plan::{WindowsHostRoots, WindowsPolicyPlan, WindowsRuntimeRoots};
 use serde_json::Map;
 use serde_json::{Value, json};
 use std::env;
@@ -180,6 +180,7 @@ pub struct PlatformSandboxPlan {
     pub filesystem_write: Vec<String>,
     pub filesystem_deny: Vec<String>,
     pub filesystem_protected: Vec<&'static str>,
+    private_filesystem_deny: Vec<String>,
     pub network_mode: &'static str,
     pub network_direct_egress: &'static str,
     pub network_managed_proxy: &'static str,
@@ -215,6 +216,7 @@ impl PlatformSandboxPlan {
             filesystem_write: policy.filesystem.write.clone(),
             filesystem_deny: policy.filesystem.deny.clone(),
             filesystem_protected: protected_filesystem_labels(policy),
+            private_filesystem_deny: Vec::new(),
             network_mode: policy.network.mode.as_str(),
             network_direct_egress: "unmanaged",
             network_managed_proxy: "none",
@@ -514,11 +516,26 @@ impl WindowsReferenceBackend {
         cwd: &Path,
         policy: &SandboxPolicy,
     ) -> PlatformSandboxPlan {
+        self.fail_closed_plan_with_host_roots(
+            execution_id,
+            cwd,
+            policy,
+            WindowsHostRoots::from_current_environment(),
+        )
+    }
+
+    fn fail_closed_plan_with_host_roots(
+        self,
+        execution_id: &str,
+        cwd: &Path,
+        policy: &SandboxPolicy,
+        host_roots: WindowsHostRoots,
+    ) -> PlatformSandboxPlan {
         let runtime_root = cwd.join(".runseal").join("runtime").join(execution_id);
         let profile_root = runtime_root.join("profile");
         let synthetic_home = runtime_root.join("home");
         let temp_root = runtime_root.join("temp");
-        let windows_policy = WindowsPolicyPlan::from_policy_and_runtime_roots(
+        let windows_policy = WindowsPolicyPlan::from_policy_runtime_and_host_roots(
             policy,
             Some(WindowsRuntimeRoots::new(
                 path_string(&runtime_root),
@@ -526,7 +543,9 @@ impl WindowsReferenceBackend {
                 path_string(&synthetic_home),
                 path_string(&temp_root),
             )),
+            host_roots,
         );
+        let private_filesystem_deny = windows_policy.filesystem.private_protected_roots.clone();
         let filesystem_write = windows_policy.filesystem.effective_write_roots();
 
         PlatformSandboxPlan {
@@ -547,6 +566,7 @@ impl WindowsReferenceBackend {
             filesystem_write,
             filesystem_deny: windows_policy.filesystem.protected_roots,
             filesystem_protected: protected_filesystem_labels(policy),
+            private_filesystem_deny,
             network_mode: windows_policy.network.guard.as_str(),
             network_direct_egress: windows_policy.network.direct_egress.as_str(),
             network_managed_proxy: windows_policy.network.managed_proxy.as_str(),
@@ -1154,6 +1174,40 @@ mod tests {
                 .expect("protected labels must be an array")
                 .iter()
                 .all(Value::is_string)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn windows_fail_closed_preview_keeps_private_host_roots_out_of_json() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&cwd)?;
+        let policy = normalize_policy(&json!("workspace-contained"), &cwd, None).unwrap();
+        let private_profile = "C:/Users/RunSealPrivateProfile";
+        let host_roots = WindowsHostRoots::new(
+            Some(private_profile.to_string()),
+            Some(format!("{private_profile}/AppData/Roaming")),
+            Some(format!("{private_profile}/AppData/Local")),
+        );
+
+        let plan = WindowsReferenceBackend.fail_closed_plan_with_host_roots(
+            "exec_private",
+            &cwd,
+            &policy,
+            host_roots,
+        );
+
+        assert!(
+            plan.private_filesystem_deny
+                .iter()
+                .any(|root| root == private_profile)
+        );
+        let public_plan = plan.json().to_string();
+        assert!(!public_plan.contains("RunSealPrivateProfile"));
+        assert_eq!(
+            plan.json()["filesystem"]["protected"],
+            json!(["workspace_metadata", "host_profile", "credential_roots"])
         );
         Ok(())
     }

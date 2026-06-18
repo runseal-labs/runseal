@@ -1,4 +1,6 @@
-use crate::policy::{NetworkMode, SandboxPolicy};
+use crate::policy::{NetworkMode, SandboxLevel, SandboxPolicy};
+use std::env;
+use std::path::Path;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WindowsPolicyPlan {
@@ -14,6 +16,7 @@ pub(crate) struct WindowsFilesystemPlan {
     pub(crate) write_roots: Vec<String>,
     pub(crate) runtime_write_roots: Vec<String>,
     pub(crate) protected_roots: Vec<String>,
+    pub(crate) private_protected_roots: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -60,6 +63,13 @@ pub(crate) struct WindowsRuntimeRoots {
     pub(crate) temp_root: String,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct WindowsHostRoots {
+    profile_root: Option<String>,
+    appdata_root: Option<String>,
+    local_appdata_root: Option<String>,
+}
+
 impl WindowsNetworkGuard {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
@@ -87,9 +97,18 @@ impl WindowsManagedProxy {
 }
 
 impl WindowsPolicyPlan {
+    #[cfg(test)]
     pub(crate) fn from_policy_and_runtime_roots(
         policy: &SandboxPolicy,
         runtime_roots: Option<WindowsRuntimeRoots>,
+    ) -> Self {
+        Self::from_policy_runtime_and_host_roots(policy, runtime_roots, WindowsHostRoots::default())
+    }
+
+    pub(crate) fn from_policy_runtime_and_host_roots(
+        policy: &SandboxPolicy,
+        runtime_roots: Option<WindowsRuntimeRoots>,
+        host_roots: WindowsHostRoots,
     ) -> Self {
         let runtime_write_roots = runtime_roots
             .as_ref()
@@ -120,6 +139,7 @@ impl WindowsPolicyPlan {
                 write_roots: policy.filesystem.write.clone(),
                 runtime_write_roots,
                 protected_roots: policy.filesystem.deny.clone(),
+                private_protected_roots: host_roots.protected_roots(policy),
             },
             network: WindowsNetworkPlan {
                 guard,
@@ -132,6 +152,60 @@ impl WindowsPolicyPlan {
                 runtime: runtime_environment,
             },
         }
+    }
+}
+
+impl WindowsHostRoots {
+    pub(crate) fn new(
+        profile_root: Option<String>,
+        appdata_root: Option<String>,
+        local_appdata_root: Option<String>,
+    ) -> Self {
+        Self {
+            profile_root,
+            appdata_root,
+            local_appdata_root,
+        }
+    }
+
+    pub(crate) fn from_current_environment() -> Self {
+        Self::new(
+            env_path("USERPROFILE").or_else(|| env_path("HOME")),
+            env_path("APPDATA"),
+            env_path("LOCALAPPDATA"),
+        )
+    }
+
+    fn protected_roots(&self, policy: &SandboxPolicy) -> Vec<String> {
+        if policy.sandbox_level != SandboxLevel::WorkspaceContained {
+            return Vec::new();
+        }
+
+        let mut roots = Vec::new();
+        if let Some(root) = &self.profile_root {
+            push_unique(&mut roots, root.clone());
+            for child in [
+                ".ssh",
+                ".aws",
+                ".azure",
+                ".config/gcloud",
+                ".docker",
+                ".kube",
+            ] {
+                push_unique(&mut roots, join_runtime_path(root, child));
+            }
+        }
+        if let Some(root) = &self.appdata_root {
+            push_unique(&mut roots, root.clone());
+            for child in ["gh", "GitHub CLI"] {
+                push_unique(&mut roots, join_runtime_path(root, child));
+            }
+        }
+        if let Some(root) = &self.local_appdata_root {
+            push_unique(&mut roots, root.clone());
+            push_unique(&mut roots, join_runtime_path(root, "Google/Cloud SDK"));
+        }
+        roots
     }
 }
 
@@ -204,10 +278,13 @@ fn push_unique(roots: &mut Vec<String>, root: String) {
 }
 
 fn join_runtime_path(root: &str, child: &str) -> String {
-    std::path::Path::new(root)
-        .join(child)
-        .to_string_lossy()
-        .to_string()
+    Path::new(root).join(child).to_string_lossy().to_string()
+}
+
+fn env_path(key: &str) -> Option<String> {
+    env::var_os(key)
+        .filter(|value| !value.is_empty())
+        .map(|value| Path::new(&value).to_string_lossy().to_string())
 }
 
 #[cfg(test)]
@@ -233,6 +310,7 @@ mod tests {
         assert!(plan.filesystem.runtime_write_roots.is_empty());
         assert!(plan.filesystem.effective_write_roots().is_empty());
         assert!(plan.filesystem.protected_roots.is_empty());
+        assert!(plan.filesystem.private_protected_roots.is_empty());
         assert_eq!(plan.network.guard, WindowsNetworkGuard::Disabled);
         assert_eq!(plan.network.direct_egress, WindowsDirectEgress::Deny);
         assert_eq!(plan.network.managed_proxy, WindowsManagedProxy::None);
@@ -260,11 +338,46 @@ mod tests {
         assert!(plan.filesystem.runtime_write_roots.is_empty());
         assert_eq!(plan.filesystem.effective_write_roots(), vec!["/workspace"]);
         assert_eq!(plan.filesystem.protected_roots, protected_roots);
+        assert!(plan.filesystem.private_protected_roots.is_empty());
         assert_eq!(plan.network.guard, WindowsNetworkGuard::Proxy);
         assert_eq!(plan.network.direct_egress, WindowsDirectEgress::Deny);
         assert_eq!(plan.network.managed_proxy, WindowsManagedProxy::Required);
         assert!(plan.network.inject_proxy_environment);
         assert!(plan.environment.runtime.is_empty());
+    }
+
+    #[test]
+    fn workspace_contained_uses_private_host_protection_roots() {
+        let cwd = PathBuf::from("/workspace");
+        let policy = normalize_policy(&json!("workspace-contained"), &cwd, None).unwrap();
+        let profile_root = "C:/Users/RunSealUser";
+        let appdata_root = "C:/Users/RunSealUser/AppData/Roaming";
+        let local_appdata_root = "C:/Users/RunSealUser/AppData/Local";
+        let host_roots = WindowsHostRoots::new(
+            Some(profile_root.to_string()),
+            Some(appdata_root.to_string()),
+            Some(local_appdata_root.to_string()),
+        );
+
+        let plan = WindowsPolicyPlan::from_policy_runtime_and_host_roots(&policy, None, host_roots);
+
+        assert_eq!(
+            plan.filesystem.private_protected_roots,
+            vec![
+                profile_root.to_string(),
+                join_runtime_path(profile_root, ".ssh"),
+                join_runtime_path(profile_root, ".aws"),
+                join_runtime_path(profile_root, ".azure"),
+                join_runtime_path(profile_root, ".config/gcloud"),
+                join_runtime_path(profile_root, ".docker"),
+                join_runtime_path(profile_root, ".kube"),
+                appdata_root.to_string(),
+                join_runtime_path(appdata_root, "gh"),
+                join_runtime_path(appdata_root, "GitHub CLI"),
+                local_appdata_root.to_string(),
+                join_runtime_path(local_appdata_root, "Google/Cloud SDK"),
+            ]
+        );
     }
 
     #[test]
