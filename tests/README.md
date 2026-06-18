@@ -30,6 +30,7 @@ The tests are black-box by design:
 - JSON-RPC behavior through `runseal rpc --stdio`.
 - Filesystem conformance gates that accept explicit fail-closed unsupported responses now, then require behavior once a backend claims support.
 - Protected workspace metadata and network conformance gates accept explicit fail-closed unsupported responses now, then require behavior once a backend claims support.
+- Conformance fail-closed responses and audit events do not expose private Windows account or setup identities.
 - Protocol vocabulary uses `Execution`, not raw process objects.
 - Policy denials use stable error codes.
 - Standard profiles materialize to canonical policy JSON and stable hashes.

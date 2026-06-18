@@ -128,6 +128,22 @@ fn expected_missing_features(additional: &[&'static str]) -> Vec<&'static str> {
     features
 }
 
+fn assert_no_private_windows_setup_terms(value: &Value) {
+    let public_payload = value.to_string();
+    for private_term in [
+        "single-sandbox-user",
+        "restricted-token",
+        "kill-on-close-job",
+        "offline",
+        "online",
+    ] {
+        assert!(
+            !public_payload.contains(private_term),
+            "conformance output must not expose private Windows setup term {private_term}"
+        );
+    }
+}
+
 fn assert_backend_missing_features(
     response: &Value,
     root: &Path,
@@ -138,6 +154,7 @@ fn assert_backend_missing_features(
         "BACKEND_CAPABILITY_MISSING"
     );
     assert_eq!(response["error"]["data"]["support"], "unsupported");
+    assert_no_private_windows_setup_terms(response);
     let missing_features = response["error"]["data"]["missing_features"]
         .as_array()
         .context("unsupported response must include missing_features")?;
@@ -158,6 +175,7 @@ fn assert_backend_missing_features(
         .lines()
         .map(|line| serde_json::from_str(line).context("audit line must be JSON"))
         .collect::<Result<Vec<Value>>>()?;
+    assert_no_private_windows_setup_terms(&json!(&audit_events));
     let backend_event = audit_events
         .iter()
         .find(|event| event["type"] == "sandbox.backend_capability")
