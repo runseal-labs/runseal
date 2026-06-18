@@ -351,6 +351,37 @@ fn get_capabilities_rpc_contract() -> Result<()> {
 }
 
 #[test]
+fn rpc_rejects_malformed_envelope() -> Result<()> {
+    let cases = [
+        (json!([]), "JSON-RPC request must be an object"),
+        (
+            json!({"jsonrpc": "1.0", "id": 1, "method": "getVersion", "params": {}}),
+            "request.jsonrpc must be 2.0",
+        ),
+        (
+            json!({"jsonrpc": "2.0", "id": 1, "params": {}}),
+            "request.method is required",
+        ),
+    ];
+
+    for (request, expected_reason) in cases {
+        let output = run_rpc(&(request.to_string() + "\n"))?;
+
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let messages = stdout_json_lines(&output)?;
+        let response = &messages[0];
+
+        assert_eq!(response["error"]["data"]["code"], "INVALID_REQUEST");
+        assert_eq!(response["error"]["data"]["reason"], expected_reason);
+    }
+    Ok(())
+}
+
+#[test]
 fn no_param_methods_reject_unsupported_params() -> Result<()> {
     for method in ["getVersion", "getCapabilities"] {
         let output = run_rpc(&rpc_request(method, json!({"extra": true})))?;

@@ -147,12 +147,15 @@ fn run_rpc_stdio() -> Result<(), String> {
 }
 
 fn handle_rpc_request(request: &Value) -> Vec<Value> {
-    let id = request.get("id").cloned().unwrap_or(Value::Null);
-    let method = request
-        .get("method")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let params = request.get("params").cloned().unwrap_or_else(|| json!({}));
+    let (id, method, params) = match rpc_request_parts(request) {
+        Ok(parts) => parts,
+        Err(err) => {
+            return vec![rpc::error(
+                request.get("id").cloned().unwrap_or(Value::Null),
+                err,
+            )];
+        }
+    };
 
     match method {
         "getVersion" => match validate_empty_params(&params, "getVersion") {
@@ -203,6 +206,27 @@ fn handle_rpc_request(request: &Value) -> Vec<Value> {
             RunSealError::new("INVALID_REQUEST", format!("unknown method: {method}")),
         )],
     }
+}
+
+fn rpc_request_parts(request: &Value) -> Result<(Value, &str, Value), RunSealError> {
+    let request = request.as_object().ok_or_else(|| {
+        RunSealError::new("INVALID_REQUEST", "JSON-RPC request must be an object")
+    })?;
+    let id = request.get("id").cloned().unwrap_or(Value::Null);
+    let version = request.get("jsonrpc").and_then(Value::as_str);
+    if version != Some("2.0") {
+        return Err(RunSealError::new(
+            "INVALID_REQUEST",
+            "request.jsonrpc must be 2.0",
+        ));
+    }
+    let method = request
+        .get("method")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| RunSealError::new("INVALID_REQUEST", "request.method is required"))?;
+    let params = request.get("params").cloned().unwrap_or_else(|| json!({}));
+    Ok((id, method, params))
 }
 
 fn run_exec(args: &[String]) -> Result<(), String> {
