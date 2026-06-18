@@ -4,10 +4,12 @@ use std::env;
 use std::ffi::OsString;
 use std::fs;
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
+
+const RUNTIME_ROOT_MARKER: &str = ".runseal-runtime-root";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CapabilityStatus {
@@ -262,6 +264,12 @@ impl PlatformSandboxPlan {
             fs::create_dir_all(root)?;
             prepared.push(root.clone());
         }
+        if let Some(runtime_root) = &self.runtime_root {
+            fs::write(
+                Path::new(runtime_root).join(RUNTIME_ROOT_MARKER),
+                self.execution_id.as_bytes(),
+            )?;
+        }
         Ok(prepared)
     }
 
@@ -269,9 +277,11 @@ impl PlatformSandboxPlan {
         let Some(runtime_root) = &self.runtime_root else {
             return Ok(Vec::new());
         };
-        if Path::new(runtime_root).exists() {
+        let runtime_root = Path::new(runtime_root);
+        self.validate_runtime_root_for_cleanup(runtime_root)?;
+        if runtime_root.exists() {
             fs::remove_dir_all(runtime_root)?;
-            Ok(vec![runtime_root.clone()])
+            Ok(vec![path_string(runtime_root)])
         } else {
             Ok(Vec::new())
         }
@@ -280,6 +290,76 @@ impl PlatformSandboxPlan {
     pub fn is_sandbox_enforced(&self) -> bool {
         self.enforcement != "local-execution"
     }
+
+    fn validate_runtime_root_for_cleanup(&self, runtime_root: &Path) -> io::Result<()> {
+        let expected = self.expected_runtime_root()?;
+        if normalize_lexical(runtime_root) != normalize_lexical(&expected) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "refusing to clean runtime root outside planned workspace runtime directory: {}",
+                    runtime_root.display()
+                ),
+            ));
+        }
+        if !runtime_root.exists() {
+            return Ok(());
+        }
+        let metadata = fs::symlink_metadata(runtime_root)?;
+        if metadata.file_type().is_symlink() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "refusing to clean symlinked runtime root: {}",
+                    runtime_root.display()
+                ),
+            ));
+        }
+        let marker = runtime_root.join(RUNTIME_ROOT_MARKER);
+        if !marker.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "refusing to clean unmarked runtime root: {}",
+                    runtime_root.display()
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    fn expected_runtime_root(&self) -> io::Result<PathBuf> {
+        let execution_id = Path::new(&self.execution_id);
+        if !matches!(execution_id.components().next(), Some(Component::Normal(_)))
+            || execution_id.components().count() != 1
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "invalid execution id for runtime cleanup: {}",
+                    self.execution_id
+                ),
+            ));
+        }
+        Ok(Path::new(&self.cwd)
+            .join(".runseal")
+            .join("runtime")
+            .join(&self.execution_id))
+    }
+}
+
+fn normalize_lexical(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -826,7 +906,10 @@ mod tests {
     use super::*;
     use crate::policy::{NetworkMode, normalize_policy};
     use serde_json::json;
+    use std::fs;
+    use std::io;
     use std::path::PathBuf;
+    use tempfile::TempDir;
 
     #[test]
     fn missing_features_excludes_supported_backend_features() {
@@ -868,5 +951,63 @@ mod tests {
         );
         assert_eq!(MacosExperimentalBackend.status(), "experimental");
         assert!(MacosExperimentalBackend.supported_features().is_empty());
+    }
+
+    #[test]
+    fn runtime_cleanup_removes_prepared_runtime_tree() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&cwd)?;
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+        let plan = WindowsReferenceBackend.fail_closed_plan("exec_cleanup", &cwd, &policy);
+        let runtime_root = PathBuf::from(plan.runtime_root.as_ref().unwrap());
+
+        plan.prepare_runtime_roots()?;
+        assert!(runtime_root.join(RUNTIME_ROOT_MARKER).is_file());
+
+        let cleaned = plan.cleanup_runtime_roots()?;
+
+        assert_eq!(cleaned, vec![path_string(&runtime_root)]);
+        assert!(!runtime_root.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_cleanup_refuses_unmarked_runtime_tree() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&cwd)?;
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+        let plan = WindowsReferenceBackend.fail_closed_plan("exec_unmarked", &cwd, &policy);
+        let runtime_root = PathBuf::from(plan.runtime_root.as_ref().unwrap());
+        fs::create_dir_all(&runtime_root)?;
+
+        let err = plan.cleanup_runtime_roots().unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        assert!(runtime_root.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_cleanup_refuses_plan_outside_workspace_runtime_dir() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        let outside = tmp.path().join("outside-runtime");
+        fs::create_dir_all(&cwd)?;
+        fs::create_dir_all(&outside)?;
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+        let mut plan = WindowsReferenceBackend.fail_closed_plan("exec_outside", &cwd, &policy);
+        fs::write(
+            outside.join(RUNTIME_ROOT_MARKER),
+            plan.execution_id.as_bytes(),
+        )?;
+        plan.runtime_root = Some(path_string(&outside));
+
+        let err = plan.cleanup_runtime_roots().unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        assert!(outside.exists());
+        Ok(())
     }
 }
