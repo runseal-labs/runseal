@@ -588,7 +588,7 @@ fn configure_sandbox_network_guard(
     sandbox_sid_str: &str,
     log: &mut dyn Write,
 ) -> Result<()> {
-    let proxy_allowlist_result = firewall::ensure_offline_proxy_allowlist(
+    let proxy_allowlist_result = firewall::ensure_sandbox_proxy_allowlist(
         sandbox_sid_str,
         &payload.proxy_ports,
         payload.allow_local_binding,
@@ -603,7 +603,7 @@ fn configure_sandbox_network_guard(
             format!("ensure sandbox proxy allowlist failed: {err}"),
         )));
     }
-    let firewall_result = firewall::ensure_offline_outbound_block(sandbox_sid_str, log);
+    let firewall_result = firewall::ensure_sandbox_outbound_block(sandbox_sid_str, log);
     if let Err(err) = firewall_result {
         if extract_setup_failure(&err).is_some() {
             return Err(err);

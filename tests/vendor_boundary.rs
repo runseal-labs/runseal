@@ -17,6 +17,10 @@ const VENDOR_SETUP_SOURCES: &[(&str, &str)] = &[
             "../vendor/codex-windows-sandbox/upstream/bin/setup_main/win/sandbox_users.rs"
         ),
     ),
+    (
+        "setup_main/win/firewall.rs",
+        include_str!("../vendor/codex-windows-sandbox/upstream/bin/setup_main/win/firewall.rs"),
+    ),
 ];
 
 #[test]
@@ -34,6 +38,12 @@ fn vendored_windows_setup_state_uses_single_user_schema() {
             "offline_proxy_settings_from_env",
             "uses_offline_identity",
             "configure_offline_sandbox_network",
+            "ensure_offline_proxy_allowlist",
+            "ensure_offline_outbound_block",
+            "offline_sid",
+            "OFFLINE_",
+            "codex_sandbox_offline",
+            "Codex Sandbox Offline",
         ] {
             assert!(
                 !source.contains(forbidden),
