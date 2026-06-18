@@ -315,6 +315,7 @@ impl PlatformSandboxPlan {
         mut filesystem_driver: Box<dyn WindowsFilesystemAclDriver>,
     ) -> io::Result<PreparedSandboxSetup> {
         self.validate_private_process_setup()?;
+        self.validate_private_network_setup()?;
         let mut prepared_roots = self.prepare_runtime_roots()?;
         match self.prepare_filesystem_rules_with_driver(filesystem_driver.as_mut()) {
             Ok(filesystem_roots) => extend_unique(&mut prepared_roots, filesystem_roots),
@@ -347,6 +348,27 @@ impl PlatformSandboxPlan {
         Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "sandboxed plan requires a single sandbox user restricted process boundary and setup identity artifacts",
+        ))
+    }
+
+    fn validate_private_network_setup(&self) -> io::Result<()> {
+        if !self.is_sandbox_enforced() {
+            return Ok(());
+        }
+        if matches!(
+            (
+                self.network_mode,
+                self.network_direct_egress,
+                self.network_managed_proxy,
+            ),
+            ("disabled", "deny", "none") | ("proxy", "deny", "required")
+        ) {
+            return Ok(());
+        }
+
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "sandboxed plan requires a valid network guard",
         ))
     }
 
@@ -2158,6 +2180,27 @@ mod tests {
 
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
         assert!(err.to_string().contains("restricted process boundary"));
+        assert!(!runtime_root.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn sandbox_setup_rejects_incomplete_network_guard_before_runtime_tree() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&cwd)?;
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+        let mut plan =
+            WindowsReferenceBackend.fail_closed_plan("exec_bad_network_guard", &cwd, &policy);
+        let runtime_root = PathBuf::from(plan.runtime_root.as_ref().unwrap());
+        plan.network_managed_proxy = "none";
+
+        let Err(err) = plan.prepare_sandbox_setup() else {
+            panic!("incomplete network guard must fail sandbox setup");
+        };
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains("network guard"));
         assert!(!runtime_root.exists());
         Ok(())
     }
