@@ -1,4 +1,5 @@
 use crate::policy::{NetworkMode, SandboxLevel, SandboxPolicy};
+use crate::windows_vendor_adapter::{WindowsVendorSandboxProfile, WindowsVendorTokenMode};
 use std::env;
 use std::path::Path;
 
@@ -406,10 +407,14 @@ impl WindowsPolicyPlan {
             .as_ref()
             .map(WindowsRuntimeRoots::environment)
             .unwrap_or_default();
-        let mode = if policy.filesystem.write.is_empty() {
-            WindowsFilesystemMode::ReadOnlyCapability
-        } else {
-            WindowsFilesystemMode::WritableRootsCapability
+        let vendor_profile = WindowsVendorSandboxProfile::from_policy(policy);
+        let mode = match vendor_profile.token_mode() {
+            Some(WindowsVendorTokenMode::ReadOnlyCapability) | None => {
+                WindowsFilesystemMode::ReadOnlyCapability
+            }
+            Some(WindowsVendorTokenMode::WritableRootsCapability) => {
+                WindowsFilesystemMode::WritableRootsCapability
+            }
         };
         let guard = match policy.network.mode {
             NetworkMode::Disabled => WindowsNetworkGuard::Disabled,
