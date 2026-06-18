@@ -870,10 +870,19 @@ fn normalized_scheduled_task_text(value: &str) -> String {
     value.replace('\\', "/").to_ascii_lowercase()
 }
 
+fn decode_scheduled_task_xml_text(value: &str) -> String {
+    value
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+}
+
 fn scheduled_setup_task_command_path(xml: &str) -> Option<PathBuf> {
     let start = xml.find("<Command>")? + "<Command>".len();
     let end = xml[start..].find("</Command>")?;
-    let command = xml[start..start + end].trim();
+    let command = decode_scheduled_task_xml_text(xml[start..start + end].trim());
     (!command.is_empty()).then(|| PathBuf::from(command))
 }
 
@@ -893,7 +902,7 @@ fn scheduled_setup_task_is_usable(broker_home: &Path) -> bool {
         return false;
     }
 
-    let xml = String::from_utf8_lossy(&output.stdout);
+    let xml = decode_scheduled_task_xml_text(&String::from_utf8_lossy(&output.stdout));
     let haystack = normalized_scheduled_task_text(&xml);
     let needle = normalized_scheduled_task_text(&broker_home.to_string_lossy());
     haystack.contains("--task-run")
@@ -1529,6 +1538,21 @@ mod tests {
         let xml = format!(
             "<Task><Actions><Exec><Command>{}</Command></Exec></Actions></Task>",
             helper.display()
+        );
+
+        assert_eq!(super::scheduled_setup_task_command_path(&xml), Some(helper));
+    }
+
+    #[test]
+    fn scheduled_setup_task_command_path_decodes_xml_entities() {
+        let tmp = TempDir::new().expect("tempdir");
+        let helper_dir = tmp.path().join("runseal & broker");
+        fs::create_dir_all(&helper_dir).expect("create helper dir");
+        let helper = helper_dir.join("runseal-windows-sandbox-setup.exe");
+        fs::write(&helper, b"helper").expect("write helper");
+        let encoded_helper = helper.display().to_string().replace('&', "&amp;");
+        let xml = format!(
+            "<Task><Actions><Exec><Command>{encoded_helper}</Command></Exec></Actions></Task>"
         );
 
         assert_eq!(super::scheduled_setup_task_command_path(&xml), Some(helper));
