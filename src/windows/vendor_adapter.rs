@@ -136,14 +136,18 @@ impl WindowsVendorSandboxProfile {
 
         Some(json!({
             "version": SETUP_PAYLOAD_VERSION,
-            "sandbox_user": sandbox_user_model.local_account_name(),
-            "sandbox_group": sandbox_user_model.local_group_name(),
+            "sandbox_username": sandbox_user_model.local_account_name(),
             "sandbox_home": path_string(sandbox_home),
             "command_cwd": path_string(command_cwd),
             "read_roots": self.read_roots(),
             "write_roots": self.write_roots(),
-            "deny_roots": self.deny_roots(),
+            "deny_read_paths": self.deny_roots(),
+            "deny_write_paths": Vec::<String>::new(),
+            "proxy_ports": Vec::<u16>::new(),
+            "allow_local_binding": false,
             "network": self.network_policy().map(WindowsVendorNetworkPolicy::as_str),
+            "mode": "full",
+            "refresh_only": true,
         }))
     }
 }
@@ -325,11 +329,15 @@ mod tests {
             .unwrap();
 
         assert_eq!(payload["version"], SETUP_PAYLOAD_VERSION);
-        assert_eq!(payload["sandbox_user"], "RunSealSandbox");
-        assert_eq!(payload["sandbox_group"], "RunSealSandboxUsers");
+        assert_eq!(payload["sandbox_username"], "RunSealSandbox");
         assert_eq!(payload["sandbox_home"], "C:/runseal/sandbox");
         assert_eq!(payload["command_cwd"], "C:/workspace");
+        assert_eq!(payload["deny_write_paths"], json!([]));
+        assert_eq!(payload["proxy_ports"], json!([]));
+        assert_eq!(payload["allow_local_binding"], false);
         assert_eq!(payload["network"], "proxy");
+        assert_eq!(payload["mode"], "full");
+        assert_eq!(payload["refresh_only"], true);
         let serialized = payload.to_string();
         assert!(!serialized.contains("offline"));
         assert!(!serialized.contains("online"));

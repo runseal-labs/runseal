@@ -876,8 +876,7 @@ fn has_single_user_setup_payload(payload: Option<&str>) -> bool {
         return false;
     };
 
-    payload.get("sandbox_user").and_then(Value::as_str) == Some("RunSealSandbox")
-        && payload.get("sandbox_group").and_then(Value::as_str) == Some("RunSealSandboxUsers")
+    payload.get("sandbox_username").and_then(Value::as_str) == Some("RunSealSandbox")
         && payload.get("offline_username").is_none()
         && payload.get("online_username").is_none()
 }
