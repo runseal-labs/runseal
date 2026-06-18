@@ -1527,6 +1527,7 @@ mod tests {
         );
         assert_eq!(private_setup_payload["sandbox_username"], "RunSealSandbox");
         assert!(private_setup_payload["real_user"].is_string());
+        assert_eq!(private_setup_payload["refresh_only"], false);
         assert_eq!(private_setup_payload.get("sandbox_home"), None);
         assert_eq!(private_setup_payload.get("network"), None);
         assert_eq!(plan.filesystem_protected, vec!["workspace_metadata"]);

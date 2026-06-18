@@ -148,7 +148,7 @@ impl WindowsVendorSandboxProfile {
             "allow_local_binding": false,
             "real_user": real_user,
             "mode": "full",
-            "refresh_only": true,
+            "refresh_only": false,
         }))
     }
 }
@@ -329,7 +329,7 @@ mod tests {
         assert_eq!(payload["allow_local_binding"], false);
         assert_eq!(payload["real_user"], "User");
         assert_eq!(payload["mode"], "full");
-        assert_eq!(payload["refresh_only"], true);
+        assert_eq!(payload["refresh_only"], false);
         assert_eq!(payload.get("sandbox_home"), None);
         assert_eq!(payload.get("network"), None);
         let serialized = payload.to_string();
