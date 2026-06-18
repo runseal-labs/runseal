@@ -3,7 +3,7 @@ mod backend;
 mod policy;
 
 use audit::AuditWriter;
-use backend::{BackendError, SandboxBackend, active_backend};
+use backend::{BackendError, ExecutionStdin, SandboxBackend, active_backend};
 use policy::{NetworkMode, POLICY_VERSION, PolicyError, SandboxPolicy, normalize_policy};
 use serde_json::{Map, Value, json};
 use std::env;
@@ -150,9 +150,14 @@ fn run_exec(args: &[String]) -> Result<(), String> {
         request.network,
     )
     .map_err(|err| err.reason)?;
-    let (events, result) =
-        execute_command(&request.command, &request.cwd, &policy, request.timeout)
-            .map_err(|err| err.message)?;
+    let (events, result) = execute_command(
+        &request.command,
+        &request.cwd,
+        &policy,
+        ExecutionStdin::Empty,
+        request.timeout,
+    )
+    .map_err(|err| err.message)?;
 
     if request.events {
         for event in events {
@@ -339,9 +344,11 @@ fn execute_from_params(params: &Value) -> Result<(Vec<Value>, Value), RunSealErr
             "policy",
             "network",
             "network_mode",
+            "stdin",
             "timeout_ms",
         ],
     )?;
+    let stdin = stdin_from_params(params)?;
     let timeout = timeout_from_params(params)?;
     let command = params
         .get("command")
@@ -366,7 +373,7 @@ fn execute_from_params(params: &Value) -> Result<(Vec<Value>, Value), RunSealErr
     let network = network_override_from_params(params)?;
     let policy = normalize_policy(&policy, &cwd, network)?;
 
-    execute_command(&command, &cwd, &policy, timeout)
+    execute_command(&command, &cwd, &policy, stdin, timeout)
 }
 
 fn execution_not_found_from_params(params: &Value) -> Result<Value, RunSealError> {
@@ -464,10 +471,37 @@ fn timeout_from_params(params: &Map<String, Value>) -> Result<Option<Duration>, 
     Ok(Some(Duration::from_millis(timeout_ms)))
 }
 
+fn stdin_from_params(params: &Map<String, Value>) -> Result<ExecutionStdin, RunSealError> {
+    let Some(value) = params.get("stdin") else {
+        return Ok(ExecutionStdin::Empty);
+    };
+    let stdin = value
+        .as_object()
+        .ok_or_else(|| RunSealError::new("INVALID_REQUEST", "params.stdin must be an object"))?;
+    validate_param_keys(stdin, "execute stdin", &["mode"])?;
+    let mode = stdin
+        .get("mode")
+        .and_then(Value::as_str)
+        .ok_or_else(|| RunSealError::new("INVALID_REQUEST", "params.stdin.mode is required"))?;
+
+    match mode {
+        "empty" => Ok(ExecutionStdin::Empty),
+        "inherit" | "bytes" | "stream" => Err(RunSealError::new(
+            "INVALID_REQUEST",
+            format!("params.stdin.mode={mode} is not supported by execute"),
+        )),
+        _ => Err(RunSealError::new(
+            "INVALID_REQUEST",
+            format!("params.stdin.mode must be empty, got {mode}"),
+        )),
+    }
+}
+
 fn execute_command(
     command: &[String],
     cwd: &Path,
     policy: &SandboxPolicy,
+    stdin: ExecutionStdin,
     timeout: Option<Duration>,
 ) -> Result<(Vec<Value>, Value), RunSealError> {
     if command.is_empty() {
@@ -645,7 +679,7 @@ fn execute_command(
 
     let timer = Instant::now();
     let execution_output = backend
-        .execute_plan(&plan, command, cwd, timeout)
+        .execute_plan(&plan, command, cwd, stdin, timeout)
         .map_err(|err| {
             RunSealError::new(
                 "EXECUTION_FAILED_TO_START",

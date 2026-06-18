@@ -5,7 +5,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -64,9 +64,15 @@ pub trait SandboxBackend {
         plan: &PlatformSandboxPlan,
         command: &[String],
         cwd: &Path,
+        stdin: ExecutionStdin,
         timeout: Option<Duration>,
     ) -> io::Result<BackendExecutionOutput>;
     fn capabilities_json(&self) -> Value;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExecutionStdin {
+    Empty,
 }
 
 #[derive(Debug)]
@@ -125,9 +131,11 @@ impl SandboxBackend for ActiveBackend {
         plan: &PlatformSandboxPlan,
         command: &[String],
         cwd: &Path,
+        stdin: ExecutionStdin,
         timeout: Option<Duration>,
     ) -> io::Result<BackendExecutionOutput> {
-        self.as_backend().execute_plan(plan, command, cwd, timeout)
+        self.as_backend()
+            .execute_plan(plan, command, cwd, stdin, timeout)
     }
 
     fn capabilities_json(&self) -> Value {
@@ -351,9 +359,10 @@ impl SandboxBackend for LocalBackend {
         plan: &PlatformSandboxPlan,
         command: &[String],
         cwd: &Path,
+        stdin: ExecutionStdin,
         timeout: Option<Duration>,
     ) -> io::Result<BackendExecutionOutput> {
-        spawn_local_command(plan, command, cwd, timeout)
+        spawn_local_command(plan, command, cwd, stdin, timeout)
     }
 
     fn capabilities_json(&self) -> Value {
@@ -453,9 +462,10 @@ impl SandboxBackend for WindowsReferenceBackend {
         plan: &PlatformSandboxPlan,
         command: &[String],
         cwd: &Path,
+        stdin: ExecutionStdin,
         timeout: Option<Duration>,
     ) -> io::Result<BackendExecutionOutput> {
-        spawn_local_command(plan, command, cwd, timeout)
+        spawn_local_command(plan, command, cwd, stdin, timeout)
     }
 
     fn capabilities_json(&self) -> Value {
@@ -504,9 +514,10 @@ impl SandboxBackend for MacosExperimentalBackend {
         plan: &PlatformSandboxPlan,
         command: &[String],
         cwd: &Path,
+        stdin: ExecutionStdin,
         timeout: Option<Duration>,
     ) -> io::Result<BackendExecutionOutput> {
-        spawn_local_command(plan, command, cwd, timeout)
+        spawn_local_command(plan, command, cwd, stdin, timeout)
     }
 
     fn capabilities_json(&self) -> Value {
@@ -554,9 +565,10 @@ impl SandboxBackend for LinuxCommunityBackend {
         plan: &PlatformSandboxPlan,
         command: &[String],
         cwd: &Path,
+        stdin: ExecutionStdin,
         timeout: Option<Duration>,
     ) -> io::Result<BackendExecutionOutput> {
-        spawn_local_command(plan, command, cwd, timeout)
+        spawn_local_command(plan, command, cwd, stdin, timeout)
     }
 
     fn capabilities_json(&self) -> Value {
@@ -599,6 +611,7 @@ fn spawn_local_command(
     plan: &PlatformSandboxPlan,
     command: &[String],
     cwd: &Path,
+    stdin: ExecutionStdin,
     timeout: Option<Duration>,
 ) -> io::Result<BackendExecutionOutput> {
     let mut process = Command::new(&command[0]);
@@ -607,6 +620,11 @@ fn spawn_local_command(
         .current_dir(cwd)
         .env_clear()
         .envs(minimal_environment(plan));
+    match stdin {
+        ExecutionStdin::Empty => {
+            process.stdin(Stdio::null());
+        }
+    }
 
     let Some(timeout) = timeout else {
         return process.output().map(|output| BackendExecutionOutput {

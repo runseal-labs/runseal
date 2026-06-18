@@ -208,7 +208,6 @@ fn execute_rejects_unsupported_request_fields() -> Result<()> {
     let tmp = TempDir::new()?;
     let unsupported_cases = [
         ("env", json!({"CI": "1"})),
-        ("stdin", json!({"mode": "empty"})),
         ("metadata", json!({"agent_id": "agent_test"})),
     ];
 
@@ -239,6 +238,78 @@ fn execute_rejects_unsupported_request_fields() -> Result<()> {
                 .as_str()
                 .unwrap_or_default()
                 .contains(&format!("params.{field} is not supported"))
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn execute_accepts_empty_stdin() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let output = run_rpc(&rpc_request(
+        "execute",
+        json!({
+            "command": [
+                "python3",
+                "-c",
+                "import sys; data = sys.stdin.buffer.read(); print(f'stdin_bytes={len(data)}')"
+            ],
+            "cwd": tmp.path(),
+            "policy": "danger-full-access",
+            "stdin": {"mode": "empty"}
+        }),
+    ))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = messages
+        .iter()
+        .find(|message| message.get("id") == Some(&json!(1)))
+        .unwrap();
+
+    assert_eq!(response["result"]["status"], "finished");
+    assert_eq!(response["result"]["exit_code"], 0);
+    assert!(
+        response["result"]["stdout"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("stdin_bytes=0")
+    );
+    Ok(())
+}
+
+#[test]
+fn execute_rejects_unimplemented_stdin_modes() -> Result<()> {
+    let tmp = TempDir::new()?;
+    for mode in ["inherit", "bytes", "stream"] {
+        let output = run_rpc(&rpc_request(
+            "execute",
+            json!({
+                "command": ["python3", "-c", "print('must not run')"],
+                "cwd": tmp.path(),
+                "policy": "danger-full-access",
+                "stdin": {"mode": mode}
+            }),
+        ))?;
+
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let messages = stdout_json_lines(&output)?;
+        let response = &messages[0];
+
+        assert_eq!(response["error"]["data"]["code"], "INVALID_REQUEST");
+        assert!(
+            response["error"]["data"]["reason"]
+                .as_str()
+                .unwrap_or_default()
+                .contains(&format!("params.stdin.mode={mode} is not supported"))
         );
     }
     Ok(())
