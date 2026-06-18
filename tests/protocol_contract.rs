@@ -624,6 +624,7 @@ fn execute_copies_metadata_to_audit_events() -> Result<()> {
         "policy.resolved",
         "policy.allowed",
         "execution.started",
+        "execution.resource.sample",
         "execution.finished",
     ] {
         let event = audit_events
@@ -653,6 +654,14 @@ fn execute_copies_metadata_to_audit_events() -> Result<()> {
     assert_eq!(allowed["decision"], "allowed");
     assert_eq!(allowed["sandbox"]["level"], "danger-full-access");
     assert_eq!(allowed["sandbox"]["enforced"], false);
+    let sample = audit_events
+        .iter()
+        .find(|event| event["type"] == "execution.resource.sample")
+        .unwrap();
+    assert!(sample["duration_ms"].as_u64().is_some());
+    assert!(sample["stdout_bytes"].as_u64().is_some());
+    assert!(sample["stderr_bytes"].as_u64().is_some());
+    assert_eq!(sample["output_truncated"], false);
     Ok(())
 }
 

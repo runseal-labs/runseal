@@ -920,6 +920,18 @@ fn execute_command(
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     let finished_at = timestamp_now();
+    let resource_sample = execution_event_at(
+        json!({
+            "type": "execution.resource.sample",
+            "duration_ms": duration_ms,
+            "stdout_bytes": output.stdout.len(),
+            "stderr_bytes": output.stderr.len(),
+            "output_truncated": output_truncated,
+        }),
+        &finished_at,
+        &event_context,
+    );
+    write_audit_event_with_metadata(&mut audit, &resource_sample, &metadata)?;
     let finished = execution_event_at(
         json!({
             "type": "execution.finished",
