@@ -176,6 +176,10 @@ fn explain_policy_returns_effective_hash_and_network_mode() -> Result<()> {
     assert_eq!(payload["environment"]["inherit"], "minimal");
     assert_eq!(payload["backend_requirement"], "sandbox-backend");
     assert_eq!(payload["support"], "unsupported");
+    assert_eq!(
+        payload["required_backend_features"],
+        json!(["filesystem_policy", "network_proxy"])
+    );
     assert!(
         payload["filesystem"]["write"]
             .as_array()
@@ -298,6 +302,10 @@ fn sandboxed_policy_without_backend_fails_closed() -> Result<()> {
         expected_backend_name()
     );
     assert_eq!(response["error"]["data"]["support"], "unsupported");
+    assert_eq!(
+        response["error"]["data"]["missing_features"],
+        json!(["filesystem_policy", "network_disabled"])
+    );
     let audit_path = response["error"]["data"]["audit_path"]
         .as_str()
         .expect("backend failure must return audit_path");
@@ -312,6 +320,10 @@ fn sandboxed_policy_without_backend_fails_closed() -> Result<()> {
         let plan = &response["error"]["data"]["platform_plan"];
         assert_eq!(plan["enforcement"], "fail-closed-preview");
         assert_eq!(plan["sandbox_level"], "read-only");
+        assert_eq!(
+            plan["required_backend_features"],
+            json!(["filesystem_policy", "network_disabled"])
+        );
         assert!(
             plan["runtime_root"]
                 .as_str()

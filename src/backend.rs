@@ -134,6 +134,7 @@ pub struct PlatformSandboxPlan {
     pub filesystem_write: Vec<String>,
     pub filesystem_deny: Vec<String>,
     pub network_mode: &'static str,
+    pub required_backend_features: Vec<&'static str>,
 }
 
 impl PlatformSandboxPlan {
@@ -161,6 +162,7 @@ impl PlatformSandboxPlan {
             filesystem_write: policy.filesystem.write.clone(),
             filesystem_deny: policy.filesystem.deny.clone(),
             network_mode: policy.network.mode.as_str(),
+            required_backend_features: policy.required_backend_features(),
         }
     }
 
@@ -188,7 +190,8 @@ impl PlatformSandboxPlan {
             },
             "network": {
                 "mode": self.network_mode,
-            }
+            },
+            "required_backend_features": self.required_backend_features.clone(),
         })
     }
 
@@ -234,6 +237,7 @@ pub struct BackendError {
     pub backend_status: &'static str,
     pub platform: &'static str,
     pub support: &'static str,
+    pub missing_features: Vec<&'static str>,
     pub plan: Option<Box<PlatformSandboxPlan>>,
 }
 
@@ -258,6 +262,7 @@ impl BackendError {
             backend_status: backend.status(),
             platform: backend.platform(),
             support: CapabilityStatus::Unsupported.as_str(),
+            missing_features: policy.required_backend_features(),
             plan: plan.map(Box::new),
         }
     }
@@ -270,6 +275,7 @@ impl BackendError {
                 "platform": self.platform,
             },
             "support": self.support,
+            "missing_features": self.missing_features.clone(),
         });
 
         if let (Some(details), Some(plan)) = (details.as_object_mut(), self.plan.as_deref()) {
@@ -393,6 +399,7 @@ impl WindowsReferenceBackend {
             filesystem_write: policy.filesystem.write.clone(),
             filesystem_deny: policy.filesystem.deny.clone(),
             network_mode: policy.network.mode.as_str(),
+            required_backend_features: policy.required_backend_features(),
         }
     }
 }

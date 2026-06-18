@@ -92,6 +92,13 @@ fn assert_backend_missing(response: &Value, root: &Path) -> Result<()> {
         "BACKEND_CAPABILITY_MISSING"
     );
     assert_eq!(response["error"]["data"]["support"], "unsupported");
+    assert!(
+        response["error"]["data"]["missing_features"]
+            .as_array()
+            .context("unsupported response must include missing_features")?
+            .iter()
+            .any(|feature| feature == "filesystem_policy")
+    );
 
     let audit_path = response["error"]["data"]["audit_path"]
         .as_str()

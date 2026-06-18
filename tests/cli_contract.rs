@@ -147,6 +147,10 @@ fn explain_policy_cli_materializes_standard_profile() -> Result<()> {
     assert_eq!(payload["environment"]["inherit"], "minimal");
     assert_eq!(payload["backend_requirement"], "sandbox-backend");
     assert_eq!(
+        payload["required_backend_features"],
+        serde_json::json!(["filesystem_policy", "network_disabled"])
+    );
+    assert_eq!(
         payload["canonical_policy"]["filesystem"]["protect_vcs"],
         true
     );

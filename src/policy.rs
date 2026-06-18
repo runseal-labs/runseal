@@ -154,6 +154,7 @@ impl SandboxPolicy {
             } else {
                 "sandbox-backend"
             },
+            "required_backend_features": self.required_backend_features(),
             "support": if self.allows_local_execution() {
                 "supported"
             } else {
@@ -171,6 +172,19 @@ impl SandboxPolicy {
         self.source == PolicySource::Inline
             && !self.filesystem.unrestricted
             && self.filesystem.write.is_empty()
+    }
+
+    pub fn required_backend_features(&self) -> Vec<&'static str> {
+        if self.allows_local_execution() {
+            return Vec::new();
+        }
+
+        let mut features = vec!["filesystem_policy"];
+        features.push(match self.network.mode {
+            NetworkMode::Disabled => "network_disabled",
+            NetworkMode::Proxy => "network_proxy",
+        });
+        features
     }
 }
 
@@ -420,6 +434,10 @@ mod tests {
         assert_eq!(policy.sandbox_level, SandboxLevel::WorkspaceWrite);
         assert_eq!(policy.network.mode, NetworkMode::Proxy);
         assert!(policy.filesystem.protect_vcs);
+        assert_eq!(
+            policy.required_backend_features(),
+            vec!["filesystem_policy", "network_proxy"]
+        );
         assert!(policy.hash().starts_with("sha256:"));
     }
 
