@@ -62,6 +62,8 @@ use windows_sys::Win32::Storage::FileSystem::FILE_DELETE_CHILD;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_EXECUTE;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
+use windows_sys::Win32::Storage::FileSystem::MOVEFILE_WRITE_THROUGH;
+use windows_sys::Win32::Storage::FileSystem::MoveFileExW;
 
 const DENY_ACCESS: i32 = 3;
 const SETUP_PAYLOAD_DIRNAME: &str = "payloads";
@@ -326,7 +328,7 @@ fn write_scheduled_setup_result(
         )
     })?;
     drop(file);
-    if let Err(err) = std::fs::rename(&temp_path, &result_path) {
+    if let Err(err) = publish_scheduled_setup_result(&temp_path, &result_path) {
         let _ = remove_setup_payload_file(&temp_path);
         return Err(err).with_context(|| {
             format!(
@@ -334,6 +336,22 @@ fn write_scheduled_setup_result(
                 result_path.display()
             )
         });
+    }
+    Ok(())
+}
+
+fn publish_scheduled_setup_result(temp_path: &Path, result_path: &Path) -> std::io::Result<()> {
+    let temp_path_wide = to_wide(temp_path.as_os_str());
+    let result_path_wide = to_wide(result_path.as_os_str());
+    let ok = unsafe {
+        MoveFileExW(
+            temp_path_wide.as_ptr(),
+            result_path_wide.as_ptr(),
+            MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if ok == 0 {
+        return Err(std::io::Error::last_os_error());
     }
     Ok(())
 }
