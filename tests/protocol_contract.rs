@@ -99,6 +99,26 @@ fn get_version_rpc_contract() -> Result<()> {
 }
 
 #[test]
+fn get_capabilities_rpc_contract() -> Result<()> {
+    let output = run_rpc(&rpc_request("getCapabilities", json!({})))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let payload = &messages[0]["result"];
+    assert_eq!(payload["backend"], "runseal-local");
+    assert!(payload["platform"].as_str().is_some());
+    assert_eq!(payload["sandbox_levels"]["danger-full-access"], "supported");
+    assert_eq!(payload["sandbox_levels"]["workspace-write"], "unsupported");
+    assert_eq!(payload["network_modes"]["disabled"], "unsupported");
+    assert_eq!(payload["features"]["audit_jsonl"], false);
+    Ok(())
+}
+
+#[test]
 fn explain_policy_returns_effective_hash_and_network_mode() -> Result<()> {
     let tmp = TempDir::new()?;
     let cwd = tmp.path().to_string_lossy().to_string();
@@ -271,5 +291,6 @@ fn execute_rpc_streams_events_and_final_result() -> Result<()> {
     assert_eq!(response["result"]["status"], "finished");
     assert_eq!(response["result"]["exit_code"], 0);
     assert_eq!(response["result"]["sandbox"]["enforced"], false);
+    assert_eq!(response["result"]["backend"]["name"], "runseal-local");
     Ok(())
 }

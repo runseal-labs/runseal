@@ -81,6 +81,26 @@ fn version_reports_protocol_and_runtime_versions() -> Result<()> {
 }
 
 #[test]
+fn capabilities_cli_reports_local_baseline() -> Result<()> {
+    let output = run_cli(&["capabilities"])?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload = stdout_json(&output)?;
+    assert_eq!(payload["backend"], "runseal-local");
+    assert!(payload["platform"].as_str().is_some());
+    assert_eq!(payload["features"]["local_execution"], true);
+    assert_eq!(payload["features"]["filesystem_policy"], false);
+    assert_eq!(payload["sandbox_levels"]["danger-full-access"], "supported");
+    assert_eq!(payload["sandbox_levels"]["read-only"], "unsupported");
+    assert_eq!(payload["network_modes"]["proxy"], "unsupported");
+    Ok(())
+}
+
+#[test]
 fn explain_policy_cli_materializes_standard_profile() -> Result<()> {
     let tmp = TempDir::new()?;
     let cwd = tmp.path().to_string_lossy().to_string();

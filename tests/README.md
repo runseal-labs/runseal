@@ -11,6 +11,7 @@ RUNSEAL_BIN=/path/to/runseal cargo test --test cli_contract --test protocol_cont
 The tests are black-box by design:
 
 - CLI behavior through `runseal exec`.
+- Capability reporting through `runseal capabilities` and `getCapabilities`.
 - Policy explanation through `runseal explain-policy`.
 - JSON-RPC behavior through `runseal rpc --stdio`.
 - Protocol vocabulary uses `Execution`, not raw process objects.

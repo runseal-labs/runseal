@@ -1,5 +1,7 @@
+mod backend;
 mod policy;
 
+use backend::{active_backend, SandboxBackend};
 use policy::{normalize_policy, NetworkMode, PolicyError, SandboxPolicy, POLICY_VERSION};
 use serde_json::{json, Value};
 use std::env;
@@ -34,6 +36,10 @@ fn run() -> Result<(), String> {
         }
         [command] if command == "version" => {
             println!("{}", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
+        [command] if command == "capabilities" => {
+            println!("{}", active_backend().capabilities_json());
             Ok(())
         }
         [command, flag] if command == "rpc" && flag == "--stdio" => run_rpc_stdio(),
@@ -78,6 +84,7 @@ fn handle_rpc_request(request: &Value) -> Vec<Value> {
 
     match method {
         "getVersion" => vec![rpc_result(id, version_payload())],
+        "getCapabilities" => vec![rpc_result(id, active_backend().capabilities_json())],
         "explainPolicy" => match explain_policy_from_params(&params) {
             Ok(result) => vec![rpc_result(id, result)],
             Err(err) => vec![rpc_error(id, err)],
@@ -342,7 +349,9 @@ fn execute_command(
         ));
     }
 
-    if !policy.allows_local_execution() {
+    let backend = active_backend();
+    let support = backend.supports_policy(policy);
+    if !support.is_supported() {
         return Err(RunSealError::new(
             "BACKEND_CAPABILITY_MISSING",
             format!(
@@ -355,6 +364,8 @@ fn execute_command(
     let execution_id = new_execution_id();
     let policy_id = policy.id.clone();
     let policy_hash = policy.hash();
+    let backend_name = backend.name();
+    let backend_platform = backend.platform();
     let started = json!({
         "type": "execution.started",
         "execution_id": execution_id,
@@ -366,6 +377,10 @@ fn execute_command(
         },
         "network": {
             "mode": policy.network.mode.as_str(),
+        },
+        "backend": {
+            "name": backend_name,
+            "platform": backend_platform,
         }
     });
 
@@ -412,6 +427,10 @@ fn execute_command(
         },
         "network": {
             "mode": policy.network.mode.as_str(),
+        },
+        "backend": {
+            "name": backend_name,
+            "platform": backend_platform,
         },
         "stdout_bytes": output.stdout.len(),
         "stderr_bytes": output.stderr.len(),
