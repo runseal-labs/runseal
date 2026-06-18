@@ -40,8 +40,10 @@ use std::process::Output;
 use std::time::Duration;
 #[cfg(windows)]
 use {
-    codex_protocol::models::PermissionProfile, codex_utils_absolute_path::AbsolutePathBuf,
-    std::collections::HashMap, std::os::windows::process::ExitStatusExt,
+    codex_protocol::models::PermissionProfile,
+    codex_utils_absolute_path::AbsolutePathBuf,
+    std::collections::{HashMap, HashSet},
+    std::os::windows::process::ExitStatusExt,
 };
 
 #[derive(Debug)]
@@ -61,6 +63,11 @@ pub(crate) fn backend_unavailable_reason(err: &io::Error) -> Option<&str> {
     err.get_ref()?
         .downcast_ref::<BackendUnavailableError>()
         .map(|err| err.reason.as_str())
+}
+
+#[cfg(windows)]
+fn public_windows_setup_unavailable_reason(code: &str) -> String {
+    format!("windows sandbox setup unavailable: {code}")
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1097,6 +1104,7 @@ fn execute_windows_sandbox_plan(
             format!("invalid workspace root: {err}"),
         )
     })?;
+    let workspace_roots = [workspace_root];
     let permission_profile = plan.vendor_permission_profile()?;
     plan.prepare_runtime_roots()?;
     prepare_vendor_sandbox_home(cwd, &vendor_sandbox_home)?;
@@ -1111,12 +1119,18 @@ fn execute_windows_sandbox_plan(
         None
     };
     let env_map = sandbox_environment(plan, env, managed_proxy.as_ref());
+    let workspace_contained = plan.sandbox_level == SandboxLevel::WorkspaceContained.as_str();
+    let deny_read_paths = if workspace_contained {
+        windows_workspace_contained_deny_read_paths(&workspace_roots, plan, &env_map)?
+    } else {
+        Vec::new()
+    };
 
     let result =
         codex_windows_sandbox::run_windows_sandbox_capture_for_permission_profile_elevated(
             codex_windows_sandbox::ElevatedSandboxProfileCaptureRequest {
                 permission_profile: &permission_profile,
-                workspace_roots: &[workspace_root],
+                workspace_roots: workspace_roots.as_slice(),
                 codex_home: &vendor_sandbox_home,
                 command: command.to_vec(),
                 cwd,
@@ -1126,20 +1140,16 @@ fn execute_windows_sandbox_plan(
                 use_private_desktop: false,
                 proxy_enforced: plan.network_managed_proxy == "required",
                 read_roots_override: None,
-                read_roots_include_platform_defaults: true,
+                read_roots_include_platform_defaults: workspace_contained,
                 write_roots_override: None,
-                deny_read_paths_override: &[],
+                deny_read_paths_override: deny_read_paths.as_slice(),
                 deny_write_paths_override: &[],
             },
         )
         .map_err(|err| {
             if let Some(failure) = codex_windows_sandbox::extract_setup_failure(&err) {
                 return io::Error::other(BackendUnavailableError {
-                    reason: format!(
-                        "windows sandbox setup unavailable: {}: {}",
-                        failure.code.as_str(),
-                        codex_windows_sandbox::sanitize_setup_metric_tag_value(&failure.message)
-                    ),
+                    reason: public_windows_setup_unavailable_reason(failure.code.as_str()),
                 });
             }
             io::Error::other(err.to_string())
@@ -1165,6 +1175,102 @@ fn execute_windows_sandbox_plan(
         },
         timed_out: capture.timed_out,
     })
+}
+
+#[cfg(windows)]
+fn windows_workspace_contained_deny_read_paths(
+    workspace_roots: &[AbsolutePathBuf],
+    plan: &PlatformSandboxPlan,
+    env_map: &HashMap<String, String>,
+) -> io::Result<Vec<AbsolutePathBuf>> {
+    let Some(user_profile) = std::env::var_os("USERPROFILE").map(PathBuf::from) else {
+        return Ok(Vec::new());
+    };
+    let mut allowed_roots = workspace_roots
+        .iter()
+        .map(AbsolutePathBuf::as_path)
+        .map(Path::to_path_buf)
+        .collect::<Vec<_>>();
+    for root in &plan.filesystem_write {
+        let root = PathBuf::from(root);
+        if root.is_absolute() {
+            allowed_roots.push(root);
+        }
+    }
+    for key in ["TEMP", "TMP"] {
+        if let Some(value) = env_map.get(key) {
+            let root = PathBuf::from(value);
+            if root.is_absolute() {
+                allowed_roots.push(root);
+            }
+        }
+    }
+
+    let mut deny_paths = Vec::new();
+    let mut seen = HashSet::new();
+    collect_workspace_contained_profile_denies(
+        &user_profile,
+        &allowed_roots,
+        &mut deny_paths,
+        &mut seen,
+    );
+    Ok(deny_paths)
+}
+
+#[cfg(windows)]
+fn collect_workspace_contained_profile_denies(
+    root: &Path,
+    allowed_roots: &[PathBuf],
+    deny_paths: &mut Vec<AbsolutePathBuf>,
+    seen: &mut HashSet<String>,
+) {
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if is_allowed_or_inside_allowed_root(&path, allowed_roots) {
+            continue;
+        }
+        if contains_allowed_root(&path, allowed_roots) {
+            collect_workspace_contained_profile_denies(&path, allowed_roots, deny_paths, seen);
+            continue;
+        }
+        let Ok(absolute) = AbsolutePathBuf::from_absolute_path_checked(&path) else {
+            continue;
+        };
+        if seen.insert(windows_sandbox_path_key(absolute.as_path())) {
+            deny_paths.push(absolute);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn is_allowed_or_inside_allowed_root(path: &Path, allowed_roots: &[PathBuf]) -> bool {
+    let path_key = windows_sandbox_path_key(path);
+    allowed_roots.iter().any(|root| {
+        let root_key = windows_sandbox_path_key(root);
+        path_key == root_key || path_key.starts_with(&format!("{root_key}\\"))
+    })
+}
+
+#[cfg(windows)]
+fn contains_allowed_root(path: &Path, allowed_roots: &[PathBuf]) -> bool {
+    let path_key = windows_sandbox_path_key(path);
+    allowed_roots.iter().any(|root| {
+        let root_key = windows_sandbox_path_key(root);
+        root_key.starts_with(&format!("{path_key}\\"))
+    })
+}
+
+#[cfg(windows)]
+fn windows_sandbox_path_key(path: &Path) -> String {
+    path.canonicalize()
+        .unwrap_or_else(|_| path.to_path_buf())
+        .to_string_lossy()
+        .replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_ascii_lowercase()
 }
 
 #[cfg(not(windows))]
@@ -1518,6 +1624,53 @@ mod tests {
     #[cfg(windows)]
     fn symlink_file_for_test(target: &Path, link: &Path) -> io::Result<()> {
         std::os::windows::fs::symlink_file(target, link)
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_setup_unavailable_reason_exposes_code_only() {
+        assert_eq!(
+            public_windows_setup_unavailable_reason("orchestrator_helper_launch_failed"),
+            "windows sandbox setup unavailable: orchestrator_helper_launch_failed"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn workspace_contained_profile_denies_skip_allowed_workspace_branches() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let profile = tmp.path().join("profile");
+        let workspace = profile.join("workspace");
+        let documents = profile.join("Documents");
+        let appdata = profile.join("AppData");
+        let local = appdata.join("Local");
+        let sandbox_temp = local.join("Temp").join("runseal");
+        let roaming = appdata.join("Roaming");
+        for dir in [&workspace, &documents, &sandbox_temp, &roaming] {
+            fs::create_dir_all(dir)?;
+        }
+
+        let allowed_roots = vec![workspace.clone(), sandbox_temp.clone()];
+        let mut deny_paths = Vec::new();
+        let mut seen = HashSet::new();
+        collect_workspace_contained_profile_denies(
+            &profile,
+            &allowed_roots,
+            &mut deny_paths,
+            &mut seen,
+        );
+        let deny_keys = deny_paths
+            .iter()
+            .map(|path| windows_sandbox_path_key(path.as_path()))
+            .collect::<HashSet<_>>();
+
+        assert!(deny_keys.contains(&windows_sandbox_path_key(&documents)));
+        assert!(deny_keys.contains(&windows_sandbox_path_key(&roaming)));
+        assert!(!deny_keys.contains(&windows_sandbox_path_key(&workspace)));
+        assert!(!deny_keys.contains(&windows_sandbox_path_key(&sandbox_temp)));
+        assert!(!deny_keys.contains(&windows_sandbox_path_key(&appdata)));
+        assert!(!deny_keys.contains(&windows_sandbox_path_key(&local)));
+        Ok(())
     }
 
     #[derive(Default)]
