@@ -41,10 +41,6 @@ impl CapabilityStatus {
             Self::Unsupported => "unsupported",
         }
     }
-
-    pub fn is_supported(self) -> bool {
-        self == Self::Supported
-    }
 }
 
 /// Platform execution boundary for RunSeal sandbox policies.
@@ -56,13 +52,6 @@ pub trait SandboxBackend {
     fn status(&self) -> &'static str;
     fn platform(&self) -> &'static str;
     fn supported_features(&self) -> &'static [BackendFeature];
-    fn supports_policy(&self, policy: &SandboxPolicy) -> CapabilityStatus {
-        if policy.allows_local_execution() || self.missing_features(policy).is_empty() {
-            CapabilityStatus::Supported
-        } else {
-            CapabilityStatus::Unsupported
-        }
-    }
     fn missing_features(&self, policy: &SandboxPolicy) -> Vec<BackendFeature> {
         missing_backend_features(policy, self.supported_features())
     }
@@ -1026,7 +1015,7 @@ impl SandboxBackend for WindowsReferenceBackend {
         cwd: &Path,
         policy: &SandboxPolicy,
     ) -> Result<PlatformSandboxPlan, BackendError> {
-        if self.supports_policy(policy).is_supported() {
+        if policy.allows_local_execution() {
             Ok(PlatformSandboxPlan::local_execution(
                 self,
                 execution_id,
@@ -1450,7 +1439,7 @@ fn compile_local_execution_or_unsupported(
     cwd: &Path,
     policy: &SandboxPolicy,
 ) -> Result<PlatformSandboxPlan, BackendError> {
-    if backend.supports_policy(policy).is_supported() {
+    if policy.allows_local_execution() {
         Ok(PlatformSandboxPlan::local_execution(
             backend,
             execution_id,
@@ -1632,7 +1621,22 @@ mod tests {
         .unwrap();
 
         assert!(missing_backend_features(&policy, &[]).is_empty());
-        assert!(LocalBackend.supports_policy(&policy).is_supported());
+        assert!(policy.allows_local_execution());
+    }
+
+    #[test]
+    fn windows_reference_does_not_compile_sandboxed_policy_as_local_execution() {
+        let cwd = PathBuf::from("/workspace");
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+
+        let err = WindowsReferenceBackend
+            .compile_plan("exec_sandboxed", &cwd, &policy)
+            .unwrap_err();
+        let plan = err.plan.as_deref().unwrap();
+
+        assert_eq!(err.code, "BACKEND_CAPABILITY_MISSING");
+        assert_eq!(plan.enforcement, "fail-closed-preview");
+        assert_ne!(plan.enforcement, "local-execution");
     }
 
     #[test]
