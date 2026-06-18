@@ -1,4 +1,6 @@
-use crate::policy::{BackendFeature, SandboxLevel, SandboxPolicy};
+use crate::policy::{
+    BackendFeature, SandboxLevel, SandboxPolicy, matches_environment_scrub_pattern,
+};
 use crate::windows::policy::{
     WindowsFilesystemAclPlan, WindowsFilesystemAclTransactionPlan, WindowsFilesystemRule,
     WindowsHostRoots, WindowsPolicyPlan, WindowsRuntimeRoots,
@@ -1084,20 +1086,6 @@ fn host_platform() -> &'static str {
 
 fn path_string(path: &Path) -> String {
     PathBuf::from(path).to_string_lossy().to_string()
-}
-
-pub(crate) fn matches_environment_scrub_pattern(key: &str, pattern: &str) -> bool {
-    let key = key.to_ascii_uppercase();
-    let pattern = pattern.to_ascii_uppercase();
-
-    if let Some(prefix) = pattern.strip_suffix('*') {
-        return key.starts_with(prefix);
-    }
-    if let Some(suffix) = pattern.strip_prefix('*') {
-        return key.ends_with(suffix);
-    }
-
-    key == pattern
 }
 
 fn compile_local_execution_or_unsupported(

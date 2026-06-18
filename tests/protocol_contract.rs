@@ -426,6 +426,68 @@ fn execute_accepts_non_secret_env_and_audits_keys_only() -> Result<()> {
 }
 
 #[test]
+fn execute_applies_policy_environment_set() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let output = run_rpc(&rpc_request(
+        "execute",
+        json!({
+            "command": [
+                python_bin(),
+                "-c",
+                "import os; print(os.environ.get('RUNSEAL_POLICY_FLAG', 'missing') + ':' + os.environ.get('RUNSEAL_OVERRIDE', 'missing'))"
+            ],
+            "cwd": tmp.path(),
+            "policy": {
+                "version": "runseal.policy/v1",
+                "sandbox_level": "danger-full-access",
+                "environment": {
+                    "set": {
+                        "RUNSEAL_POLICY_FLAG": "policy",
+                        "RUNSEAL_OVERRIDE": "policy"
+                    }
+                }
+            },
+            "env": {"RUNSEAL_OVERRIDE": "request"}
+        }),
+    ))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = messages
+        .iter()
+        .find(|message| message.get("id") == Some(&json!(1)))
+        .unwrap();
+
+    assert_eq!(response["result"]["status"], "finished");
+    assert!(
+        response["result"]["stdout"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("policy:request")
+    );
+
+    let audit_path = response["result"]["audit_path"]
+        .as_str()
+        .expect("execution result must include audit_path");
+    let audit_events = read_audit_events(tmp.path(), audit_path)?;
+    let started = audit_events
+        .iter()
+        .find(|event| event["type"] == "execution.started")
+        .context("execution.started audit event must exist")?;
+    assert_eq!(
+        started["environment"]["requested_keys"],
+        json!(["RUNSEAL_OVERRIDE", "RUNSEAL_POLICY_FLAG"])
+    );
+    let audit_jsonl = fs::read_to_string(tmp.path().join(audit_path))?;
+    assert!(!audit_jsonl.contains("policy:request"));
+    Ok(())
+}
+
+#[test]
 fn execute_rejects_secret_env_keys() -> Result<()> {
     let tmp = TempDir::new()?;
     for key in ["OPENAI_API_KEY", "RUNSEAL_TOKEN", "AWS_REGION"] {
@@ -1040,6 +1102,9 @@ fn inline_policy_accepts_environment_controls() -> Result<()> {
                 "environment": {
                     "inherit": "minimal",
                     "scrub": ["RUNSEAL_SECRET_*"],
+                    "set": {
+                        "CI": "1"
+                    },
                     "proxy": false
                 },
                 "network": {"mode": "proxy"}
@@ -1057,11 +1122,13 @@ fn inline_policy_accepts_environment_controls() -> Result<()> {
 
     assert_eq!(payload["environment"]["inherit"], "minimal");
     assert_eq!(payload["environment"]["scrub"], json!(["RUNSEAL_SECRET_*"]));
+    assert_eq!(payload["environment"]["set"]["CI"], "1");
     assert_eq!(payload["environment"]["proxy"], false);
     assert_eq!(
         payload["canonical_policy"]["environment"]["scrub"],
         json!(["RUNSEAL_SECRET_*"])
     );
+    assert_eq!(payload["canonical_policy"]["environment"]["set"]["CI"], "1");
     Ok(())
 }
 

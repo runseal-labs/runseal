@@ -9,16 +9,16 @@ mod stdin;
 mod windows;
 
 use audit::{create_audit_writer, write_audit_event_with_metadata};
-use backend::{
-    ExecutionEnv, ExecutionStdin, SandboxBackend, active_backend, matches_environment_scrub_pattern,
-};
+use backend::{ExecutionEnv, ExecutionStdin, SandboxBackend, active_backend};
 use cli::{parse_exec_args, parse_policy_args};
 use error::RunSealError;
 use events::{
     ExecutionEventContext, backend_event_json, execution_event_at, execution_event_now,
     new_execution_ids, stream_event, timestamp_now,
 };
-use policy::{NetworkMode, POLICY_VERSION, SandboxPolicy, normalize_policy};
+use policy::{
+    NetworkMode, POLICY_VERSION, SandboxPolicy, matches_environment_scrub_pattern, normalize_policy,
+};
 use serde_json::{Map, Value, json};
 use std::env;
 use std::fs;
@@ -385,8 +385,9 @@ fn env_from_params(
     params: &Map<String, Value>,
     policy: &SandboxPolicy,
 ) -> Result<ExecutionEnv, RunSealError> {
+    let mut entries = policy.environment.set.clone();
     let Some(value) = params.get("env") else {
-        return Ok(ExecutionEnv::default());
+        return Ok(ExecutionEnv { entries });
     };
     let env = value
         .as_object()
@@ -398,7 +399,6 @@ fn env_from_params(
         ));
     }
 
-    let mut entries = Vec::with_capacity(env.len());
     for (key, value) in env {
         validate_env_key(key)?;
         if policy
@@ -424,11 +424,30 @@ fn env_from_params(
                 format!("params.env.{key} must be at most {MAX_ENV_VALUE_BYTES} bytes"),
             ));
         }
-        entries.push((key.clone(), value.to_string()));
+        upsert_env_entry(&mut entries, key.clone(), value.to_string());
+    }
+    if entries.len() > MAX_ENV_ENTRIES {
+        return Err(RunSealError::new(
+            "INVALID_REQUEST",
+            format!(
+                "environment.set and params.env must include at most {MAX_ENV_ENTRIES} combined entries"
+            ),
+        ));
     }
     entries.sort_by(|left, right| left.0.cmp(&right.0));
 
     Ok(ExecutionEnv { entries })
+}
+
+fn upsert_env_entry(entries: &mut Vec<(String, String)>, key: String, value: String) {
+    if let Some((_, existing_value)) = entries
+        .iter_mut()
+        .find(|(existing_key, _)| existing_key == &key)
+    {
+        *existing_value = value;
+    } else {
+        entries.push((key, value));
+    }
 }
 
 fn validate_env_key(key: &str) -> Result<(), RunSealError> {

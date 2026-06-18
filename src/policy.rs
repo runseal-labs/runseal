@@ -3,6 +3,9 @@ use sha2::{Digest, Sha256};
 use std::path::{Component, Path};
 
 pub const POLICY_VERSION: &str = "runseal.policy/v1";
+const MAX_ENV_ENTRIES: usize = 64;
+const MAX_ENV_KEY_BYTES: usize = 128;
+const MAX_ENV_VALUE_BYTES: usize = 4096;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SandboxLevel {
@@ -108,6 +111,7 @@ pub struct NetworkPolicy {
 pub struct EnvironmentPolicy {
     pub inherit: String,
     pub scrub: Vec<String>,
+    pub set: Vec<(String, String)>,
     pub proxy: bool,
 }
 
@@ -147,6 +151,7 @@ impl SandboxPolicy {
             "environment": {
                 "inherit": self.environment.inherit.clone(),
                 "scrub": self.environment.scrub.clone(),
+                "set": environment_set_json(&self.environment.set),
                 "proxy": self.environment.proxy,
             }
         })
@@ -179,6 +184,7 @@ impl SandboxPolicy {
             "environment": {
                 "inherit": self.environment.inherit.clone(),
                 "scrub": self.environment.scrub.clone(),
+                "set": environment_set_json(&self.environment.set),
                 "proxy": self.environment.proxy,
             },
             "backend_requirement": if self.allows_local_execution() {
@@ -504,7 +510,6 @@ fn inline_environment(
         "environment",
         &["inherit", "scrub", "proxy", "set"],
     )?;
-    reject_non_empty_value(environment, "set")?;
 
     if let Some(inherit) = optional_string(environment, "inherit")? {
         if inherit != "minimal" {
@@ -521,8 +526,50 @@ fn inline_environment(
     if let Some(proxy) = optional_bool_for(Some(environment), "environment", "proxy")? {
         policy.proxy = proxy;
     }
+    policy.set = environment_set(environment.get("set"), &policy.scrub)?;
 
     Ok(policy)
+}
+
+fn environment_set(
+    value: Option<&Value>,
+    scrub: &[String],
+) -> Result<Vec<(String, String)>, PolicyError> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let object = value
+        .as_object()
+        .ok_or_else(|| PolicyError::invalid("environment.set must be an object"))?;
+    if object.len() > MAX_ENV_ENTRIES {
+        return Err(PolicyError::invalid(format!(
+            "environment.set must include at most {MAX_ENV_ENTRIES} entries"
+        )));
+    }
+
+    let mut entries = Vec::with_capacity(object.len());
+    for (key, value) in object {
+        validate_environment_key(key)?;
+        if scrub
+            .iter()
+            .any(|pattern| matches_environment_scrub_pattern(key, pattern))
+        {
+            return Err(PolicyError::invalid(format!(
+                "environment.set.{key} is denied by environment scrub"
+            )));
+        }
+        let value = value.as_str().ok_or_else(|| {
+            PolicyError::invalid(format!("environment.set.{key} must be a string"))
+        })?;
+        if value.len() > MAX_ENV_VALUE_BYTES {
+            return Err(PolicyError::invalid(format!(
+                "environment.set.{key} must be at most {MAX_ENV_VALUE_BYTES} bytes"
+            )));
+        }
+        entries.push((key.clone(), value.to_string()));
+    }
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    Ok(entries)
 }
 
 fn default_network_mode(sandbox_level: SandboxLevel) -> NetworkMode {
@@ -542,6 +589,7 @@ fn default_environment(network: NetworkMode) -> EnvironmentPolicy {
             "OPENAI_API_KEY".to_string(),
             "ANTHROPIC_API_KEY".to_string(),
         ],
+        set: Vec::new(),
         proxy: network == NetworkMode::Proxy,
     }
 }
@@ -603,6 +651,52 @@ fn validate_environment_patterns(entries: &[String]) -> Result<(), PolicyError> 
         }
     }
     Ok(())
+}
+
+fn validate_environment_key(key: &str) -> Result<(), PolicyError> {
+    if key.is_empty() || key.len() > MAX_ENV_KEY_BYTES {
+        return Err(PolicyError::invalid(format!(
+            "environment.set.{key} is not a valid environment variable name"
+        )));
+    }
+
+    let mut chars = key.chars();
+    let Some(first) = chars.next() else {
+        return Err(PolicyError::invalid(
+            "environment.set key is not a valid environment variable name",
+        ));
+    };
+    if !(first == '_' || first.is_ascii_alphabetic())
+        || chars.any(|item| !(item == '_' || item.is_ascii_alphanumeric()))
+    {
+        return Err(PolicyError::invalid(format!(
+            "environment.set.{key} is not a valid environment variable name"
+        )));
+    }
+
+    Ok(())
+}
+
+pub(crate) fn matches_environment_scrub_pattern(key: &str, pattern: &str) -> bool {
+    let key = key.to_ascii_uppercase();
+    let pattern = pattern.to_ascii_uppercase();
+
+    if let Some(prefix) = pattern.strip_suffix('*') {
+        return key.starts_with(prefix);
+    }
+    if let Some(suffix) = pattern.strip_prefix('*') {
+        return key.ends_with(suffix);
+    }
+
+    key == pattern
+}
+
+fn environment_set_json(entries: &[(String, String)]) -> Value {
+    let mut object = Map::new();
+    for (key, value) in entries {
+        object.insert(key.clone(), json!(value));
+    }
+    Value::Object(object)
 }
 
 fn contains_parent_traversal(entry: &str) -> bool {
@@ -699,24 +793,6 @@ fn reject_non_empty_section(
             "{field} requirements are not supported in this build"
         )))
     }
-}
-
-fn reject_non_empty_value(
-    object: &Map<String, Value>,
-    field: &'static str,
-) -> Result<(), PolicyError> {
-    let Some(value) = object.get(field) else {
-        return Ok(());
-    };
-    let value = value
-        .as_object()
-        .ok_or_else(|| PolicyError::invalid(format!("environment.{field} must be an object")))?;
-    if !value.is_empty() {
-        return Err(PolicyError::invalid(format!(
-            "environment.{field} is not supported in this build"
-        )));
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -832,6 +908,9 @@ mod tests {
                 "environment": {
                     "inherit": "minimal",
                     "scrub": ["*_SECRET"],
+                    "set": {
+                        "CI": "1"
+                    },
                     "proxy": false
                 },
                 "network": {"mode": "proxy"}
@@ -843,7 +922,12 @@ mod tests {
 
         assert_eq!(policy.environment.inherit, "minimal");
         assert_eq!(policy.environment.scrub, vec!["*_SECRET"]);
+        assert_eq!(
+            policy.environment.set,
+            vec![("CI".to_string(), "1".to_string())]
+        );
         assert!(!policy.environment.proxy);
+        assert_eq!(policy.canonical_json()["environment"]["set"]["CI"], "1");
         assert_eq!(policy.canonical_json()["environment"]["proxy"], false);
     }
 
@@ -887,12 +971,13 @@ mod tests {
             json!({
                 "version": POLICY_VERSION,
                 "environment": {
+                    "scrub": ["*_SECRET"],
                     "set": {
-                        "CI": "1"
+                        "RUNSEAL_SECRET": "1"
                     }
                 }
             }),
-            "environment.set is not supported",
+            "environment.set.RUNSEAL_SECRET is denied by environment scrub",
         );
         assert_policy_invalid(
             json!({
