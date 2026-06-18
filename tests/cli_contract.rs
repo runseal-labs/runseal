@@ -74,6 +74,45 @@ fn assert_rfc3339_timestamp(value: &Value) -> Result<()> {
     Ok(())
 }
 
+fn assert_event_envelope(event: &Value) -> Result<()> {
+    assert_rfc3339_timestamp(&event["time"])?;
+    assert!(
+        event["execution_id"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("exec_")
+    );
+    assert!(
+        event["session_id"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("sess_")
+    );
+    assert!(
+        event["seal_id"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("seal_")
+    );
+    assert!(event["policy_id"].as_str().is_some());
+    assert!(
+        event["policy_hash"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("sha256:")
+    );
+    assert!(
+        event["audit_path"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with(".runseal/audit/sess_")
+    );
+    assert!(event["backend"]["name"].as_str().is_some());
+    assert!(event["backend"]["status"].as_str().is_some());
+    assert!(event["backend"]["platform"].as_str().is_some());
+    Ok(())
+}
+
 fn expected_backend_name() -> &'static str {
     if cfg!(windows) {
         "runseal-windows-reference"
@@ -227,7 +266,7 @@ fn exec_events_stream_uses_execution_vocabulary() -> Result<()> {
     assert!(event_types.contains(&"execution.stdout"));
     assert!(event_types.contains(&"execution.finished"));
     for event in &events {
-        assert_rfc3339_timestamp(&event["time"])?;
+        assert_event_envelope(event)?;
     }
     let stdout_event = events
         .iter()
@@ -322,7 +361,7 @@ fn exec_json_returns_execution_result() -> Result<()> {
     assert!(audit_event_types.contains(&"execution.stdout"));
     assert!(audit_event_types.contains(&"execution.finished"));
     for event in &audit_events {
-        assert_rfc3339_timestamp(&event["time"])?;
+        assert_event_envelope(event)?;
         assert_eq!(event["session_id"], session_id);
         assert_eq!(event["seal_id"], seal_id);
     }

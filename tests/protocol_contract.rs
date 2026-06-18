@@ -93,6 +93,45 @@ fn assert_rfc3339_timestamp(value: &Value) -> Result<()> {
     Ok(())
 }
 
+fn assert_event_envelope(event: &Value) -> Result<()> {
+    assert_rfc3339_timestamp(&event["time"])?;
+    assert!(
+        event["execution_id"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("exec_")
+    );
+    assert!(
+        event["session_id"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("sess_")
+    );
+    assert!(
+        event["seal_id"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("seal_")
+    );
+    assert!(event["policy_id"].as_str().is_some());
+    assert!(
+        event["policy_hash"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("sha256:")
+    );
+    assert!(
+        event["audit_path"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with(".runseal/audit/sess_")
+    );
+    assert!(event["backend"]["name"].as_str().is_some());
+    assert!(event["backend"]["status"].as_str().is_some());
+    assert!(event["backend"]["platform"].as_str().is_some());
+    Ok(())
+}
+
 fn read_audit_events(root: &std::path::Path, audit_path: &str) -> Result<Vec<Value>> {
     let audit_file = root.join(audit_path);
     let audit_jsonl = fs::read_to_string(&audit_file)
@@ -313,7 +352,7 @@ fn execute_copies_metadata_to_audit_events() -> Result<()> {
             .iter()
             .find(|event| event["type"] == event_type)
             .with_context(|| format!("audit event {event_type} must exist"))?;
-        assert_rfc3339_timestamp(&event["time"])?;
+        assert_event_envelope(event)?;
         assert_eq!(event["metadata"], metadata);
     }
     Ok(())
@@ -466,7 +505,7 @@ fn execute_timeout_returns_stable_error_and_audit_event() -> Result<()> {
         .iter()
         .find(|event| event["type"] == "execution.failed")
         .context("execution.failed audit event must exist")?;
-    assert_rfc3339_timestamp(&failed_event["time"])?;
+    assert_event_envelope(failed_event)?;
     Ok(())
 }
 
@@ -831,7 +870,7 @@ fn execute_rpc_streams_events_and_final_result() -> Result<()> {
     assert!(session_id.starts_with("sess_"));
     assert!(seal_id.starts_with("seal_"));
     for notification in &notifications {
-        assert_rfc3339_timestamp(&notification["params"]["time"])?;
+        assert_event_envelope(&notification["params"])?;
         assert_eq!(notification["params"]["session_id"], session_id);
         assert_eq!(notification["params"]["seal_id"], seal_id);
     }

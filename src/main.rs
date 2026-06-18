@@ -549,6 +549,14 @@ fn execute_command(
     let policy_hash = policy.hash();
     let mut audit = create_audit_writer(cwd, &ids.session_id)?;
     let audit_path = audit.relative_path().to_string();
+    let backend = active_backend();
+    let event_context = ExecutionEventContext {
+        ids: &ids,
+        policy_id: &policy_id,
+        policy_hash: &policy_hash,
+        audit_path: &audit_path,
+        backend: backend_event_json(backend.name(), backend.status(), backend.platform()),
+    };
 
     if policy.denies_execution_without_backend() {
         let reason = "filesystem write denied by policy";
@@ -562,7 +570,7 @@ fn execute_command(
                 "decision": "denied",
                 "reason": reason,
             }),
-            &ids,
+            &event_context,
         );
         write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
 
@@ -578,7 +586,6 @@ fn execute_command(
         ));
     }
 
-    let backend = active_backend();
     let plan = match backend.compile_plan(&ids.execution_id, cwd, policy) {
         Ok(plan) => plan,
         Err(err) => {
@@ -597,7 +604,7 @@ fn execute_command(
                                 "prepared_roots": prepared_roots,
                                 "platform_plan": plan.json(),
                             }),
-                            &ids,
+                            &event_context,
                         );
                         write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
                     }
@@ -613,7 +620,7 @@ fn execute_command(
                                 "reason": setup_err.to_string(),
                                 "platform_plan": plan.json(),
                             }),
-                            &ids,
+                            &event_context,
                         );
                         write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
 
@@ -649,7 +656,7 @@ fn execute_command(
                     "missing_features": details.get("missing_features").cloned().unwrap_or_else(|| json!([])),
                     "platform_plan": details.get("platform_plan").cloned().unwrap_or(Value::Null),
                 }),
-                &ids,
+                &event_context,
             );
             write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
 
@@ -667,7 +674,7 @@ fn execute_command(
                                 "cleaned_roots": cleaned_roots,
                                 "platform_plan": plan.json(),
                             }),
-                            &ids,
+                            &event_context,
                         );
                         write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
                     }
@@ -683,7 +690,7 @@ fn execute_command(
                                 "reason": cleanup_err.to_string(),
                                 "platform_plan": plan.json(),
                             }),
-                            &ids,
+                            &event_context,
                         );
                         write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
 
@@ -744,7 +751,7 @@ fn execute_command(
             "platform_plan": plan.json(),
         }),
         &started_at,
-        &ids,
+        &event_context,
     );
     write_audit_event_with_metadata(&mut audit, &started, &metadata)?;
 
@@ -773,7 +780,7 @@ fn execute_command(
                 "timeout_ms": timeout_ms,
                 "duration_ms": duration_ms,
             }),
-            &ids,
+            &event_context,
         );
         write_audit_event_with_metadata(&mut audit, &failed, &metadata)?;
 
@@ -793,12 +800,12 @@ fn execute_command(
     }
     let mut events = vec![started];
     if !output.stdout.is_empty() {
-        let event = stream_event("execution.stdout", &ids, &output.stdout, 0);
+        let event = stream_event("execution.stdout", &event_context, &output.stdout, 0);
         write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
         events.push(event);
     }
     if !output.stderr.is_empty() {
-        let event = stream_event("execution.stderr", &ids, &output.stderr, 0);
+        let event = stream_event("execution.stderr", &event_context, &output.stderr, 0);
         write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
         events.push(event);
     }
@@ -814,7 +821,7 @@ fn execute_command(
             "status": "finished",
         }),
         &finished_at,
-        &ids,
+        &event_context,
     );
     write_audit_event_with_metadata(&mut audit, &finished, &metadata)?;
     events.push(finished);
@@ -857,33 +864,65 @@ fn execute_command(
     Ok((events, result))
 }
 
-fn stream_event(event_type: &'static str, ids: &ExecutionIds, bytes: &[u8], offset: u64) -> Value {
+fn stream_event(
+    event_type: &'static str,
+    context: &ExecutionEventContext<'_>,
+    bytes: &[u8],
+    offset: u64,
+) -> Value {
     let encoded = STANDARD.encode(bytes);
     execution_event_now(
         json!({
             "type": event_type,
-            "execution_id": ids.execution_id,
+            "execution_id": context.ids.execution_id,
             "data": format!("base64:{encoded}"),
             "encoding": "base64",
             "stream_offset": offset,
             "bytes": bytes.len(),
         }),
-        ids,
+        context,
     )
 }
 
-fn execution_event_now(event: Value, ids: &ExecutionIds) -> Value {
+fn execution_event_now(event: Value, context: &ExecutionEventContext<'_>) -> Value {
     let time = timestamp_now();
-    execution_event_at(event, &time, ids)
+    execution_event_at(event, &time, context)
 }
 
-fn execution_event_at(event: Value, time: &str, ids: &ExecutionIds) -> Value {
+fn execution_event_at(event: Value, time: &str, context: &ExecutionEventContext<'_>) -> Value {
     let mut event = event_at(event, time);
     if let Some(object) = event.as_object_mut() {
-        object.insert("session_id".to_string(), json!(ids.session_id));
-        object.insert("seal_id".to_string(), json!(ids.seal_id));
+        object
+            .entry("execution_id")
+            .or_insert_with(|| json!(context.ids.execution_id));
+        object
+            .entry("session_id")
+            .or_insert_with(|| json!(context.ids.session_id));
+        object
+            .entry("seal_id")
+            .or_insert_with(|| json!(context.ids.seal_id));
+        object
+            .entry("policy_id")
+            .or_insert_with(|| json!(context.policy_id));
+        object
+            .entry("policy_hash")
+            .or_insert_with(|| json!(context.policy_hash));
+        object
+            .entry("audit_path")
+            .or_insert_with(|| json!(context.audit_path));
+        object
+            .entry("backend")
+            .or_insert_with(|| context.backend.clone());
     }
     event
+}
+
+fn backend_event_json(name: &str, status: &str, platform: &str) -> Value {
+    json!({
+        "name": name,
+        "status": status,
+        "platform": platform,
+    })
 }
 
 fn event_at(mut event: Value, time: &str) -> Value {
@@ -939,6 +978,15 @@ struct ExecutionIds {
     execution_id: String,
     session_id: String,
     seal_id: String,
+}
+
+#[derive(Debug)]
+struct ExecutionEventContext<'a> {
+    ids: &'a ExecutionIds,
+    policy_id: &'a str,
+    policy_hash: &'a str,
+    audit_path: &'a str,
+    backend: Value,
 }
 
 fn new_execution_ids() -> ExecutionIds {
