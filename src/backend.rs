@@ -336,6 +336,9 @@ impl PlatformSandboxPlan {
         let mut prepared = Vec::new();
         for rule in &self.private_filesystem_rules {
             validate_private_filesystem_rule_root(&rule.root)?;
+            if rule.requires_existing_root() {
+                validate_existing_filesystem_rule_root(rule)?;
+            }
             if !prepared.iter().any(|root| root == &rule.root) {
                 prepared.push(rule.root.clone());
             }
@@ -436,6 +439,41 @@ fn validate_private_filesystem_rule_root(root: &str) -> io::Result<()> {
         || !is_concrete_filesystem_rule_root(root)
     {
         return Err(invalid_filesystem_rule_root(root));
+    }
+    Ok(())
+}
+
+fn validate_existing_filesystem_rule_root(rule: &WindowsFilesystemRule) -> io::Result<()> {
+    let metadata = fs::symlink_metadata(&rule.root).map_err(|err| {
+        if err.kind() == io::ErrorKind::NotFound {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "private filesystem rule root must exist before setup: {}",
+                    rule.root
+                ),
+            )
+        } else {
+            err
+        }
+    })?;
+    if metadata.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "refusing to prepare symlinked filesystem rule root: {}",
+                rule.root
+            ),
+        ));
+    }
+    if !metadata.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "private filesystem rule root must be a directory: {}",
+                rule.root
+            ),
+        ));
     }
     Ok(())
 }
@@ -1108,7 +1146,9 @@ fn missing_backend_features(
 mod tests {
     use super::*;
     use crate::policy::{NetworkMode, normalize_policy};
-    use crate::windows_plan::{WindowsFilesystemAccess, WindowsFilesystemRule};
+    use crate::windows_plan::{
+        WindowsFilesystemAccess, WindowsFilesystemRule, WindowsFilesystemRuleSource,
+    };
     use serde_json::json;
     use std::fs;
     use std::io;
@@ -1367,6 +1407,7 @@ mod tests {
         ] {
             plan.private_filesystem_rules = vec![WindowsFilesystemRule {
                 access: WindowsFilesystemAccess::ReadWrite,
+                source: WindowsFilesystemRuleSource::PolicyWrite,
                 root: invalid_root.to_string(),
             }];
             let err = plan.prepare_filesystem_rules().unwrap_err();
@@ -1380,6 +1421,68 @@ mod tests {
     }
 
     #[test]
+    fn filesystem_rule_setup_requires_existing_allowed_roots() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&cwd)?;
+        let missing = cwd.join("missing");
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+        let mut plan = WindowsReferenceBackend.fail_closed_plan("exec_existing", &cwd, &policy);
+        plan.private_filesystem_rules = vec![WindowsFilesystemRule {
+            access: WindowsFilesystemAccess::ReadWrite,
+            source: WindowsFilesystemRuleSource::PolicyWrite,
+            root: path_string(&missing),
+        }];
+
+        let err = plan.prepare_filesystem_rules().unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains("must exist before setup"));
+
+        let file_root = cwd.join("file-root");
+        fs::write(&file_root, b"not a directory")?;
+        plan.private_filesystem_rules = vec![WindowsFilesystemRule {
+            access: WindowsFilesystemAccess::ReadOnly,
+            source: WindowsFilesystemRuleSource::PolicyRead,
+            root: path_string(&file_root),
+        }];
+        let err = plan.prepare_filesystem_rules().unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains("must be a directory"));
+
+        fs::create_dir_all(&missing)?;
+        plan.private_filesystem_rules = vec![WindowsFilesystemRule {
+            access: WindowsFilesystemAccess::ReadWrite,
+            source: WindowsFilesystemRuleSource::PolicyWrite,
+            root: path_string(&missing),
+        }];
+        let prepared = plan.prepare_filesystem_rules()?;
+
+        assert_eq!(prepared, vec![path_string(&missing)]);
+        Ok(())
+    }
+
+    #[test]
+    fn filesystem_rule_setup_allows_absent_deny_roots() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&cwd)?;
+        let missing = cwd.join(".git");
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+        let mut plan = WindowsReferenceBackend.fail_closed_plan("exec_absent_deny", &cwd, &policy);
+        plan.private_filesystem_rules = vec![WindowsFilesystemRule {
+            access: WindowsFilesystemAccess::Deny,
+            source: WindowsFilesystemRuleSource::ProtectedDeny,
+            root: path_string(&missing),
+        }];
+
+        let prepared = plan.prepare_filesystem_rules()?;
+
+        assert_eq!(prepared, vec![path_string(&missing)]);
+        Ok(())
+    }
+
+    #[test]
     fn sandbox_setup_cleans_runtime_tree_after_filesystem_rule_failure() -> io::Result<()> {
         let tmp = TempDir::new()?;
         let cwd = tmp.path().join("workspace");
@@ -1389,6 +1492,7 @@ mod tests {
         let runtime_root = PathBuf::from(plan.runtime_root.as_ref().unwrap());
         plan.private_filesystem_rules.push(WindowsFilesystemRule {
             access: WindowsFilesystemAccess::Deny,
+            source: WindowsFilesystemRuleSource::ProtectedDeny,
             root: "*".to_string(),
         });
 

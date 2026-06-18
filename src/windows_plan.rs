@@ -29,6 +29,7 @@ pub(crate) enum WindowsFilesystemMode {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WindowsFilesystemRule {
     pub(crate) access: WindowsFilesystemAccess,
+    pub(crate) source: WindowsFilesystemRuleSource,
     pub(crate) root: String,
 }
 
@@ -37,6 +38,26 @@ pub(crate) enum WindowsFilesystemAccess {
     Deny,
     ReadWrite,
     ReadOnly,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WindowsFilesystemRuleSource {
+    ProtectedDeny,
+    PrivateDeny,
+    PolicyWrite,
+    RuntimeWrite,
+    PolicyRead,
+}
+
+impl WindowsFilesystemRule {
+    pub(crate) fn requires_existing_root(&self) -> bool {
+        matches!(
+            self.source,
+            WindowsFilesystemRuleSource::PolicyRead
+                | WindowsFilesystemRuleSource::PolicyWrite
+                | WindowsFilesystemRuleSource::RuntimeWrite
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -326,22 +347,46 @@ impl WindowsFilesystemPlan {
     pub(crate) fn enforcement_rules(&self) -> Vec<WindowsFilesystemRule> {
         let mut rules = Vec::new();
         let mut deny_roots = Vec::new();
-        for root in self
-            .protected_roots
-            .iter()
-            .chain(self.private_protected_roots.iter())
-        {
+        for root in &self.protected_roots {
             push_unique_root(&mut deny_roots, root.clone());
-            push_filesystem_rule(&mut rules, WindowsFilesystemAccess::Deny, root.clone());
+            push_filesystem_rule(
+                &mut rules,
+                WindowsFilesystemAccess::Deny,
+                WindowsFilesystemRuleSource::ProtectedDeny,
+                root.clone(),
+            );
+        }
+        for root in &self.private_protected_roots {
+            push_unique_root(&mut deny_roots, root.clone());
+            push_filesystem_rule(
+                &mut rules,
+                WindowsFilesystemAccess::Deny,
+                WindowsFilesystemRuleSource::PrivateDeny,
+                root.clone(),
+            );
         }
 
         let mut writable_roots = Vec::new();
-        for root in self.effective_write_roots() {
-            if contains_same_or_descendant_windows_root(&deny_roots, &root) {
+        for (root, source) in self
+            .write_roots
+            .iter()
+            .map(|root| (root, WindowsFilesystemRuleSource::PolicyWrite))
+            .chain(
+                self.runtime_write_roots
+                    .iter()
+                    .map(|root| (root, WindowsFilesystemRuleSource::RuntimeWrite)),
+            )
+        {
+            if contains_same_or_descendant_windows_root(&deny_roots, root) {
                 continue;
             }
             push_unique_root(&mut writable_roots, root.clone());
-            push_filesystem_rule(&mut rules, WindowsFilesystemAccess::ReadWrite, root);
+            push_filesystem_rule(
+                &mut rules,
+                WindowsFilesystemAccess::ReadWrite,
+                source,
+                root.clone(),
+            );
         }
 
         for root in &self.read_roots {
@@ -350,7 +395,12 @@ impl WindowsFilesystemPlan {
             {
                 continue;
             }
-            push_filesystem_rule(&mut rules, WindowsFilesystemAccess::ReadOnly, root.clone());
+            push_filesystem_rule(
+                &mut rules,
+                WindowsFilesystemAccess::ReadOnly,
+                WindowsFilesystemRuleSource::PolicyRead,
+                root.clone(),
+            );
         }
 
         rules
@@ -420,6 +470,7 @@ fn push_unique_root(roots: &mut Vec<String>, root: String) {
 fn push_filesystem_rule(
     rules: &mut Vec<WindowsFilesystemRule>,
     access: WindowsFilesystemAccess,
+    source: WindowsFilesystemRuleSource,
     root: String,
 ) {
     if rules
@@ -429,7 +480,11 @@ fn push_filesystem_rule(
         return;
     }
 
-    rules.push(WindowsFilesystemRule { access, root });
+    rules.push(WindowsFilesystemRule {
+        access,
+        source,
+        root,
+    });
 }
 
 fn contains_same_windows_root(roots: &[String], candidate: &str) -> bool {
@@ -560,6 +615,7 @@ mod tests {
             rules[0],
             WindowsFilesystemRule {
                 access: WindowsFilesystemAccess::Deny,
+                source: WindowsFilesystemRuleSource::ProtectedDeny,
                 root: cwd.join(".git").to_string_lossy().to_string(),
             }
         );
@@ -567,6 +623,7 @@ mod tests {
             rules[3],
             WindowsFilesystemRule {
                 access: WindowsFilesystemAccess::ReadWrite,
+                source: WindowsFilesystemRuleSource::PolicyWrite,
                 root: "/workspace".to_string(),
             }
         );
