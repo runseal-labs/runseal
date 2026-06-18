@@ -198,6 +198,10 @@ impl SandboxPolicy {
                 "max_processes": self.process.max_processes,
                 "interactive": self.process.interactive,
             },
+            "runtime": {
+                "root_mode": self.runtime_root_mode(),
+            },
+            "required_backend_features": self.required_backend_feature_names(),
             "approval": {
                 "on_violation": self.approval.on_violation.clone(),
                 "on_network_route_missing": self.approval.on_network_route_missing.clone(),
@@ -321,6 +325,14 @@ impl SandboxPolicy {
             .into_iter()
             .map(BackendFeature::as_str)
             .collect()
+    }
+
+    fn runtime_root_mode(&self) -> &'static str {
+        if self.allows_local_execution() {
+            "none"
+        } else {
+            "per-execution"
+        }
     }
 }
 
@@ -1169,7 +1181,27 @@ mod tests {
                 "managed_proxy"
             ]
         );
+        assert_eq!(
+            policy.canonical_json()["runtime"]["root_mode"],
+            "per-execution"
+        );
+        assert_eq!(
+            policy.canonical_json()["required_backend_features"],
+            json!(policy.required_backend_feature_names())
+        );
         assert!(policy.hash().starts_with("sha256:"));
+    }
+
+    #[test]
+    fn danger_full_access_hash_records_no_runtime_or_backend_requirements() {
+        let cwd = PathBuf::from("/workspace");
+        let policy = normalize_policy(&json!("danger-full-access"), &cwd, None).unwrap();
+
+        assert_eq!(policy.canonical_json()["runtime"]["root_mode"], "none");
+        assert_eq!(
+            policy.canonical_json()["required_backend_features"],
+            json!([])
+        );
     }
 
     #[test]

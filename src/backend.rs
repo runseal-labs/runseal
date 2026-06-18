@@ -73,11 +73,9 @@ fn public_windows_setup_unavailable_reason(_code: &str) -> String {
 }
 
 #[cfg(windows)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct WindowsSandboxNetworkPolicyKey {
-    mode: &'static str,
-    direct_egress: &'static str,
-    managed_proxy: &'static str,
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct WindowsSandboxPolicyCohortKey {
+    policy_hash: String,
 }
 
 #[cfg(windows)]
@@ -92,7 +90,7 @@ struct WindowsSandboxExecutionGateLock {
 #[cfg(windows)]
 #[derive(Default)]
 struct WindowsSandboxExecutionGateState {
-    active_key: Option<WindowsSandboxNetworkPolicyKey>,
+    active_key: Option<WindowsSandboxPolicyCohortKey>,
     active_count: usize,
 }
 
@@ -109,24 +107,26 @@ fn windows_sandbox_execution_gate_lock() -> &'static WindowsSandboxExecutionGate
 fn windows_sandbox_execution_gate(
     plan: &PlatformSandboxPlan,
 ) -> io::Result<WindowsSandboxExecutionGate> {
-    windows_sandbox_execution_gate_for_key(WindowsSandboxNetworkPolicyKey {
-        mode: plan.network_mode,
-        direct_egress: plan.network_direct_egress,
-        managed_proxy: plan.network_managed_proxy,
+    windows_sandbox_execution_gate_for_key(WindowsSandboxPolicyCohortKey {
+        policy_hash: plan.policy_hash.clone(),
     })
 }
 
 #[cfg(windows)]
 fn windows_sandbox_execution_gate_for_key(
-    key: WindowsSandboxNetworkPolicyKey,
+    key: WindowsSandboxPolicyCohortKey,
 ) -> io::Result<WindowsSandboxExecutionGate> {
     let gate = windows_sandbox_execution_gate_lock();
     let mut state = gate
         .state
         .lock()
         .map_err(|_| io::Error::other("windows sandbox execution gate poisoned"))?;
-    // ponytail: account-scoped network guard; same guard may share, policy switches wait.
-    while state.active_key.is_some_and(|active_key| active_key != key) {
+    // ponytail: one active policy cohort; add explicit epochs if policy_hash stops being enough.
+    while state
+        .active_key
+        .as_ref()
+        .is_some_and(|active_key| active_key != &key)
+    {
         state = gate
             .changed
             .wait(state)
@@ -1837,21 +1837,17 @@ mod tests {
     #[test]
     fn windows_sandbox_execution_gate_allows_same_policy_and_serializes_policy_switches()
     -> io::Result<()> {
-        let proxy_key = WindowsSandboxNetworkPolicyKey {
-            mode: "proxy",
-            direct_egress: "deny",
-            managed_proxy: "required",
+        let policy_a = WindowsSandboxPolicyCohortKey {
+            policy_hash: "hash-a".to_string(),
         };
-        let disabled_key = WindowsSandboxNetworkPolicyKey {
-            mode: "disabled",
-            direct_egress: "deny",
-            managed_proxy: "none",
+        let policy_b = WindowsSandboxPolicyCohortKey {
+            policy_hash: "hash-b".to_string(),
         };
 
-        let guard = windows_sandbox_execution_gate_for_key(proxy_key)?;
+        let guard = windows_sandbox_execution_gate_for_key(policy_a.clone())?;
         let (same_tx, same_rx) = std::sync::mpsc::channel();
         let same_worker = std::thread::spawn(move || {
-            let gate = windows_sandbox_execution_gate_for_key(proxy_key);
+            let gate = windows_sandbox_execution_gate_for_key(policy_a);
             let acquired = gate.is_ok();
             drop(gate);
             let _ = same_tx.send(acquired);
@@ -1869,7 +1865,7 @@ mod tests {
         let (acquired_tx, acquired_rx) = std::sync::mpsc::channel();
         let worker = std::thread::spawn(move || {
             let _ = started_tx.send(());
-            let gate = windows_sandbox_execution_gate_for_key(disabled_key);
+            let gate = windows_sandbox_execution_gate_for_key(policy_b);
             let acquired = gate.is_ok();
             drop(gate);
             let _ = acquired_tx.send(acquired);
