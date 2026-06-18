@@ -597,7 +597,7 @@ fn execute_command(
                     Ok(cleaned_roots) => {
                         let event = execution_event_now(
                             json!({
-                                "type": "sandbox.cleaned",
+                                "type": "sandbox.cleanup",
                                 "execution_id": ids.execution_id,
                                 "policy_id": policy_id,
                                 "policy_hash": policy_hash,
@@ -613,7 +613,7 @@ fn execute_command(
                     Err(cleanup_err) => {
                         let event = execution_event_now(
                             json!({
-                                "type": "sandbox.cleanup_failed",
+                                "type": "sandbox.cleanup",
                                 "execution_id": ids.execution_id,
                                 "policy_id": policy_id,
                                 "policy_hash": policy_hash,

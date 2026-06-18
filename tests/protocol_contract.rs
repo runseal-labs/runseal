@@ -1202,7 +1202,7 @@ fn sandboxed_policy_without_backend_fails_closed() -> Result<()> {
         assert!(
             audit_events
                 .iter()
-                .any(|event| event["type"] == "sandbox.cleaned" && event["decision"] == "cleaned")
+                .any(|event| event["type"] == "sandbox.cleanup" && event["decision"] == "cleaned")
         );
     }
     assert!(
