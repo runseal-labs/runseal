@@ -286,6 +286,7 @@ fn explain_policy_cli_materializes_standard_profile() -> Result<()> {
             .unwrap_or_default()
             .starts_with("sha256:")
     );
+    assert_no_private_windows_setup_terms(&payload.to_string());
     Ok(())
 }
 

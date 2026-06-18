@@ -869,6 +869,7 @@ fn explain_policy_returns_effective_hash_and_network_mode() -> Result<()> {
             .iter()
             .any(|path| path == tmp.path().to_string_lossy().as_ref())
     );
+    assert_no_private_windows_setup_terms(payload);
     assert!(
         payload["canonical_policy"]["filesystem"]["deny"]
             .as_array()
