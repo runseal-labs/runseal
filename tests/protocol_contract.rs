@@ -1011,6 +1011,25 @@ fn sandboxed_policy_without_backend_fails_closed() -> Result<()> {
         assert!(plan["profile_root"].as_str().is_some());
         assert!(plan["synthetic_home"].as_str().is_some());
         assert!(plan["temp_root"].as_str().is_some());
+        let runtime_env = &plan["environment"]["runtime"];
+        assert_eq!(runtime_env["RUNSEAL_HOME"], plan["synthetic_home"]);
+        assert_eq!(runtime_env["RUNSEAL_TMP"], plan["temp_root"]);
+        assert_eq!(runtime_env["HOME"], plan["synthetic_home"]);
+        assert_eq!(runtime_env["USERPROFILE"], plan["profile_root"]);
+        assert_eq!(runtime_env["TEMP"], plan["temp_root"]);
+        assert_eq!(runtime_env["TMP"], plan["temp_root"]);
+        assert!(
+            runtime_env["APPDATA"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("AppData")
+        );
+        assert!(
+            runtime_env["LOCALAPPDATA"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("AppData")
+        );
         let write_roots = plan["filesystem"]["write"]
             .as_array()
             .expect("read-only write roots must be an array");

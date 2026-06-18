@@ -4,6 +4,7 @@ use crate::policy::{NetworkMode, SandboxPolicy};
 pub(crate) struct WindowsPolicyPlan {
     pub(crate) filesystem: WindowsFilesystemPlan,
     pub(crate) network: WindowsNetworkPlan,
+    pub(crate) environment: WindowsEnvironmentPlan,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -34,6 +35,11 @@ pub(crate) enum WindowsNetworkGuard {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WindowsEnvironmentPlan {
+    pub(crate) runtime: Vec<(String, String)>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WindowsRuntimeRoots {
     pub(crate) runtime_root: String,
     pub(crate) profile_root: String,
@@ -55,6 +61,14 @@ impl WindowsPolicyPlan {
         policy: &SandboxPolicy,
         runtime_roots: Option<WindowsRuntimeRoots>,
     ) -> Self {
+        let runtime_write_roots = runtime_roots
+            .as_ref()
+            .map(WindowsRuntimeRoots::write_roots)
+            .unwrap_or_default();
+        let runtime_environment = runtime_roots
+            .as_ref()
+            .map(WindowsRuntimeRoots::environment)
+            .unwrap_or_default();
         let mode = if policy.filesystem.write.is_empty() {
             WindowsFilesystemMode::ReadOnlyCapability
         } else {
@@ -70,15 +84,16 @@ impl WindowsPolicyPlan {
                 mode,
                 read_roots: policy.filesystem.read.clone(),
                 write_roots: policy.filesystem.write.clone(),
-                runtime_write_roots: runtime_roots
-                    .map(WindowsRuntimeRoots::write_roots)
-                    .unwrap_or_default(),
+                runtime_write_roots,
                 protected_roots: policy.filesystem.deny.clone(),
             },
             network: WindowsNetworkPlan {
                 guard,
                 inject_proxy_environment: guard == WindowsNetworkGuard::Proxy
                     && policy.environment.proxy,
+            },
+            environment: WindowsEnvironmentPlan {
+                runtime: runtime_environment,
             },
         }
     }
@@ -113,17 +128,36 @@ impl WindowsRuntimeRoots {
         }
     }
 
-    fn write_roots(self) -> Vec<String> {
+    fn write_roots(&self) -> Vec<String> {
         let mut roots = Vec::new();
         for root in [
-            self.runtime_root,
-            self.profile_root,
-            self.synthetic_home,
-            self.temp_root,
+            self.runtime_root.clone(),
+            self.profile_root.clone(),
+            self.synthetic_home.clone(),
+            self.temp_root.clone(),
         ] {
             push_unique(&mut roots, root);
         }
         roots
+    }
+
+    fn environment(&self) -> Vec<(String, String)> {
+        vec![
+            ("RUNSEAL_HOME".to_string(), self.synthetic_home.clone()),
+            ("RUNSEAL_TMP".to_string(), self.temp_root.clone()),
+            ("HOME".to_string(), self.synthetic_home.clone()),
+            ("USERPROFILE".to_string(), self.profile_root.clone()),
+            (
+                "APPDATA".to_string(),
+                join_runtime_path(&self.profile_root, "AppData/Roaming"),
+            ),
+            (
+                "LOCALAPPDATA".to_string(),
+                join_runtime_path(&self.profile_root, "AppData/Local"),
+            ),
+            ("TEMP".to_string(), self.temp_root.clone()),
+            ("TMP".to_string(), self.temp_root.clone()),
+        ]
     }
 }
 
@@ -131,6 +165,13 @@ fn push_unique(roots: &mut Vec<String>, root: String) {
     if !roots.contains(&root) {
         roots.push(root);
     }
+}
+
+fn join_runtime_path(root: &str, child: &str) -> String {
+    std::path::Path::new(root)
+        .join(child)
+        .to_string_lossy()
+        .to_string()
 }
 
 #[cfg(test)]
@@ -158,6 +199,7 @@ mod tests {
         assert!(plan.filesystem.protected_roots.is_empty());
         assert_eq!(plan.network.guard, WindowsNetworkGuard::Disabled);
         assert!(!plan.network.inject_proxy_environment);
+        assert!(plan.environment.runtime.is_empty());
     }
 
     #[test]
@@ -182,6 +224,7 @@ mod tests {
         assert_eq!(plan.filesystem.protected_roots, protected_roots);
         assert_eq!(plan.network.guard, WindowsNetworkGuard::Proxy);
         assert!(plan.network.inject_proxy_environment);
+        assert!(plan.environment.runtime.is_empty());
     }
 
     #[test]
@@ -210,6 +253,49 @@ mod tests {
         assert_eq!(
             plan.filesystem.effective_write_roots(),
             plan.filesystem.runtime_write_roots
+        );
+        assert_eq!(
+            plan.environment.runtime,
+            vec![
+                (
+                    "RUNSEAL_HOME".to_string(),
+                    "/workspace/.runseal/runtime/exec_1/home".to_string()
+                ),
+                (
+                    "RUNSEAL_TMP".to_string(),
+                    "/workspace/.runseal/runtime/exec_1/temp".to_string()
+                ),
+                (
+                    "HOME".to_string(),
+                    "/workspace/.runseal/runtime/exec_1/home".to_string()
+                ),
+                (
+                    "USERPROFILE".to_string(),
+                    "/workspace/.runseal/runtime/exec_1/profile".to_string()
+                ),
+                (
+                    "APPDATA".to_string(),
+                    join_runtime_path(
+                        "/workspace/.runseal/runtime/exec_1/profile",
+                        "AppData/Roaming"
+                    )
+                ),
+                (
+                    "LOCALAPPDATA".to_string(),
+                    join_runtime_path(
+                        "/workspace/.runseal/runtime/exec_1/profile",
+                        "AppData/Local"
+                    )
+                ),
+                (
+                    "TEMP".to_string(),
+                    "/workspace/.runseal/runtime/exec_1/temp".to_string()
+                ),
+                (
+                    "TMP".to_string(),
+                    "/workspace/.runseal/runtime/exec_1/temp".to_string()
+                ),
+            ]
         );
     }
 
@@ -255,5 +341,6 @@ mod tests {
         );
         assert_eq!(plan.network.guard, WindowsNetworkGuard::Disabled);
         assert!(!plan.network.inject_proxy_environment);
+        assert!(plan.environment.runtime.is_empty());
     }
 }

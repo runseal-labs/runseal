@@ -1,5 +1,6 @@
 use crate::policy::{BackendFeature, SandboxPolicy};
 use crate::windows_plan::{WindowsPolicyPlan, WindowsRuntimeRoots};
+use serde_json::Map;
 use serde_json::{Value, json};
 use std::env;
 use std::ffi::OsString;
@@ -182,6 +183,7 @@ pub struct PlatformSandboxPlan {
     pub environment_inherit: String,
     pub environment_scrub: Vec<String>,
     pub environment_proxy: bool,
+    pub environment_runtime: Vec<(String, String)>,
     pub required_backend_features: Vec<&'static str>,
 }
 
@@ -213,6 +215,7 @@ impl PlatformSandboxPlan {
             environment_inherit: policy.environment.inherit.clone(),
             environment_scrub: policy.environment.scrub.clone(),
             environment_proxy: policy.environment.proxy,
+            environment_runtime: Vec::new(),
             required_backend_features: policy.required_backend_feature_names(),
         }
     }
@@ -246,6 +249,7 @@ impl PlatformSandboxPlan {
                 "inherit": self.environment_inherit.clone(),
                 "scrub": self.environment_scrub.clone(),
                 "proxy": self.environment_proxy,
+                "runtime": environment_runtime_json(&self.environment_runtime),
             },
             "required_backend_features": self.required_backend_features.clone(),
         })
@@ -262,8 +266,10 @@ impl PlatformSandboxPlan {
         .into_iter()
         .flatten()
         {
-            fs::create_dir_all(root)?;
-            prepared.push(root.clone());
+            prepare_unique_runtime_root(&mut prepared, root)?;
+        }
+        for (_, root) in &self.environment_runtime {
+            prepare_unique_runtime_root(&mut prepared, root)?;
         }
         if let Some(runtime_root) = &self.runtime_root {
             fs::write(
@@ -347,6 +353,14 @@ impl PlatformSandboxPlan {
             .join("runtime")
             .join(&self.execution_id))
     }
+}
+
+fn prepare_unique_runtime_root(prepared: &mut Vec<String>, root: &str) -> io::Result<()> {
+    fs::create_dir_all(root)?;
+    if !prepared.iter().any(|item| item == root) {
+        prepared.push(root.to_string());
+    }
+    Ok(())
 }
 
 fn normalize_lexical(path: &Path) -> PathBuf {
@@ -515,9 +529,18 @@ impl WindowsReferenceBackend {
             environment_inherit: policy.environment.inherit.clone(),
             environment_scrub: policy.environment.scrub.clone(),
             environment_proxy: windows_policy.network.inject_proxy_environment,
+            environment_runtime: windows_policy.environment.runtime,
             required_backend_features: policy.required_backend_feature_names(),
         }
     }
+}
+
+fn environment_runtime_json(entries: &[(String, String)]) -> Value {
+    let mut object = Map::new();
+    for (key, value) in entries {
+        object.insert(key.clone(), json!(value));
+    }
+    Value::Object(object)
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -810,7 +833,7 @@ fn minimal_environment(plan: &PlatformSandboxPlan) -> Vec<(OsString, OsString)> 
         return Vec::new();
     }
 
-    minimal_environment_keys()
+    let mut environment: Vec<(OsString, OsString)> = minimal_environment_keys()
         .into_iter()
         .filter(|key| {
             !plan
@@ -819,7 +842,13 @@ fn minimal_environment(plan: &PlatformSandboxPlan) -> Vec<(OsString, OsString)> 
                 .any(|pattern| matches_environment_scrub_pattern(key, pattern))
         })
         .filter_map(|key| env::var_os(key).map(|value| (OsString::from(key), value)))
-        .collect()
+        .collect();
+    environment.extend(
+        plan.environment_runtime
+            .iter()
+            .map(|(key, value)| (OsString::from(key), OsString::from(value))),
+    );
+    environment
 }
 
 fn minimal_environment_keys() -> Vec<&'static str> {
@@ -994,6 +1023,49 @@ mod tests {
     }
 
     #[test]
+    fn windows_fail_closed_preview_includes_runtime_environment_redirects() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&cwd)?;
+        let policy = normalize_policy(&json!("read-only"), &cwd, None).unwrap();
+
+        let plan = WindowsReferenceBackend.fail_closed_plan("exec_env", &cwd, &policy);
+        let runtime_env = environment_runtime_json(&plan.environment_runtime);
+
+        assert_eq!(
+            runtime_env["RUNSEAL_HOME"],
+            json!(plan.synthetic_home.as_ref().unwrap())
+        );
+        assert_eq!(
+            runtime_env["RUNSEAL_TMP"],
+            json!(plan.temp_root.as_ref().unwrap())
+        );
+        assert_eq!(
+            runtime_env["HOME"],
+            json!(plan.synthetic_home.as_ref().unwrap())
+        );
+        assert_eq!(
+            runtime_env["USERPROFILE"],
+            json!(plan.profile_root.as_ref().unwrap())
+        );
+        assert_eq!(runtime_env["TEMP"], json!(plan.temp_root.as_ref().unwrap()));
+        assert_eq!(runtime_env["TMP"], json!(plan.temp_root.as_ref().unwrap()));
+        assert!(
+            runtime_env["APPDATA"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("AppData")
+        );
+        assert!(
+            runtime_env["LOCALAPPDATA"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("AppData")
+        );
+        Ok(())
+    }
+
+    #[test]
     fn runtime_cleanup_removes_prepared_runtime_tree() -> io::Result<()> {
         let tmp = TempDir::new()?;
         let cwd = tmp.path().join("workspace");
@@ -1002,8 +1074,27 @@ mod tests {
         let plan = WindowsReferenceBackend.fail_closed_plan("exec_cleanup", &cwd, &policy);
         let runtime_root = PathBuf::from(plan.runtime_root.as_ref().unwrap());
 
-        plan.prepare_runtime_roots()?;
+        let prepared = plan.prepare_runtime_roots()?;
         assert!(runtime_root.join(RUNTIME_ROOT_MARKER).is_file());
+        let prepared_len = prepared.len();
+        let mut unique_prepared = prepared;
+        unique_prepared.sort();
+        unique_prepared.dedup();
+        assert_eq!(prepared_len, unique_prepared.len());
+        assert!(
+            runtime_root
+                .join("profile")
+                .join("AppData")
+                .join("Roaming")
+                .is_dir()
+        );
+        assert!(
+            runtime_root
+                .join("profile")
+                .join("AppData")
+                .join("Local")
+                .is_dir()
+        );
 
         let cleaned = plan.cleanup_runtime_roots()?;
 
