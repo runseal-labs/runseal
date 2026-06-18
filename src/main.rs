@@ -814,7 +814,7 @@ fn execute_command(
             write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
 
             if let Some(plan) = err.plan.as_deref() {
-                match plan.cleanup_runtime_roots() {
+                match plan.cleanup_sandbox_setup() {
                     Ok(cleaned_roots) => {
                         let event = execution_event_now(
                             json!({

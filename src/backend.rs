@@ -311,10 +311,13 @@ impl PlatformSandboxPlan {
     }
 
     pub fn prepare_sandbox_setup(&self) -> io::Result<Vec<String>> {
-        let prepared_roots = self.prepare_runtime_roots()?;
-        if let Err(setup_err) = self.prepare_filesystem_rules() {
-            self.cleanup_runtime_roots()?;
-            return Err(setup_err);
+        let mut prepared_roots = self.prepare_runtime_roots()?;
+        match self.prepare_filesystem_rules() {
+            Ok(filesystem_roots) => extend_unique(&mut prepared_roots, filesystem_roots),
+            Err(setup_err) => {
+                self.cleanup_runtime_roots()?;
+                return Err(setup_err);
+            }
         }
         Ok(prepared_roots)
     }
@@ -366,6 +369,43 @@ impl PlatformSandboxPlan {
             }
         }
         Ok(prepared)
+    }
+
+    pub fn cleanup_sandbox_setup(&self) -> io::Result<Vec<String>> {
+        let mut driver = ValidateOnlyWindowsFilesystemAclDriver;
+        self.cleanup_sandbox_setup_with_driver(&mut driver)
+    }
+
+    fn cleanup_sandbox_setup_with_driver(
+        &self,
+        driver: &mut dyn WindowsFilesystemAclDriver,
+    ) -> io::Result<Vec<String>> {
+        let mut cleaned = self.cleanup_filesystem_rules_with_driver(driver)?;
+        extend_unique(&mut cleaned, self.cleanup_runtime_roots()?);
+        Ok(cleaned)
+    }
+
+    fn cleanup_filesystem_rules_with_driver(
+        &self,
+        driver: &mut dyn WindowsFilesystemAclDriver,
+    ) -> io::Result<Vec<String>> {
+        let acl_plan = WindowsFilesystemAclPlan::from_rules(&self.private_filesystem_rules);
+        let transaction = WindowsFilesystemAclTransactionPlan::from_acl_plan(&acl_plan);
+        validate_private_filesystem_acl_transaction(&transaction)?;
+        validate_private_filesystem_acl_entries(&transaction)?;
+
+        let mut cleaned = Vec::new();
+        for entry in transaction.apply_entries() {
+            if !cleaned.iter().any(|root| root == entry.root()) {
+                cleaned.push(entry.root().to_string());
+            }
+        }
+        if cleaned.is_empty() {
+            return Ok(cleaned);
+        }
+
+        driver.rollback()?;
+        Ok(cleaned)
     }
 
     pub fn cleanup_runtime_roots(&self) -> io::Result<Vec<String>> {
@@ -449,6 +489,14 @@ fn prepare_unique_runtime_root(prepared: &mut Vec<String>, root: &str) -> io::Re
         prepared.push(root.to_string());
     }
     Ok(())
+}
+
+fn extend_unique(target: &mut Vec<String>, source: Vec<String>) {
+    for item in source {
+        if !target.iter().any(|existing| existing == &item) {
+            target.push(item);
+        }
+    }
 }
 
 fn validate_private_filesystem_acl_transaction(
@@ -1390,7 +1438,7 @@ mod tests {
     use std::ffi::OsString;
     use std::fs;
     use std::io;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use tempfile::TempDir;
 
     #[derive(Default)]
@@ -1859,6 +1907,86 @@ mod tests {
                 format!("apply:{}", path_string(&cwd)),
             ]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn sandbox_setup_reports_runtime_and_filesystem_roots() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&cwd)?;
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+        let mut plan = WindowsReferenceBackend.fail_closed_plan("exec_setup_roots", &cwd, &policy);
+        plan.private_filesystem_rules = vec![WindowsFilesystemRule {
+            access: WindowsFilesystemAccess::ReadWrite,
+            source: WindowsFilesystemRuleSource::PolicyWrite,
+            root: path_string(&cwd),
+        }];
+        let runtime_root = path_string(Path::new(plan.runtime_root.as_ref().unwrap()));
+
+        let prepared = plan.prepare_sandbox_setup()?;
+
+        assert!(prepared.iter().any(|root| root == &runtime_root));
+        assert!(prepared.iter().any(|root| root == &path_string(&cwd)));
+        plan.cleanup_sandbox_setup()?;
+        Ok(())
+    }
+
+    #[test]
+    fn sandbox_cleanup_rolls_back_filesystem_rules_before_runtime_tree() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&cwd)?;
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+        let mut plan =
+            WindowsReferenceBackend.fail_closed_plan("exec_cleanup_setup", &cwd, &policy);
+        plan.private_filesystem_rules = vec![WindowsFilesystemRule {
+            access: WindowsFilesystemAccess::ReadWrite,
+            source: WindowsFilesystemRuleSource::PolicyWrite,
+            root: path_string(&cwd),
+        }];
+        let runtime_root = PathBuf::from(plan.runtime_root.as_ref().unwrap());
+        plan.prepare_runtime_roots()?;
+        let mut driver = RecordingAclDriver::default();
+
+        let cleaned = plan.cleanup_sandbox_setup_with_driver(&mut driver)?;
+
+        assert_eq!(driver.events, vec!["rollback"]);
+        assert_eq!(cleaned, vec![path_string(&cwd), path_string(&runtime_root)]);
+        assert!(!runtime_root.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn sandbox_cleanup_preserves_runtime_tree_after_filesystem_rollback_failure() -> io::Result<()>
+    {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&cwd)?;
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+        let mut plan =
+            WindowsReferenceBackend.fail_closed_plan("exec_cleanup_failure", &cwd, &policy);
+        plan.private_filesystem_rules = vec![WindowsFilesystemRule {
+            access: WindowsFilesystemAccess::ReadWrite,
+            source: WindowsFilesystemRuleSource::PolicyWrite,
+            root: path_string(&cwd),
+        }];
+        let runtime_root = PathBuf::from(plan.runtime_root.as_ref().unwrap());
+        plan.prepare_runtime_roots()?;
+        let mut driver = RecordingAclDriver {
+            fail_rollback: true,
+            ..RecordingAclDriver::default()
+        };
+
+        let err = plan
+            .cleanup_sandbox_setup_with_driver(&mut driver)
+            .expect_err("filesystem rollback failure must fail cleanup");
+
+        assert_eq!(err.kind(), io::ErrorKind::Other);
+        assert!(err.to_string().contains("rollback failed"));
+        assert_eq!(driver.events, vec!["rollback"]);
+        assert!(runtime_root.exists());
+        plan.cleanup_runtime_roots()?;
         Ok(())
     }
 
