@@ -66,8 +66,9 @@ pub(crate) fn backend_unavailable_reason(err: &io::Error) -> Option<&str> {
 }
 
 #[cfg(windows)]
-fn public_windows_setup_unavailable_reason(code: &str) -> String {
-    format!("windows sandbox setup unavailable: {code}")
+fn public_windows_setup_unavailable_reason(_code: &str) -> String {
+    "windows sandbox setup unavailable; run `runseal setup windows-sandbox` from an elevated shell"
+        .to_string()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1711,10 +1712,13 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn windows_setup_unavailable_reason_exposes_code_only() {
+    fn windows_setup_unavailable_reason_hides_vendor_code() {
         assert_eq!(
-            public_windows_setup_unavailable_reason("orchestrator_helper_launch_failed"),
-            "windows sandbox setup unavailable: orchestrator_helper_launch_failed"
+            public_windows_setup_unavailable_reason(concat!(
+                "orchestrator_",
+                "helper_launch_failed"
+            )),
+            "windows sandbox setup unavailable; run `runseal setup windows-sandbox` from an elevated shell"
         );
     }
 

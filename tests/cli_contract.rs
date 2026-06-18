@@ -172,6 +172,8 @@ fn assert_no_private_windows_setup_terms(text: &str) {
         "RunSealSandboxUsers",
         "restricted-token",
         "kill-on-close-job",
+        "orchestrator_",
+        "helper_",
         "offline",
         "online",
     ] {

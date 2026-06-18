@@ -35,6 +35,8 @@ const MAX_METADATA_BYTES: usize = 4096;
 const MAX_ENV_ENTRIES: usize = 64;
 const MAX_ENV_KEY_BYTES: usize = 128;
 const MAX_ENV_VALUE_BYTES: usize = 4096;
+const WINDOWS_SANDBOX_SETUP_FAILED: &str =
+    "windows sandbox setup failed; run from an elevated shell";
 
 pub fn run_cli() {
     if let Err(err) = run() {
@@ -195,7 +197,7 @@ fn run_windows_sandbox_setup(cwd: &Path) -> Result<(), String> {
     let sandbox_home = backend::windows_sandbox_home(cwd);
     let real_user = env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string());
     codex_windows_sandbox::run_elevated_provisioning_setup(&sandbox_home, &real_user)
-        .map_err(|err| format!("windows sandbox setup failed: {err}"))?;
+        .map_err(|_| WINDOWS_SANDBOX_SETUP_FAILED.to_string())?;
     println!(
         "{}",
         json!({
@@ -1105,5 +1107,11 @@ mod tests {
             assert!(session_ids.insert(ids.session_id));
             assert!(seal_ids.insert(ids.seal_id));
         }
+    }
+
+    #[test]
+    fn windows_setup_failure_message_hides_vendor_codes() {
+        assert!(!WINDOWS_SANDBOX_SETUP_FAILED.contains("orchestrator_"));
+        assert!(!WINDOWS_SANDBOX_SETUP_FAILED.contains("helper_"));
     }
 }
