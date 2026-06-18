@@ -315,6 +315,41 @@ fn inline_policy_rejects_unknown_required_fields() -> Result<()> {
 }
 
 #[test]
+fn inline_policy_rejects_unsafe_filesystem_paths() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let output = run_rpc(&rpc_request(
+        "explainPolicy",
+        json!({
+            "cwd": tmp.path(),
+            "policy": {
+                "version": "runseal.policy/v1",
+                "sandbox_level": "workspace-write",
+                "filesystem": {
+                    "write": ["../outside"]
+                }
+            }
+        }),
+    ))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = &messages[0];
+
+    assert_eq!(response["error"]["data"]["code"], "POLICY_INVALID");
+    assert!(
+        response["error"]["data"]["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("filesystem.write entries must not contain traversal components")
+    );
+    Ok(())
+}
+
+#[test]
 fn sandboxed_policy_without_backend_fails_closed() -> Result<()> {
     let tmp = TempDir::new()?;
     let output = run_rpc(&rpc_request(

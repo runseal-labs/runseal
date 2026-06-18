@@ -1,6 +1,6 @@
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
-use std::path::Path;
+use std::path::{Component, Path};
 
 pub const POLICY_VERSION: &str = "runseal.policy/v1";
 
@@ -382,6 +382,13 @@ fn inline_filesystem(
             Vec::new()
         }
     });
+    validate_path_entries(&read, "filesystem.read", false)?;
+    validate_path_entries(
+        &write,
+        "filesystem.write",
+        sandbox_level != SandboxLevel::DangerFullAccess,
+    )?;
+    validate_path_entries(&deny, "filesystem.deny", false)?;
 
     Ok(FilesystemPolicy {
         read,
@@ -486,6 +493,49 @@ fn protected_subpaths(cwd: &Path) -> Vec<String> {
 
 fn path_string(path: &Path) -> String {
     path.to_string_lossy().to_string()
+}
+
+fn validate_path_entries(
+    entries: &[String],
+    field: &'static str,
+    reject_broad_write: bool,
+) -> Result<(), PolicyError> {
+    for entry in entries {
+        if entry.is_empty() {
+            return Err(PolicyError::invalid(format!(
+                "{field} entries must not be empty"
+            )));
+        }
+        if contains_parent_traversal(entry) {
+            return Err(PolicyError::invalid(format!(
+                "{field} entries must not contain traversal components"
+            )));
+        }
+        if reject_broad_write && is_broad_write_root(entry) {
+            return Err(PolicyError::invalid(format!(
+                "{field} broad roots require danger-full-access"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn contains_parent_traversal(entry: &str) -> bool {
+    Path::new(entry)
+        .components()
+        .any(|component| component == Component::ParentDir)
+        || entry.split(['/', '\\']).any(|component| component == "..")
+}
+
+fn is_broad_write_root(entry: &str) -> bool {
+    if entry == "*" {
+        return true;
+    }
+
+    let normalized = entry.trim_end_matches(['/', '\\']).to_ascii_lowercase();
+    matches!(entry, "/" | "\\")
+        || matches!(normalized.as_str(), "~" | "$home")
+        || normalized.ends_with(':')
 }
 
 fn validate_keys(
@@ -711,5 +761,72 @@ mod tests {
             }),
             "network.mode must be disabled or proxy",
         );
+    }
+
+    #[test]
+    fn filesystem_paths_reject_parent_traversal() {
+        assert_policy_invalid(
+            json!({
+                "version": POLICY_VERSION,
+                "filesystem": {
+                    "read": ["../secret"]
+                }
+            }),
+            "filesystem.read entries must not contain traversal components",
+        );
+        assert_policy_invalid(
+            json!({
+                "version": POLICY_VERSION,
+                "filesystem": {
+                    "write": ["workspace/../outside"]
+                }
+            }),
+            "filesystem.write entries must not contain traversal components",
+        );
+    }
+
+    #[test]
+    fn sandboxed_filesystem_write_rejects_broad_roots() {
+        assert_policy_invalid(
+            json!({
+                "version": POLICY_VERSION,
+                "sandbox_level": "workspace-write",
+                "filesystem": {
+                    "write": ["*"]
+                }
+            }),
+            "filesystem.write broad roots require danger-full-access",
+        );
+        assert_policy_invalid(
+            json!({
+                "version": POLICY_VERSION,
+                "sandbox_level": "workspace-write",
+                "filesystem": {
+                    "write": ["/"]
+                }
+            }),
+            "filesystem.write broad roots require danger-full-access",
+        );
+    }
+
+    #[test]
+    fn danger_full_access_allows_explicit_wildcard_filesystem() {
+        let cwd = PathBuf::from("/workspace");
+        let policy = normalize_policy(
+            &json!({
+                "version": POLICY_VERSION,
+                "sandbox_level": "danger-full-access",
+                "filesystem": {
+                    "read": ["*"],
+                    "write": ["*"]
+                }
+            }),
+            &cwd,
+            None,
+        )
+        .unwrap();
+
+        assert!(policy.allows_local_execution());
+        assert_eq!(policy.filesystem.write, vec!["*"]);
     }
 }
