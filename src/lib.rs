@@ -2,6 +2,7 @@ mod audit;
 mod backend;
 mod cli;
 mod error;
+mod events;
 mod policy;
 mod rpc;
 mod windows;
@@ -13,15 +14,17 @@ use backend::{
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use cli::{parse_exec_args, parse_policy_args};
 use error::RunSealError;
+use events::{
+    ExecutionEventContext, backend_event_json, execution_event_at, execution_event_now,
+    new_execution_ids, stream_event, timestamp_now,
+};
 use policy::{NetworkMode, POLICY_VERSION, SandboxPolicy, normalize_policy};
 use serde_json::{Map, Value, json};
 use std::env;
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+use std::time::{Duration, Instant};
 
 const PROTOCOL_VERSION: &str = "runseal.protocol/v1";
 const MAX_METADATA_BYTES: usize = 4096;
@@ -31,7 +34,6 @@ const MAX_STDIN_DATA_BYTES: usize = STDIN_BASE64_PREFIX.len() + 4 * MAX_STDIN_BY
 const MAX_ENV_ENTRIES: usize = 64;
 const MAX_ENV_KEY_BYTES: usize = 128;
 const MAX_ENV_VALUE_BYTES: usize = 4096;
-static EXECUTION_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub fn run_cli() {
     if let Err(err) = run() {
@@ -906,81 +908,6 @@ fn validate_execution_cwd(cwd: &Path) -> Result<(), RunSealError> {
     Ok(())
 }
 
-fn stream_event(
-    event_type: &'static str,
-    context: &ExecutionEventContext<'_>,
-    bytes: &[u8],
-    offset: u64,
-) -> Value {
-    let encoded = STANDARD.encode(bytes);
-    execution_event_now(
-        json!({
-            "type": event_type,
-            "execution_id": context.ids.execution_id,
-            "data": format!("base64:{encoded}"),
-            "encoding": "base64",
-            "stream_offset": offset,
-            "bytes": bytes.len(),
-        }),
-        context,
-    )
-}
-
-fn execution_event_now(event: Value, context: &ExecutionEventContext<'_>) -> Value {
-    let time = timestamp_now();
-    execution_event_at(event, &time, context)
-}
-
-fn execution_event_at(event: Value, time: &str, context: &ExecutionEventContext<'_>) -> Value {
-    let mut event = event_at(event, time);
-    if let Some(object) = event.as_object_mut() {
-        object
-            .entry("execution_id")
-            .or_insert_with(|| json!(context.ids.execution_id));
-        object
-            .entry("session_id")
-            .or_insert_with(|| json!(context.ids.session_id));
-        object
-            .entry("seal_id")
-            .or_insert_with(|| json!(context.ids.seal_id));
-        object
-            .entry("policy_id")
-            .or_insert_with(|| json!(context.policy_id));
-        object
-            .entry("policy_hash")
-            .or_insert_with(|| json!(context.policy_hash));
-        object
-            .entry("audit_path")
-            .or_insert_with(|| json!(context.audit_path));
-        object
-            .entry("backend")
-            .or_insert_with(|| context.backend.clone());
-    }
-    event
-}
-
-fn backend_event_json(name: &str, status: &str, platform: &str) -> Value {
-    json!({
-        "name": name,
-        "status": status,
-        "platform": platform,
-    })
-}
-
-fn event_at(mut event: Value, time: &str) -> Value {
-    if let Some(object) = event.as_object_mut() {
-        object.insert("time".to_string(), json!(time));
-    }
-    event
-}
-
-fn timestamp_now() -> String {
-    match OffsetDateTime::now_utc().format(&Rfc3339) {
-        Ok(timestamp) => timestamp,
-        Err(_) => "1970-01-01T00:00:00Z".to_string(),
-    }
-}
-
 fn create_audit_writer(cwd: &Path, session_id: &str) -> Result<AuditWriter, RunSealError> {
     AuditWriter::create(cwd, session_id).map_err(|err| {
         RunSealError::new(
@@ -1013,37 +940,6 @@ fn write_audit_event_with_metadata(
         object.insert("metadata".to_string(), metadata.clone());
     }
     write_audit_event(audit, &audit_event)
-}
-
-#[derive(Debug)]
-struct ExecutionIds {
-    execution_id: String,
-    session_id: String,
-    seal_id: String,
-}
-
-#[derive(Debug)]
-struct ExecutionEventContext<'a> {
-    ids: &'a ExecutionIds,
-    policy_id: &'a str,
-    policy_hash: &'a str,
-    audit_path: &'a str,
-    backend: Value,
-}
-
-fn new_execution_ids() -> ExecutionIds {
-    let millis = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or_default();
-    let pid = std::process::id();
-    let counter = EXECUTION_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let suffix = format!("{millis:x}_{pid:x}_{counter:x}");
-    ExecutionIds {
-        execution_id: format!("exec_{suffix}"),
-        session_id: format!("sess_{suffix}"),
-        seal_id: format!("seal_{suffix}"),
-    }
 }
 
 fn current_dir() -> PathBuf {
