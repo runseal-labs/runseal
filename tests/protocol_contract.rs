@@ -1215,7 +1215,11 @@ fn inline_policy_accepts_environment_controls() -> Result<()> {
                     "timeout_ms": 1000,
                     "max_output_bytes": 2048
                 },
-                "network": {"mode": "proxy"}
+                "network": {
+                    "mode": "proxy",
+                    "routes": ["github-api"],
+                    "direct_allow_hosts": []
+                }
             }
         }),
     ))?;
@@ -1232,6 +1236,8 @@ fn inline_policy_accepts_environment_controls() -> Result<()> {
     assert_eq!(payload["environment"]["scrub"], json!(["RUNSEAL_SECRET_*"]));
     assert_eq!(payload["environment"]["set"]["CI"], "1");
     assert_eq!(payload["environment"]["proxy"], false);
+    assert_eq!(payload["network"]["routes"], json!(["github-api"]));
+    assert_eq!(payload["network"]["direct_allow_hosts"], json!([]));
     assert_eq!(payload["resources"]["timeout_ms"], 1000);
     assert_eq!(payload["resources"]["max_output_bytes"], 2048);
     assert_eq!(
@@ -1239,6 +1245,10 @@ fn inline_policy_accepts_environment_controls() -> Result<()> {
         json!(["RUNSEAL_SECRET_*"])
     );
     assert_eq!(payload["canonical_policy"]["environment"]["set"]["CI"], "1");
+    assert_eq!(
+        payload["canonical_policy"]["network"]["routes"],
+        json!(["github-api"])
+    );
     assert_eq!(payload["canonical_policy"]["resources"]["timeout_ms"], 1000);
     assert_eq!(
         payload["canonical_policy"]["resources"]["max_output_bytes"],

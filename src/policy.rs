@@ -105,6 +105,8 @@ pub struct FilesystemPolicy {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NetworkPolicy {
     pub mode: NetworkMode,
+    pub routes: Vec<String>,
+    pub direct_allow_hosts: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -154,6 +156,8 @@ impl SandboxPolicy {
             },
             "network": {
                 "mode": self.network.mode.as_str(),
+                "routes": self.network.routes.clone(),
+                "direct_allow_hosts": self.network.direct_allow_hosts.clone(),
             },
             "environment": {
                 "inherit": self.environment.inherit.clone(),
@@ -191,6 +195,8 @@ impl SandboxPolicy {
             },
             "network": {
                 "mode": self.network.mode.as_str(),
+                "routes": self.network.routes.clone(),
+                "direct_allow_hosts": self.network.direct_allow_hosts.clone(),
             },
             "environment": {
                 "inherit": self.environment.inherit.clone(),
@@ -340,14 +346,15 @@ pub fn normalize_policy(
     } else {
         default_network_mode(sandbox_level)
     };
-    let environment = inline_environment(optional_object(object, "environment")?, network)?;
+    let network = inline_network_policy(object.get("network"), network)?;
+    let environment = inline_environment(optional_object(object, "environment")?, network.mode)?;
     let resources = inline_resources(optional_object(object, "resources")?)?;
 
     Ok(SandboxPolicy {
         id,
         sandbox_level,
         filesystem: inline_filesystem(filesystem, cwd, sandbox_level)?,
-        network: NetworkPolicy { mode: network },
+        network,
         environment,
         resources,
         source: PolicySource::Inline,
@@ -367,7 +374,7 @@ fn named_profile(
         id: profile.to_string(),
         sandbox_level,
         filesystem: profile_filesystem(cwd, sandbox_level),
-        network: NetworkPolicy { mode: network },
+        network: default_network(network),
         environment: default_environment(network),
         resources: default_resources(),
         source: PolicySource::Named,
@@ -496,7 +503,9 @@ fn inline_network_mode(network: Option<&Value>) -> Option<Result<NetworkMode, Po
                 )));
             }
         };
-        if let Err(err) = validate_keys(object, "network", &["mode"]) {
+        if let Err(err) =
+            validate_keys(object, "network", &["mode", "routes", "direct_allow_hosts"])
+        {
             return Some(Err(err));
         }
         match optional_string(object, "mode") {
@@ -511,6 +520,40 @@ fn inline_network_mode(network: Option<&Value>) -> Option<Result<NetworkMode, Po
             "network.mode must be disabled or proxy, got {mode}"
         ))
     }))
+}
+
+fn inline_network_policy(
+    network: Option<&Value>,
+    mode: NetworkMode,
+) -> Result<NetworkPolicy, PolicyError> {
+    let mut policy = default_network(mode);
+    let Some(network) = network else {
+        return Ok(policy);
+    };
+    let Some(object) = network.as_object() else {
+        return Ok(policy);
+    };
+
+    if let Some(routes) = string_array_for(Some(object), "network", "routes")? {
+        validate_non_empty_strings(&routes, "network.routes")?;
+        if mode != NetworkMode::Proxy && !routes.is_empty() {
+            return Err(PolicyError::invalid("network.routes require proxy mode"));
+        }
+        policy.routes = routes;
+    }
+    if let Some(direct_allow_hosts) =
+        string_array_for(Some(object), "network", "direct_allow_hosts")?
+    {
+        validate_non_empty_strings(&direct_allow_hosts, "network.direct_allow_hosts")?;
+        if !direct_allow_hosts.is_empty() {
+            return Err(PolicyError::invalid(
+                "network.direct_allow_hosts is not supported in this build",
+            ));
+        }
+        policy.direct_allow_hosts = direct_allow_hosts;
+    }
+
+    Ok(policy)
 }
 
 fn inline_environment(
@@ -618,6 +661,14 @@ fn default_network_mode(sandbox_level: SandboxLevel) -> NetworkMode {
     }
 }
 
+fn default_network(mode: NetworkMode) -> NetworkPolicy {
+    NetworkPolicy {
+        mode,
+        routes: Vec::new(),
+        direct_allow_hosts: Vec::new(),
+    }
+}
+
 fn default_environment(network: NetworkMode) -> EnvironmentPolicy {
     EnvironmentPolicy {
         inherit: "minimal".to_string(),
@@ -694,6 +745,17 @@ fn validate_environment_patterns(entries: &[String]) -> Result<(), PolicyError> 
             return Err(PolicyError::invalid(
                 "environment.scrub entries must not be empty",
             ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_non_empty_strings(entries: &[String], field: &'static str) -> Result<(), PolicyError> {
+    for entry in entries {
+        if entry.is_empty() {
+            return Err(PolicyError::invalid(format!(
+                "{field} entries must not be empty"
+            )));
         }
     }
     Ok(())
@@ -1032,16 +1094,28 @@ mod tests {
     }
 
     #[test]
-    fn inline_policy_rejects_unsupported_network_routes() {
-        assert_policy_invalid(
-            json!({
+    fn inline_policy_materializes_network_routes() {
+        let cwd = PathBuf::from("/workspace");
+        let policy = normalize_policy(
+            &json!({
                 "version": POLICY_VERSION,
                 "network": {
                     "mode": "proxy",
-                    "routes": ["github-api"]
+                    "routes": ["github-api"],
+                    "direct_allow_hosts": []
                 }
             }),
-            "network.routes",
+            &cwd,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(policy.network.mode, NetworkMode::Proxy);
+        assert_eq!(policy.network.routes, vec!["github-api"]);
+        assert!(policy.network.direct_allow_hosts.is_empty());
+        assert_eq!(
+            policy.canonical_json()["network"]["routes"],
+            json!(["github-api"])
         );
     }
 
@@ -1053,7 +1127,7 @@ mod tests {
                 "version": POLICY_VERSION,
                 "network": {
                     "mode": "proxy",
-                    "routes": ["github-api"]
+                    "unknown": true
                 }
             }),
             &cwd,
@@ -1062,7 +1136,7 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(err.code, "POLICY_INVALID");
-        assert!(err.reason.contains("network.routes"));
+        assert!(err.reason.contains("network.unknown"));
     }
 
     #[test]
@@ -1096,6 +1170,26 @@ mod tests {
                 }
             }),
             "resources.memory_bytes is not supported",
+        );
+        assert_policy_invalid(
+            json!({
+                "version": POLICY_VERSION,
+                "network": {
+                    "mode": "disabled",
+                    "routes": ["github-api"]
+                }
+            }),
+            "network.routes require proxy mode",
+        );
+        assert_policy_invalid(
+            json!({
+                "version": POLICY_VERSION,
+                "network": {
+                    "mode": "proxy",
+                    "direct_allow_hosts": ["example.com"]
+                }
+            }),
+            "network.direct_allow_hosts is not supported",
         );
     }
 
