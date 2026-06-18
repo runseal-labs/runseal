@@ -44,6 +44,7 @@ use {
     codex_utils_absolute_path::AbsolutePathBuf,
     std::collections::{HashMap, HashSet},
     std::os::windows::process::ExitStatusExt,
+    std::sync::{Condvar, Mutex, OnceLock},
 };
 
 #[derive(Debug)]
@@ -69,6 +70,86 @@ pub(crate) fn backend_unavailable_reason(err: &io::Error) -> Option<&str> {
 fn public_windows_setup_unavailable_reason(_code: &str) -> String {
     "windows sandbox setup unavailable; run `runseal setup windows-sandbox` from an elevated shell"
         .to_string()
+}
+
+#[cfg(windows)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct WindowsSandboxNetworkPolicyKey {
+    mode: &'static str,
+    direct_egress: &'static str,
+    managed_proxy: &'static str,
+}
+
+#[cfg(windows)]
+struct WindowsSandboxExecutionGate;
+
+#[cfg(windows)]
+struct WindowsSandboxExecutionGateLock {
+    state: Mutex<WindowsSandboxExecutionGateState>,
+    changed: Condvar,
+}
+
+#[cfg(windows)]
+#[derive(Default)]
+struct WindowsSandboxExecutionGateState {
+    active_key: Option<WindowsSandboxNetworkPolicyKey>,
+    active_count: usize,
+}
+
+#[cfg(windows)]
+fn windows_sandbox_execution_gate_lock() -> &'static WindowsSandboxExecutionGateLock {
+    static GATE: OnceLock<WindowsSandboxExecutionGateLock> = OnceLock::new();
+    GATE.get_or_init(|| WindowsSandboxExecutionGateLock {
+        state: Mutex::new(WindowsSandboxExecutionGateState::default()),
+        changed: Condvar::new(),
+    })
+}
+
+#[cfg(windows)]
+fn windows_sandbox_execution_gate(
+    plan: &PlatformSandboxPlan,
+) -> io::Result<WindowsSandboxExecutionGate> {
+    windows_sandbox_execution_gate_for_key(WindowsSandboxNetworkPolicyKey {
+        mode: plan.network_mode,
+        direct_egress: plan.network_direct_egress,
+        managed_proxy: plan.network_managed_proxy,
+    })
+}
+
+#[cfg(windows)]
+fn windows_sandbox_execution_gate_for_key(
+    key: WindowsSandboxNetworkPolicyKey,
+) -> io::Result<WindowsSandboxExecutionGate> {
+    let gate = windows_sandbox_execution_gate_lock();
+    let mut state = gate
+        .state
+        .lock()
+        .map_err(|_| io::Error::other("windows sandbox execution gate poisoned"))?;
+    // ponytail: account-scoped network guard; same guard may share, policy switches wait.
+    while state.active_key.is_some_and(|active_key| active_key != key) {
+        state = gate
+            .changed
+            .wait(state)
+            .map_err(|_| io::Error::other("windows sandbox execution gate poisoned"))?;
+    }
+    state.active_key.get_or_insert(key);
+    state.active_count += 1;
+    Ok(WindowsSandboxExecutionGate)
+}
+
+#[cfg(windows)]
+impl Drop for WindowsSandboxExecutionGate {
+    fn drop(&mut self) {
+        let gate = windows_sandbox_execution_gate_lock();
+        let Ok(mut state) = gate.state.lock() else {
+            return;
+        };
+        state.active_count = state.active_count.saturating_sub(1);
+        if state.active_count == 0 {
+            state.active_key = None;
+            gate.changed.notify_all();
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1097,6 +1178,7 @@ fn execute_windows_sandbox_plan(
         ));
     }
 
+    let _execution_guard = windows_sandbox_execution_gate(plan)?;
     let _runtime_root = required_plan_path(plan.runtime_root.as_deref(), "runtime_root")?;
     let vendor_sandbox_home = vendor_sandbox_home(cwd);
     let workspace_roots = windows_sandbox_workspace_roots_for_plan(cwd, plan)?;
@@ -1716,7 +1798,7 @@ mod tests {
     use std::fs;
     use std::io;
     use std::path::{Path, PathBuf};
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
     use tempfile::TempDir;
 
     #[cfg(unix)]
@@ -1749,6 +1831,67 @@ mod tests {
             )),
             "windows sandbox setup unavailable; run `runseal setup windows-sandbox` from an elevated shell"
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_sandbox_execution_gate_allows_same_policy_and_serializes_policy_switches()
+    -> io::Result<()> {
+        let proxy_key = WindowsSandboxNetworkPolicyKey {
+            mode: "proxy",
+            direct_egress: "deny",
+            managed_proxy: "required",
+        };
+        let disabled_key = WindowsSandboxNetworkPolicyKey {
+            mode: "disabled",
+            direct_egress: "deny",
+            managed_proxy: "none",
+        };
+
+        let guard = windows_sandbox_execution_gate_for_key(proxy_key)?;
+        let (same_tx, same_rx) = std::sync::mpsc::channel();
+        let same_worker = std::thread::spawn(move || {
+            let gate = windows_sandbox_execution_gate_for_key(proxy_key);
+            let acquired = gate.is_ok();
+            drop(gate);
+            let _ = same_tx.send(acquired);
+        });
+        assert!(
+            same_rx
+                .recv_timeout(Duration::from_secs(1))
+                .map_err(|err| io::Error::other(err.to_string()))?
+        );
+        same_worker
+            .join()
+            .map_err(|_| io::Error::other("same-policy gate test thread panicked"))?;
+
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (acquired_tx, acquired_rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let _ = started_tx.send(());
+            let gate = windows_sandbox_execution_gate_for_key(disabled_key);
+            let acquired = gate.is_ok();
+            drop(gate);
+            let _ = acquired_tx.send(acquired);
+        });
+
+        started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .map_err(|err| io::Error::other(err.to_string()))?;
+        assert!(matches!(
+            acquired_rx.recv_timeout(Duration::from_millis(50)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+        drop(guard);
+
+        let acquired = acquired_rx
+            .recv_timeout(Duration::from_secs(1))
+            .map_err(|err| io::Error::other(err.to_string()))?;
+        worker
+            .join()
+            .map_err(|_| io::Error::other("policy-switch gate test thread panicked"))?;
+        assert!(acquired);
+        Ok(())
     }
 
     #[cfg(windows)]
