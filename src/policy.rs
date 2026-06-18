@@ -762,15 +762,11 @@ fn inline_approval(approval: Option<&Map<String, Value>>) -> Result<ApprovalPoli
 }
 
 fn approval_action(field: &'static str, action: &str) -> Result<String, PolicyError> {
-    if action == "deny" {
+    if action == "deny" || action == "request" {
         Ok(action.to_string())
-    } else if action == "request" {
-        Err(PolicyError::invalid(format!(
-            "{field}=request is not supported in this build"
-        )))
     } else {
         Err(PolicyError::invalid(format!(
-            "{field} must be deny, got {action}"
+            "{field} must be deny or request, got {action}"
         )))
     }
 }
@@ -1321,15 +1317,15 @@ mod tests {
     }
 
     #[test]
-    fn inline_policy_materializes_deny_only_approval() {
+    fn inline_policy_materializes_approval_actions() {
         let cwd = PathBuf::from("/workspace");
         let policy = normalize_policy(
             &json!({
                 "version": POLICY_VERSION,
                 "approval": {
                     "on_violation": "deny",
-                    "on_network_route_missing": "deny",
-                    "on_broad_write": "deny"
+                    "on_network_route_missing": "request",
+                    "on_broad_write": "request"
                 }
             }),
             &cwd,
@@ -1340,7 +1336,7 @@ mod tests {
         assert_eq!(policy.approval.on_violation, "deny");
         assert_eq!(
             policy.canonical_json()["approval"]["on_network_route_missing"],
-            "deny"
+            "request"
         );
     }
 
@@ -1458,10 +1454,10 @@ mod tests {
             json!({
                 "version": POLICY_VERSION,
                 "approval": {
-                    "on_broad_write": "request"
+                    "on_broad_write": "allow"
                 }
             }),
-            "approval.on_broad_write=request is not supported",
+            "approval.on_broad_write must be deny or request",
         );
         assert_policy_invalid(
             json!({

@@ -523,14 +523,25 @@ fn execute_command(
 
     if policy.denies_execution_without_backend() {
         let reason = "filesystem write denied by policy";
+        let requires_approval = policy.approval.on_violation == "request";
+        let event_type = if requires_approval {
+            "policy.requires_approval"
+        } else {
+            "policy.denied"
+        };
+        let decision = if requires_approval {
+            "requires_approval"
+        } else {
+            "denied"
+        };
         let event = execution_event_now(
             json!({
-                "type": "policy.denied",
+                "type": event_type,
                 "execution_id": ids.execution_id,
                 "policy_id": policy_id,
                 "policy_hash": policy_hash,
                 "audit_path": audit_path,
-                "decision": "denied",
+                "decision": decision,
                 "reason": reason,
             }),
             &event_context,
@@ -538,7 +549,11 @@ fn execute_command(
         write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
 
         return Err(RunSealError::with_details(
-            "POLICY_DENIED",
+            if requires_approval {
+                "APPROVAL_REQUIRED"
+            } else {
+                "POLICY_DENIED"
+            },
             reason,
             json!({
                 "execution_id": ids.execution_id,
