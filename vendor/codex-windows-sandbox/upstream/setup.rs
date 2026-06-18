@@ -772,12 +772,12 @@ struct ScheduledSetupTaskResult {
 }
 
 fn scheduled_setup_request_id() -> String {
-    let millis = std::time::SystemTime::now()
+    let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
+        .map(|duration| duration.as_nanos())
         .unwrap_or_default();
     let sequence = SCHEDULED_SETUP_REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("{}-{millis}-{sequence}", std::process::id())
+    format!("{}-{nanos}-{sequence}", std::process::id())
 }
 
 fn scheduled_setup_broker_home(fallback: &Path) -> PathBuf {
@@ -801,6 +801,57 @@ fn scheduled_setup_payload_path(codex_home: &Path, request_id: &str) -> PathBuf 
 
 fn scheduled_setup_result_path(codex_home: &Path, request_id: &str) -> PathBuf {
     sandbox_dir(codex_home).join(format!("{SCHEDULED_SETUP_RESULT_PREFIX}{request_id}.json"))
+}
+
+fn write_scheduled_setup_payload_file(
+    broker_home: &Path,
+    request_id: &str,
+    payload_json: &[u8],
+) -> Result<PathBuf> {
+    let payload_path = scheduled_setup_payload_path(broker_home, request_id);
+    if let Some(parent) = payload_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| {
+            failure(
+                SetupErrorCode::OrchestratorSandboxDirCreateFailed,
+                format!(
+                    "failed to create setup task dir {}: {err}",
+                    parent.display()
+                ),
+            )
+        })?;
+    }
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&payload_path)
+        .map_err(|err| {
+            failure(
+                SetupErrorCode::OrchestratorHelperLaunchFailed,
+                format!(
+                    "failed to create scheduled setup payload {}: {err}",
+                    payload_path.display()
+                ),
+            )
+        })?;
+    file.write_all(payload_json).map_err(|err| {
+        failure(
+            SetupErrorCode::OrchestratorHelperLaunchFailed,
+            format!(
+                "failed to write scheduled setup payload {}: {err}",
+                payload_path.display()
+            ),
+        )
+    })?;
+    file.flush().map_err(|err| {
+        failure(
+            SetupErrorCode::OrchestratorHelperLaunchFailed,
+            format!(
+                "failed to flush scheduled setup payload {}: {err}",
+                payload_path.display()
+            ),
+        )
+    })?;
+    Ok(payload_path)
 }
 
 fn normalized_scheduled_task_text(value: &str) -> String {
@@ -855,29 +906,9 @@ fn try_run_setup_exe_via_scheduled_task(
         ));
     }
 
-    let payload_path = scheduled_setup_payload_path(&broker_home, &request_id);
     let result_path = scheduled_setup_result_path(&broker_home, &request_id);
-    if let Some(parent) = payload_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|err| {
-            failure(
-                SetupErrorCode::OrchestratorSandboxDirCreateFailed,
-                format!(
-                    "failed to create setup task dir {}: {err}",
-                    parent.display()
-                ),
-            )
-        })?;
-    }
     let _ = std::fs::remove_file(&result_path);
-    std::fs::write(&payload_path, payload_json).map_err(|err| {
-        failure(
-            SetupErrorCode::OrchestratorHelperLaunchFailed,
-            format!(
-                "failed to write scheduled setup payload {}: {err}",
-                payload_path.display()
-            ),
-        )
-    })?;
+    let payload_path = write_scheduled_setup_payload_file(&broker_home, &request_id, payload_json)?;
 
     let output = Command::new("schtasks.exe")
         .args(["/Run", "/TN", SCHEDULED_SETUP_TASK_NAME])
@@ -1424,6 +1455,24 @@ mod tests {
         assert_eq!(
             result_path.file_name().and_then(|name| name.to_str()),
             Some("setup-task-result-req-1.json")
+        );
+    }
+
+    #[test]
+    fn scheduled_setup_payload_file_does_not_overwrite_existing_request() {
+        let tmp = TempDir::new().expect("tempdir");
+        let broker_home = tmp.path().join("runseal-broker");
+        let request_id = "req-1";
+
+        let path = super::write_scheduled_setup_payload_file(&broker_home, request_id, b"first")
+            .expect("write payload");
+        let err = super::write_scheduled_setup_payload_file(&broker_home, request_id, b"second")
+            .expect_err("existing payload must fail closed");
+
+        assert_eq!(fs::read(&path).expect("read payload"), b"first");
+        assert_eq!(
+            extract_failure(&err).map(|failure| failure.code),
+            Some(SetupErrorCode::OrchestratorHelperLaunchFailed)
         );
     }
 
