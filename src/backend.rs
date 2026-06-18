@@ -17,9 +17,11 @@ use filesystem::{
 };
 #[cfg(all(test, windows))]
 use process::WindowsKillOnCloseJob;
-use process::spawn_local_command;
 #[cfg(test)]
-use process::{cleanup_child_after_setup_error, minimal_environment};
+use process::cleanup_child_after_setup_error;
+#[cfg(any(test, windows))]
+use process::minimal_environment;
+use process::spawn_local_command;
 use runtime::{
     RUNTIME_ROOT_MARKER, normalize_lexical, prepare_unique_runtime_root,
     runtime_marker_is_regular_file, validate_runtime_root_ancestors,
@@ -32,6 +34,30 @@ use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::process::Output;
 use std::time::Duration;
+#[cfg(windows)]
+use {
+    codex_protocol::models::PermissionProfile, codex_utils_absolute_path::AbsolutePathBuf,
+    std::collections::HashMap, std::os::windows::process::ExitStatusExt,
+};
+
+#[derive(Debug)]
+struct BackendUnavailableError {
+    reason: String,
+}
+
+impl std::fmt::Display for BackendUnavailableError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.reason)
+    }
+}
+
+impl std::error::Error for BackendUnavailableError {}
+
+pub(crate) fn backend_unavailable_reason(err: &io::Error) -> Option<&str> {
+    err.get_ref()?
+        .downcast_ref::<BackendUnavailableError>()
+        .map(|err| err.reason.as_str())
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CapabilityStatus {
@@ -201,6 +227,7 @@ pub struct PlatformSandboxPlan {
     private_setup_group_name: &'static str,
     private_setup_identity_artifacts: &'static str,
     private_setup_payload: Option<String>,
+    private_vendor_permission_profile: Option<String>,
     pub network_mode: &'static str,
     pub network_direct_egress: &'static str,
     pub network_managed_proxy: &'static str,
@@ -254,6 +281,7 @@ impl PlatformSandboxPlan {
             private_setup_group_name: "current-user",
             private_setup_identity_artifacts: "current-user",
             private_setup_payload: None,
+            private_vendor_permission_profile: None,
             network_mode: policy.network.mode.as_str(),
             network_direct_egress: "unmanaged",
             network_managed_proxy: "none",
@@ -494,6 +522,22 @@ impl PlatformSandboxPlan {
 
     pub fn is_sandbox_enforced(&self) -> bool {
         self.enforcement != "local-execution"
+    }
+
+    #[cfg(windows)]
+    fn vendor_permission_profile(&self) -> io::Result<PermissionProfile> {
+        let Some(permission_profile) = &self.private_vendor_permission_profile else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "sandboxed plan is missing vendor permission profile",
+            ));
+        };
+        serde_json::from_str(permission_profile).map_err(|err| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("invalid vendor permission profile: {err}"),
+            )
+        })
     }
 
     fn validate_runtime_roots_for_setup(&self) -> io::Result<()> {
@@ -822,8 +866,20 @@ impl WindowsReferenceBackend {
             .setup_identity_artifacts();
         let private_process_token = windows_policy.process.token.as_str();
         let private_process_job = windows_policy.process.job.as_str();
-        let private_setup_payload = WindowsVendorSandboxProfile::from_policy(policy)
-            .single_user_setup_payload(&runtime_root, cwd, &windows_setup_real_user());
+        let vendor_profile = WindowsVendorSandboxProfile::from_policy(policy);
+        let vendor_sandbox_home = vendor_sandbox_home(cwd);
+        let private_setup_payload = vendor_profile.single_user_setup_payload(
+            &vendor_sandbox_home,
+            cwd,
+            &windows_setup_real_user(),
+        );
+        #[cfg(windows)]
+        let private_vendor_permission_profile = vendor_profile
+            .permission_profile()
+            .ok()
+            .and_then(|profile| serde_json::to_string(&profile).ok());
+        #[cfg(not(windows))]
+        let private_vendor_permission_profile = None;
         let filesystem_write = windows_policy.filesystem.effective_write_roots();
 
         PlatformSandboxPlan {
@@ -856,6 +912,7 @@ impl WindowsReferenceBackend {
             private_setup_group_name,
             private_setup_identity_artifacts,
             private_setup_payload: private_setup_payload.map(|payload| payload.to_string()),
+            private_vendor_permission_profile,
             network_mode: windows_policy.network.guard.as_str(),
             network_direct_egress: windows_policy.network.direct_egress.as_str(),
             network_managed_proxy: windows_policy.network.managed_proxy.as_str(),
@@ -913,6 +970,20 @@ fn protected_filesystem_labels(policy: &SandboxPolicy) -> Vec<&'static str> {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct WindowsReferenceBackend;
 
+#[cfg(windows)]
+const WINDOWS_REFERENCE_SUPPORTED_FEATURES: &[BackendFeature] = &[
+    BackendFeature::FilesystemPolicy,
+    BackendFeature::RuntimeRoots,
+    BackendFeature::RuntimeEnvironment,
+    BackendFeature::ProcessIsolation,
+    BackendFeature::ProcessCleanup,
+    BackendFeature::DirectNetworkDeny,
+    BackendFeature::NetworkDisabled,
+    BackendFeature::NetworkProxy,
+    BackendFeature::ManagedProxy,
+];
+
+#[cfg(not(windows))]
 const WINDOWS_REFERENCE_SUPPORTED_FEATURES: &[BackendFeature] = &[
     BackendFeature::RuntimeRoots,
     BackendFeature::RuntimeEnvironment,
@@ -925,7 +996,11 @@ impl SandboxBackend for WindowsReferenceBackend {
     }
 
     fn status(&self) -> &'static str {
-        "scaffold"
+        if cfg!(windows) {
+            "reference"
+        } else {
+            "scaffold"
+        }
     }
 
     fn platform(&self) -> &'static str {
@@ -950,12 +1025,17 @@ impl SandboxBackend for WindowsReferenceBackend {
                 policy,
             ))
         } else {
-            let plan = self.fail_closed_plan(execution_id, cwd, policy);
-            Err(BackendError::unsupported_with_plan(
-                self,
-                policy,
-                Some(plan),
-            ))
+            let mut plan = self.fail_closed_plan(execution_id, cwd, policy);
+            if self.missing_features(policy).is_empty() {
+                plan.enforcement = "windows-sandbox";
+                Ok(plan)
+            } else {
+                Err(BackendError::unsupported_with_plan(
+                    self,
+                    policy,
+                    Some(plan),
+                ))
+            }
         }
     }
 
@@ -968,6 +1048,9 @@ impl SandboxBackend for WindowsReferenceBackend {
         env: &ExecutionEnv,
         timeout: Option<Duration>,
     ) -> io::Result<BackendExecutionOutput> {
+        if plan.is_sandbox_enforced() {
+            return execute_windows_sandbox_plan(plan, command, cwd, stdin, env, timeout);
+        }
         spawn_local_command(plan, command, cwd, stdin, env, timeout)
     }
 
@@ -975,17 +1058,159 @@ impl SandboxBackend for WindowsReferenceBackend {
         capabilities_json_for(
             self,
             &[
-                "Windows reference backend scaffold is present",
-                "Windows enforcement is intended to use a vendored upstream sandbox crate",
+                "Windows reference backend uses a vendored upstream sandbox crate",
                 "RunSeal-specific code remains a policy, plan, audit, and conformance adapter",
                 "runtime roots are created, marked, and cleaned with containment checks",
                 "runtime environment redirects are injected into child process environments",
                 "process cleanup is backed by Windows kill-on-close Job Objects",
-                "filesystem and network enforcement are not implemented yet",
-                "sandboxed policies fail closed until conformance tests prove enforcement",
+                "filesystem and network enforcement are delegated to the Windows sandbox boundary",
             ],
         )
     }
+}
+
+#[cfg(windows)]
+fn execute_windows_sandbox_plan(
+    plan: &PlatformSandboxPlan,
+    command: &[String],
+    cwd: &Path,
+    stdin: ExecutionStdin,
+    env: &ExecutionEnv,
+    timeout: Option<Duration>,
+) -> io::Result<BackendExecutionOutput> {
+    if !matches!(stdin, ExecutionStdin::Empty) {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "sandboxed Windows execution does not support stdin bytes yet",
+        ));
+    }
+
+    let _runtime_root = required_plan_path(plan.runtime_root.as_deref(), "runtime_root")?;
+    let vendor_sandbox_home = vendor_sandbox_home(cwd);
+    let workspace_root = AbsolutePathBuf::from_absolute_path_checked(cwd).map_err(|err| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid workspace root: {err}"),
+        )
+    })?;
+    let permission_profile = plan.vendor_permission_profile()?;
+    plan.prepare_runtime_roots()?;
+    prepare_vendor_sandbox_home(cwd, &vendor_sandbox_home)?;
+
+    let result =
+        codex_windows_sandbox::run_windows_sandbox_capture_for_permission_profile_elevated(
+            codex_windows_sandbox::ElevatedSandboxProfileCaptureRequest {
+                permission_profile: &permission_profile,
+                workspace_roots: &[workspace_root],
+                codex_home: &vendor_sandbox_home,
+                command: command.to_vec(),
+                cwd,
+                env_map: sandbox_environment(plan, env),
+                timeout_ms: timeout.map(duration_millis_u64),
+                cancellation: None,
+                use_private_desktop: false,
+                proxy_enforced: plan.network_managed_proxy == "required",
+                read_roots_override: None,
+                read_roots_include_platform_defaults: true,
+                write_roots_override: None,
+                deny_read_paths_override: &[],
+                deny_write_paths_override: &[],
+            },
+        )
+        .map_err(|err| {
+            if let Some(failure) = codex_windows_sandbox::extract_setup_failure(&err) {
+                return io::Error::other(BackendUnavailableError {
+                    reason: format!(
+                        "windows sandbox setup unavailable: {}: {}",
+                        failure.code.as_str(),
+                        codex_windows_sandbox::sanitize_setup_metric_tag_value(&failure.message)
+                    ),
+                });
+            }
+            io::Error::other(err.to_string())
+        });
+    let cleanup = plan.cleanup_runtime_roots();
+
+    let capture = match (result, cleanup) {
+        (Ok(capture), Ok(_)) => capture,
+        (Err(err), Ok(_)) => return Err(err),
+        (Ok(_), Err(err)) => return Err(err),
+        (Err(run_err), Err(cleanup_err)) => {
+            return Err(io::Error::other(format!(
+                "sandbox execution failed ({run_err}); runtime cleanup failed ({cleanup_err})"
+            )));
+        }
+    };
+
+    Ok(BackendExecutionOutput {
+        output: Output {
+            status: std::process::ExitStatus::from_raw(capture.exit_code as u32),
+            stdout: capture.stdout,
+            stderr: capture.stderr,
+        },
+        timed_out: capture.timed_out,
+    })
+}
+
+#[cfg(not(windows))]
+fn execute_windows_sandbox_plan(
+    plan: &PlatformSandboxPlan,
+    command: &[String],
+    cwd: &Path,
+    stdin: ExecutionStdin,
+    env: &ExecutionEnv,
+    timeout: Option<Duration>,
+) -> io::Result<BackendExecutionOutput> {
+    spawn_local_command(plan, command, cwd, stdin, env, timeout)
+}
+
+#[cfg(windows)]
+fn required_plan_path(value: Option<&str>, name: &'static str) -> io::Result<PathBuf> {
+    value.map(PathBuf::from).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("sandboxed plan is missing {name}"),
+        )
+    })
+}
+
+fn vendor_sandbox_home(cwd: &Path) -> PathBuf {
+    cwd.join(".runseal").join("sandbox")
+}
+
+#[cfg(windows)]
+fn prepare_vendor_sandbox_home(cwd: &Path, home: &Path) -> io::Result<()> {
+    let expected = normalize_lexical(&vendor_sandbox_home(cwd));
+    if normalize_lexical(home) != expected {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "refusing to prepare sandbox home outside planned workspace directory: {}",
+                home.display()
+            ),
+        ));
+    }
+    validate_runtime_root_ancestors(&expected, cwd, "prepare")?;
+    fs::create_dir_all(home)?;
+    validate_runtime_tree_has_no_symlinks(home, "prepare")
+}
+
+#[cfg(windows)]
+fn sandbox_environment(plan: &PlatformSandboxPlan, env: &ExecutionEnv) -> HashMap<String, String> {
+    let mut result = HashMap::new();
+    for (key, value) in minimal_environment(plan) {
+        result.insert(
+            key.to_string_lossy().into_owned(),
+            value.to_string_lossy().into_owned(),
+        );
+    }
+    result.extend(env.entries.iter().cloned());
+    result
+}
+
+#[cfg(windows)]
+fn duration_millis_u64(duration: Duration) -> u64 {
+    duration.as_millis().min(u128::from(u64::MAX)) as u64
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -1137,6 +1362,46 @@ fn compile_local_execution_or_unsupported(
 
 fn capabilities_json_for(backend: &dyn SandboxBackend, notes: &[&'static str]) -> Value {
     let supported_features = backend.supported_features();
+    let read_only = capability_status(
+        supported_features,
+        &[
+            BackendFeature::FilesystemPolicy,
+            BackendFeature::RuntimeRoots,
+            BackendFeature::RuntimeEnvironment,
+            BackendFeature::ProcessIsolation,
+            BackendFeature::ProcessCleanup,
+            BackendFeature::DirectNetworkDeny,
+            BackendFeature::NetworkDisabled,
+        ],
+    );
+    let workspace_write = capability_status(
+        supported_features,
+        &[
+            BackendFeature::FilesystemPolicy,
+            BackendFeature::RuntimeRoots,
+            BackendFeature::RuntimeEnvironment,
+            BackendFeature::ProcessIsolation,
+            BackendFeature::ProcessCleanup,
+            BackendFeature::DirectNetworkDeny,
+            BackendFeature::NetworkProxy,
+            BackendFeature::ManagedProxy,
+        ],
+    );
+    let network_disabled = capability_status(
+        supported_features,
+        &[
+            BackendFeature::DirectNetworkDeny,
+            BackendFeature::NetworkDisabled,
+        ],
+    );
+    let network_proxy = capability_status(
+        supported_features,
+        &[
+            BackendFeature::DirectNetworkDeny,
+            BackendFeature::NetworkProxy,
+            BackendFeature::ManagedProxy,
+        ],
+    );
     json!({
         "backend": backend.name(),
         "backend_status": backend.status(),
@@ -1157,17 +1422,31 @@ fn capabilities_json_for(backend: &dyn SandboxBackend, notes: &[&'static str]) -
             "otel_export": false,
         },
         "sandbox_levels": {
-            "read-only": CapabilityStatus::Unsupported.as_str(),
-            "workspace-contained": CapabilityStatus::Unsupported.as_str(),
-            "workspace-write": CapabilityStatus::Unsupported.as_str(),
+            "read-only": read_only,
+            "workspace-contained": read_only,
+            "workspace-write": workspace_write,
             "danger-full-access": CapabilityStatus::Supported.as_str(),
         },
         "network_modes": {
-            "disabled": CapabilityStatus::Unsupported.as_str(),
-            "proxy": CapabilityStatus::Unsupported.as_str(),
+            "disabled": network_disabled,
+            "proxy": network_proxy,
         },
         "notes": notes,
     })
+}
+
+fn capability_status(
+    supported_features: &[BackendFeature],
+    required_features: &[BackendFeature],
+) -> &'static str {
+    if required_features
+        .iter()
+        .all(|feature| supported_features.contains(feature))
+    {
+        CapabilityStatus::Supported.as_str()
+    } else {
+        CapabilityStatus::Unsupported.as_str()
+    }
 }
 
 fn missing_backend_features(
@@ -1296,6 +1575,28 @@ mod tests {
             .spawn()
     }
 
+    fn expected_windows_reference_supported_features() -> &'static [BackendFeature] {
+        if cfg!(windows) {
+            &[
+                BackendFeature::FilesystemPolicy,
+                BackendFeature::RuntimeRoots,
+                BackendFeature::RuntimeEnvironment,
+                BackendFeature::ProcessIsolation,
+                BackendFeature::ProcessCleanup,
+                BackendFeature::DirectNetworkDeny,
+                BackendFeature::NetworkDisabled,
+                BackendFeature::NetworkProxy,
+                BackendFeature::ManagedProxy,
+            ]
+        } else {
+            &[
+                BackendFeature::RuntimeRoots,
+                BackendFeature::RuntimeEnvironment,
+                BackendFeature::ProcessCleanup,
+            ]
+        }
+    }
+
     #[test]
     fn missing_features_excludes_supported_backend_features() {
         let cwd = PathBuf::from("/workspace");
@@ -1358,13 +1659,24 @@ mod tests {
         let cwd = PathBuf::from("/workspace");
         let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
 
-        let err = WindowsReferenceBackend
-            .compile_plan("exec_sandboxed", &cwd, &policy)
-            .unwrap_err();
-        let plan = err.plan.as_deref().unwrap();
+        let result = WindowsReferenceBackend.compile_plan("exec_sandboxed", &cwd, &policy);
+        #[cfg(windows)]
+        let plan = result.unwrap();
+        #[cfg(not(windows))]
+        let plan = {
+            let err = result.unwrap_err();
+            assert_eq!(err.code, "BACKEND_CAPABILITY_MISSING");
+            err.plan.map(|plan| *plan).unwrap()
+        };
 
-        assert_eq!(err.code, "BACKEND_CAPABILITY_MISSING");
-        assert_eq!(plan.enforcement, "fail-closed-preview");
+        assert_eq!(
+            plan.enforcement,
+            if cfg!(windows) {
+                "windows-sandbox"
+            } else {
+                "fail-closed-preview"
+            }
+        );
         assert_ne!(plan.enforcement, "local-execution");
     }
 
@@ -1435,11 +1747,7 @@ mod tests {
         assert_eq!(plan.enforcement, "fail-closed-preview");
         assert_eq!(
             WindowsReferenceBackend.supported_features(),
-            &[
-                BackendFeature::RuntimeRoots,
-                BackendFeature::RuntimeEnvironment,
-                BackendFeature::ProcessCleanup,
-            ]
+            expected_windows_reference_supported_features()
         );
         Ok(())
     }
@@ -1519,6 +1827,10 @@ mod tests {
             serde_json::from_str::<Value>(plan.private_setup_payload.as_deref().unwrap()).unwrap();
         assert_eq!(
             private_setup_payload["codex_home"],
+            json!(path_string(&cwd.join(".runseal").join("sandbox")))
+        );
+        assert_ne!(
+            private_setup_payload["codex_home"],
             json!(plan.runtime_root.as_ref().unwrap())
         );
         assert_ne!(
@@ -1560,11 +1872,7 @@ mod tests {
         assert_eq!(plan_json["setup"]["fail_closed_on_setup_error"], true);
         assert_eq!(
             WindowsReferenceBackend.supported_features(),
-            &[
-                BackendFeature::RuntimeRoots,
-                BackendFeature::RuntimeEnvironment,
-                BackendFeature::ProcessCleanup,
-            ]
+            expected_windows_reference_supported_features()
         );
         Ok(())
     }

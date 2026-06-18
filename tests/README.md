@@ -8,19 +8,16 @@ They are black-box protocol tests. `cargo test` builds and runs the local binary
 RUNSEAL_BIN=/path/to/runseal cargo test --test cli_contract --test protocol_contract --test filesystem_conformance
 ```
 
-CI runs the suite on Linux and Windows so platform selection, fail-closed behavior, and the Windows reference backend scaffold stay buildable before any capability is promoted.
+CI runs the suite on Linux and Windows so platform selection, fail-closed behavior, and the Windows reference backend stay buildable as capabilities are promoted.
 
 The tests are black-box by design:
 
 - CLI behavior through `runseal exec`.
 - Capability reporting through `runseal capabilities` and `getCapabilities`,
   without exposing private Windows account or setup identities.
-- Windows hosts select the Windows reference backend scaffold and still fail closed for unsupported sandbox levels.
+- Windows hosts select the Windows reference backend and run supported sandbox levels through the shared conformance tests.
 - macOS and Linux hosts select explicit experimental/community skeleton backends and still fail closed for unsupported sandbox levels.
-- Windows fail-closed errors include a `PlatformSandboxPlan` preview for runtime root, synthetic home, setup requirements, protected filesystem categories, process boundary state, and network guard planning.
-- Windows fail-closed setup creates and cleans planned runtime roots before returning unsupported.
-- Windows fail-closed cleanup goes through a single sandbox setup cleanup path so future filesystem rollback cannot be skipped.
-- Windows sandbox setup cleanup carries the setup-time filesystem rollback state through cleanup.
+- Windows sandbox plans include runtime root, synthetic home, setup requirements, protected filesystem categories, process boundary state, and network guard planning.
 - Windows filesystem ACL setup must bind rules to a single sandbox user restricted process identity before any rule can be applied.
 - Windows runtime roots can be reported as a verified single capability without making any sandbox level supported by itself.
 - Windows runtime environment redirects can be reported as a verified single capability without making any sandbox level supported by itself.

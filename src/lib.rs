@@ -9,7 +9,9 @@ mod stdin;
 mod windows;
 
 use audit::{create_audit_writer, write_audit_event_with_metadata};
-use backend::{ExecutionEnv, ExecutionStdin, SandboxBackend, active_backend};
+use backend::{
+    ExecutionEnv, ExecutionStdin, SandboxBackend, active_backend, backend_unavailable_reason,
+};
 use cli::{parse_exec_args, parse_policy_args};
 use error::RunSealError;
 use events::{
@@ -814,6 +816,14 @@ fn execute_command(
     let execution_output = match backend.execute_plan(&plan, command, cwd, stdin, &env, timeout) {
         Ok(output) => output,
         Err(err) => {
+            let unavailable_reason = if sandbox_enforced {
+                backend_unavailable_reason(&err).map(str::to_string)
+            } else {
+                None
+            };
+            let failure_reason = unavailable_reason
+                .as_deref()
+                .unwrap_or("execution failed to start");
             let failed = execution_event_now(
                 json!({
                     "type": "execution.failed",
@@ -822,12 +832,31 @@ fn execute_command(
                     "policy_hash": policy_hash,
                     "audit_path": audit_path,
                     "status": "failed",
-                    "reason": "execution failed to start",
+                    "reason": failure_reason,
                     "error": err.to_string(),
                 }),
                 &event_context,
             );
             write_audit_event_with_metadata(&mut audit, &failed, &metadata)?;
+
+            if let Some(reason) = unavailable_reason {
+                return Err(RunSealError::with_details(
+                    "BACKEND_UNAVAILABLE",
+                    reason,
+                    json!({
+                        "execution_id": ids.execution_id,
+                        "session_id": ids.session_id,
+                        "seal_id": ids.seal_id,
+                        "audit_path": audit_path,
+                        "backend": {
+                            "name": plan.backend,
+                            "status": plan.backend_status,
+                            "platform": plan.platform,
+                        },
+                        "platform_plan": plan.json(),
+                    }),
+                ));
+            }
 
             return Err(RunSealError::with_details(
                 "EXECUTION_FAILED_TO_START",

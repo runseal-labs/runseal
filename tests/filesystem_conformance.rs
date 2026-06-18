@@ -111,6 +111,28 @@ fn assert_backend_missing(response: &Value, root: &Path) -> Result<()> {
     assert_backend_missing_features(response, root, &expected_features)
 }
 
+fn assert_backend_unavailable(response: &Value, root: &Path) -> Result<()> {
+    assert_eq!(response["error"]["data"]["code"], "BACKEND_UNAVAILABLE");
+    assert_no_private_windows_setup_terms(response);
+    let audit_path = response["error"]["data"]["audit_path"]
+        .as_str()
+        .context("unavailable response must include audit_path")?;
+    let audit_jsonl = fs::read_to_string(root.join(audit_path))?;
+    let audit_events = audit_jsonl
+        .lines()
+        .map(|line| serde_json::from_str(line).context("audit line must be JSON"))
+        .collect::<Result<Vec<Value>>>()?;
+    assert_no_private_windows_setup_terms(&json!(&audit_events));
+    assert!(audit_events.iter().any(|event| {
+        event["type"] == "execution.failed"
+            && event["reason"]
+                .as_str()
+                .unwrap_or_default()
+                .starts_with("windows sandbox setup unavailable")
+    }));
+    Ok(())
+}
+
 fn expected_missing_features(additional: &[&'static str]) -> Vec<&'static str> {
     let mut features = vec!["filesystem_policy"];
     if !cfg!(windows) {
@@ -199,6 +221,10 @@ fn is_backend_missing(response: &Value) -> bool {
     response["error"]["data"]["code"] == "BACKEND_CAPABILITY_MISSING"
 }
 
+fn is_backend_unavailable(response: &Value) -> bool {
+    response["error"]["data"]["code"] == "BACKEND_UNAVAILABLE"
+}
+
 #[test]
 fn workspace_write_allows_workspace_write_when_supported_or_fails_closed() -> Result<()> {
     let tmp = TempDir::new()?;
@@ -210,6 +236,11 @@ fn workspace_write_allows_workspace_write_when_supported_or_fails_closed() -> Re
 
     if is_backend_missing(&response) {
         assert_backend_missing(&response, &workspace)?;
+        assert!(!target.exists());
+        return Ok(());
+    }
+    if is_backend_unavailable(&response) {
+        assert_backend_unavailable(&response, &workspace)?;
         assert!(!target.exists());
         return Ok(());
     }
@@ -234,6 +265,11 @@ fn workspace_write_denies_external_write_when_supported_or_fails_closed() -> Res
         assert!(!outside.exists());
         return Ok(());
     }
+    if is_backend_unavailable(&response) {
+        assert_backend_unavailable(&response, &workspace)?;
+        assert!(!outside.exists());
+        return Ok(());
+    }
 
     assert_eq!(response["result"]["status"], "finished");
     assert_ne!(response["result"]["exit_code"], 0);
@@ -252,6 +288,11 @@ fn read_only_denies_workspace_write_when_supported_or_fails_closed() -> Result<(
 
     if is_backend_missing(&response) {
         assert_backend_missing(&response, &workspace)?;
+        assert!(!target.exists());
+        return Ok(());
+    }
+    if is_backend_unavailable(&response) {
+        assert_backend_unavailable(&response, &workspace)?;
         assert!(!target.exists());
         return Ok(());
     }
@@ -274,6 +315,10 @@ fn workspace_contained_denies_external_read_when_supported_or_fails_closed() -> 
 
     if is_backend_missing(&response) {
         assert_backend_missing(&response, &workspace)?;
+        return Ok(());
+    }
+    if is_backend_unavailable(&response) {
+        assert_backend_unavailable(&response, &workspace)?;
         return Ok(());
     }
 
@@ -304,6 +349,11 @@ fn workspace_write_protects_workspace_metadata_when_supported_or_fails_closed() 
             assert!(!target.exists());
             continue;
         }
+        if is_backend_unavailable(&response) {
+            assert_backend_unavailable(&response, &workspace)?;
+            assert!(!target.exists());
+            continue;
+        }
 
         assert_eq!(response["result"]["status"], "finished");
         assert_ne!(response["result"]["exit_code"], 0);
@@ -323,6 +373,10 @@ fn network_disabled_blocks_direct_egress_when_supported_or_fails_closed() -> Res
     if is_backend_missing(&response) {
         let expected_features = expected_missing_features(&["network_disabled"]);
         assert_backend_missing_features(&response, &workspace, &expected_features)?;
+        return Ok(());
+    }
+    if is_backend_unavailable(&response) {
+        assert_backend_unavailable(&response, &workspace)?;
         return Ok(());
     }
 
@@ -348,6 +402,10 @@ fn network_proxy_blocks_direct_egress_when_supported_or_fails_closed() -> Result
     if is_backend_missing(&response) {
         let expected_features = expected_missing_features(&["network_proxy", "managed_proxy"]);
         assert_backend_missing_features(&response, &workspace, &expected_features)?;
+        return Ok(());
+    }
+    if is_backend_unavailable(&response) {
+        assert_backend_unavailable(&response, &workspace)?;
         return Ok(());
     }
 

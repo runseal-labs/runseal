@@ -131,7 +131,7 @@ fn expected_backend_name() -> &'static str {
 
 fn expected_backend_status() -> &'static str {
     if cfg!(windows) {
-        "scaffold"
+        "reference"
     } else if cfg!(target_os = "macos") {
         "experimental"
     } else if cfg!(target_os = "linux") {
@@ -151,6 +151,18 @@ fn expected_runtime_roots_supported() -> bool {
 
 fn expected_runtime_environment_supported() -> bool {
     cfg!(windows)
+}
+
+fn expected_windows_sandbox_supported() -> bool {
+    cfg!(windows)
+}
+
+fn expected_status(supported: bool) -> &'static str {
+    if supported {
+        "supported"
+    } else {
+        "unsupported"
+    }
 }
 
 fn assert_no_private_windows_setup_terms(text: &str) {
@@ -217,7 +229,10 @@ fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
     assert_eq!(payload["backend_status"], expected_backend_status());
     assert!(payload["platform"].as_str().is_some());
     assert_eq!(payload["features"]["local_execution"], true);
-    assert_eq!(payload["features"]["filesystem_policy"], false);
+    assert_eq!(
+        payload["features"]["filesystem_policy"],
+        expected_windows_sandbox_supported()
+    );
     assert_eq!(
         payload["features"]["runtime_roots"],
         expected_runtime_roots_supported()
@@ -226,17 +241,32 @@ fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
         payload["features"]["runtime_environment"],
         expected_runtime_environment_supported()
     );
-    assert_eq!(payload["features"]["process_isolation"], false);
+    assert_eq!(
+        payload["features"]["process_isolation"],
+        expected_windows_sandbox_supported()
+    );
     assert_eq!(
         payload["features"]["process_cleanup"],
         expected_process_cleanup_supported()
     );
-    assert_eq!(payload["features"]["direct_network_deny"], false);
-    assert_eq!(payload["features"]["managed_proxy"], false);
+    assert_eq!(
+        payload["features"]["direct_network_deny"],
+        expected_windows_sandbox_supported()
+    );
+    assert_eq!(
+        payload["features"]["managed_proxy"],
+        expected_windows_sandbox_supported()
+    );
     assert_eq!(payload["features"]["audit_jsonl"], true);
     assert_eq!(payload["sandbox_levels"]["danger-full-access"], "supported");
-    assert_eq!(payload["sandbox_levels"]["read-only"], "unsupported");
-    assert_eq!(payload["network_modes"]["proxy"], "unsupported");
+    assert_eq!(
+        payload["sandbox_levels"]["read-only"],
+        expected_status(expected_windows_sandbox_supported())
+    );
+    assert_eq!(
+        payload["network_modes"]["proxy"],
+        expected_status(expected_windows_sandbox_supported())
+    );
     assert_no_private_windows_setup_terms(&payload.to_string());
     Ok(())
 }
@@ -435,7 +465,7 @@ fn exec_json_returns_execution_result() -> Result<()> {
 }
 
 #[test]
-fn sandboxed_exec_cli_fails_closed_without_setup_details() -> Result<()> {
+fn sandboxed_exec_cli_uses_backend_or_reports_unavailable() -> Result<()> {
     let tmp = TempDir::new()?;
     let cwd = tmp.path().to_string_lossy().to_string();
     let output = run_cli(&[
@@ -450,6 +480,36 @@ fn sandboxed_exec_cli_fails_closed_without_setup_details() -> Result<()> {
         "-c",
         "print('must not run')",
     ])?;
+
+    if cfg!(windows) {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_no_private_windows_setup_terms(&stderr);
+        if output.status.success() {
+            let payload = stdout_json(&output)?;
+            assert_eq!(payload["sandbox"]["enforced"], true);
+            assert_eq!(payload["platform_plan"]["enforcement"], "windows-sandbox");
+            assert_no_private_windows_setup_terms(&payload.to_string());
+            let audit_path = payload["audit_path"]
+                .as_str()
+                .context("ExecutionResult must include audit_path")?;
+            let audit_jsonl = fs::read_to_string(tmp.path().join(audit_path))?;
+            assert_no_private_windows_setup_terms(&audit_jsonl);
+        } else {
+            assert!(output.stdout.is_empty());
+            assert!(
+                stderr.contains("windows sandbox setup unavailable"),
+                "{stderr}"
+            );
+            let audit_dir = tmp.path().join(".runseal").join("audit");
+            let audit_files = fs::read_dir(&audit_dir)
+                .with_context(|| format!("audit dir must exist at {}", audit_dir.display()))?
+                .collect::<Result<Vec<_>, _>>()?;
+            assert_eq!(audit_files.len(), 1);
+            let audit_jsonl = fs::read_to_string(audit_files[0].path())?;
+            assert_no_private_windows_setup_terms(&audit_jsonl);
+        }
+        return Ok(());
+    }
 
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());

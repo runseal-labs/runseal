@@ -8,13 +8,13 @@ RunSeal is **not** a cloud VM sandbox, a Docker Desktop replacement, or a microV
 
 ## Status
 
-Phase 0 implementation with the first Phase 1/2 foundations. The repository contains a buildable CLI/RPC shell, standard policy profile normalization, canonical policy hashes, backend capability reporting, Windows reference backend scaffolding, `PlatformSandboxPlan` summaries, JSONL audit output, and black-box conformance tests.
+Phase 0 implementation with the first Phase 1/2 foundations. The repository contains a buildable CLI/RPC shell, standard policy profile normalization, canonical policy hashes, backend capability reporting, a Windows reference backend, `PlatformSandboxPlan` summaries, JSONL audit output, and black-box conformance tests.
 
-Current execution support is intentionally narrow: only explicit `danger-full-access` runs as local, non-sandboxed execution. Sandboxed policies such as `read-only`, `workspace-contained`, and `workspace-write` must fail closed until a platform backend can enforce them.
+Current execution support is intentionally narrow: explicit `danger-full-access` runs as local, non-sandboxed execution. On Windows, sandboxed policies such as `read-only`, `workspace-contained`, and `workspace-write` execute through the reference backend. Other platforms still fail closed for sandboxed policies until a backend can enforce them.
 
-On Windows, fail-closed sandbox requests include a `PlatformSandboxPlan` preview for runtime root, synthetic home, profile root, temp root, setup requirements, protected filesystem categories, process boundary state, network guard state, and policy path planning. Runtime root creation/cleanup, runtime environment redirects, and process cleanup are backed by verified Windows paths, but sandboxed policies remain unsupported until every required filesystem, process isolation, and network capability is implemented and covered by conformance tests.
+On Windows, sandbox requests include a `PlatformSandboxPlan` for runtime root, synthetic home, profile root, temp root, setup requirements, protected filesystem categories, process boundary state, network guard state, and policy path planning. Runtime root creation/cleanup, runtime environment redirects, process cleanup, filesystem enforcement, process isolation, and direct network deny/proxy guard enforcement are covered by the Windows reference path.
 
-The Windows enforcement baseline is intended to come through a vendored upstream Windows sandbox crate. RunSeal-specific code should stay at the adapter layer: policy normalization, `PlatformSandboxPlan` mapping, audit events, capability reporting, and conformance gates. Low-level ACL, restricted-token, WFP, setup-helper, and command-runner code should not be reimplemented in this crate.
+The Windows enforcement baseline comes through a vendored upstream Windows sandbox crate. RunSeal-specific code should stay at the adapter layer: policy normalization, `PlatformSandboxPlan` mapping, audit events, capability reporting, and conformance gates. Low-level ACL, restricted-token, WFP, setup-helper, and command-runner code should not be reimplemented in this crate.
 
 On macOS and Linux, RunSeal reports explicit experimental/community skeleton backends. They support only explicit `danger-full-access` local execution until contributed backend implementations pass the shared conformance gates.
 

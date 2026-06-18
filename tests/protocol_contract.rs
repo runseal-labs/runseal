@@ -160,7 +160,7 @@ fn expected_backend_name() -> &'static str {
 
 fn expected_backend_status() -> &'static str {
     if cfg!(windows) {
-        "scaffold"
+        "reference"
     } else if cfg!(target_os = "macos") {
         "experimental"
     } else if cfg!(target_os = "linux") {
@@ -180,6 +180,18 @@ fn expected_runtime_roots_supported() -> bool {
 
 fn expected_runtime_environment_supported() -> bool {
     cfg!(windows)
+}
+
+fn expected_windows_sandbox_supported() -> bool {
+    cfg!(windows)
+}
+
+fn expected_status(supported: bool) -> &'static str {
+    if supported {
+        "supported"
+    } else {
+        "unsupported"
+    }
 }
 
 fn expected_missing_features(additional: &[&'static str]) -> Vec<&'static str> {
@@ -215,6 +227,21 @@ fn assert_no_private_windows_setup_terms(value: &Value) {
             "public protocol must not expose private Windows setup term {private_term}"
         );
     }
+}
+
+fn assert_backend_unavailable(response: &Value, root: &std::path::Path) -> Result<()> {
+    assert_eq!(response["error"]["data"]["code"], "BACKEND_UNAVAILABLE");
+    assert_eq!(
+        response["error"]["data"]["backend"]["name"],
+        expected_backend_name()
+    );
+    assert_no_private_windows_setup_terms(response);
+    let audit_path = response["error"]["data"]["audit_path"]
+        .as_str()
+        .context("unavailable response must return audit_path")?;
+    let audit_events = read_audit_events(root, audit_path)?;
+    assert_no_private_windows_setup_terms(&json!(audit_events));
+    Ok(())
 }
 
 #[test]
@@ -269,8 +296,14 @@ fn get_capabilities_rpc_contract() -> Result<()> {
     assert_eq!(payload["backend_status"], expected_backend_status());
     assert!(payload["platform"].as_str().is_some());
     assert_eq!(payload["sandbox_levels"]["danger-full-access"], "supported");
-    assert_eq!(payload["sandbox_levels"]["workspace-write"], "unsupported");
-    assert_eq!(payload["network_modes"]["disabled"], "unsupported");
+    assert_eq!(
+        payload["sandbox_levels"]["workspace-write"],
+        expected_status(expected_windows_sandbox_supported())
+    );
+    assert_eq!(
+        payload["network_modes"]["disabled"],
+        expected_status(expected_windows_sandbox_supported())
+    );
     assert_eq!(
         payload["features"]["runtime_roots"],
         expected_runtime_roots_supported()
@@ -279,13 +312,22 @@ fn get_capabilities_rpc_contract() -> Result<()> {
         payload["features"]["runtime_environment"],
         expected_runtime_environment_supported()
     );
-    assert_eq!(payload["features"]["process_isolation"], false);
+    assert_eq!(
+        payload["features"]["process_isolation"],
+        expected_windows_sandbox_supported()
+    );
     assert_eq!(
         payload["features"]["process_cleanup"],
         expected_process_cleanup_supported()
     );
-    assert_eq!(payload["features"]["direct_network_deny"], false);
-    assert_eq!(payload["features"]["managed_proxy"], false);
+    assert_eq!(
+        payload["features"]["direct_network_deny"],
+        expected_windows_sandbox_supported()
+    );
+    assert_eq!(
+        payload["features"]["managed_proxy"],
+        expected_windows_sandbox_supported()
+    );
     assert_eq!(payload["features"]["audit_jsonl"], true);
     assert_no_private_windows_setup_terms(payload);
     Ok(())
@@ -1511,7 +1553,7 @@ fn inline_policy_rejects_unsafe_filesystem_paths() -> Result<()> {
 }
 
 #[test]
-fn sandboxed_policy_without_backend_fails_closed() -> Result<()> {
+fn sandboxed_policy_uses_platform_backend_or_reports_unavailable() -> Result<()> {
     let tmp = TempDir::new()?;
     let output = run_rpc(&rpc_request(
         "execute",
@@ -1532,6 +1574,23 @@ fn sandboxed_policy_without_backend_fails_closed() -> Result<()> {
         .iter()
         .find(|message| message.get("id") == Some(&json!(1)))
         .unwrap();
+
+    if cfg!(windows) {
+        if response.get("error").is_some() {
+            assert_backend_unavailable(response, tmp.path())?;
+        } else {
+            assert_eq!(response["result"]["status"], "finished");
+            assert_eq!(response["result"]["exit_code"], 0);
+            assert_eq!(response["result"]["sandbox"]["enforced"], true);
+            assert_eq!(
+                response["result"]["platform_plan"]["enforcement"],
+                "windows-sandbox"
+            );
+            assert_no_private_windows_setup_terms(response);
+        }
+        return Ok(());
+    }
+
     assert_eq!(
         response["error"]["data"]["code"],
         "BACKEND_CAPABILITY_MISSING"
@@ -1556,106 +1615,6 @@ fn sandboxed_policy_without_backend_fails_closed() -> Result<()> {
             .any(|event| event["type"] == "sandbox.backend_capability"
                 && event["decision"] == "unsupported")
     );
-    if cfg!(windows) {
-        let plan = &response["error"]["data"]["platform_plan"];
-        assert_eq!(plan["enforcement"], "fail-closed-preview");
-        assert_eq!(plan["sandbox_level"], "read-only");
-        assert_eq!(plan["network"]["mode"], "disabled");
-        assert_eq!(plan["network"]["direct_egress"], "deny");
-        assert_eq!(plan["network"]["managed_proxy"], "none");
-        assert_eq!(plan["process"]["boundary"], "restricted-local-process");
-        assert_eq!(plan["process"]["identity"], "low-privilege");
-        assert_eq!(plan["process"]["cleanup"], "process-tree");
-        assert_eq!(plan["filesystem"]["protected"], json!([]));
-        assert_eq!(plan["setup"]["requires_runtime_roots"], true);
-        assert_eq!(plan["setup"]["requires_runtime_environment"], true);
-        assert_eq!(plan["setup"]["requires_runtime_cleanup"], true);
-        assert_eq!(plan["setup"]["requires_network_guard"], true);
-        assert_eq!(plan["setup"]["requires_managed_proxy"], false);
-        assert_eq!(plan["setup"]["requires_process_boundary"], true);
-        assert_eq!(plan["setup"]["fail_closed_on_setup_error"], true);
-        assert_no_private_windows_setup_terms(plan);
-        assert_eq!(
-            plan["required_backend_features"],
-            json!([
-                "filesystem_policy",
-                "runtime_roots",
-                "runtime_environment",
-                "process_isolation",
-                "process_cleanup",
-                "direct_network_deny",
-                "network_disabled"
-            ])
-        );
-        assert!(
-            plan["runtime_root"]
-                .as_str()
-                .unwrap_or_default()
-                .contains(".runseal")
-        );
-        assert!(plan["profile_root"].as_str().is_some());
-        assert!(plan["synthetic_home"].as_str().is_some());
-        assert!(plan["temp_root"].as_str().is_some());
-        let runtime_env = &plan["environment"]["runtime"];
-        assert_eq!(runtime_env["RUNSEAL_HOME"], plan["synthetic_home"]);
-        assert_eq!(runtime_env["RUNSEAL_TMP"], plan["temp_root"]);
-        assert_eq!(runtime_env["HOME"], plan["synthetic_home"]);
-        assert_eq!(runtime_env["USERPROFILE"], plan["profile_root"]);
-        assert_eq!(runtime_env["TEMP"], plan["temp_root"]);
-        assert_eq!(runtime_env["TMP"], plan["temp_root"]);
-        assert!(
-            runtime_env["APPDATA"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("AppData")
-        );
-        assert!(
-            runtime_env["LOCALAPPDATA"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("AppData")
-        );
-        let write_roots = plan["filesystem"]["write"]
-            .as_array()
-            .expect("read-only write roots must be an array");
-        assert!(!write_roots.iter().any(|root| root == &plan["cwd"]));
-        for root in [
-            &plan["runtime_root"],
-            &plan["profile_root"],
-            &plan["synthetic_home"],
-            &plan["temp_root"],
-        ] {
-            assert!(
-                write_roots.iter().any(|write_root| write_root == root),
-                "read-only preview write roots must include runtime root {root}"
-            );
-        }
-        assert!(
-            plan["filesystem"]["write"]
-                .as_array()
-                .expect("read-only write roots must be an array")
-                .iter()
-                .all(Value::is_string)
-        );
-        let runtime_root = PathBuf::from(
-            plan["runtime_root"]
-                .as_str()
-                .expect("runtime root must be a string"),
-        );
-        assert!(
-            !runtime_root.exists(),
-            "runtime root must be cleaned after fail-closed setup: {}",
-            runtime_root.display()
-        );
-        assert!(audit_events
-            .iter()
-            .any(|event| event["type"] == "sandbox.prepared" && event["decision"] == "prepared"));
-        assert!(
-            audit_events
-                .iter()
-                .any(|event| event["type"] == "sandbox.cleanup" && event["decision"] == "cleaned")
-        );
-    }
     assert!(
         messages
             .iter()
@@ -1686,13 +1645,16 @@ fn workspace_contained_plan_reports_profile_protection_without_private_paths() -
         .iter()
         .find(|message| message.get("id") == Some(&json!(1)))
         .unwrap();
-    assert_eq!(
-        response["error"]["data"]["code"],
-        "BACKEND_CAPABILITY_MISSING"
-    );
 
     if cfg!(windows) {
-        let protected = &response["error"]["data"]["platform_plan"]["filesystem"]["protected"];
+        let plan = if response.get("error").is_some() {
+            assert_backend_unavailable(response, tmp.path())?;
+            &response["error"]["data"]["platform_plan"]
+        } else {
+            assert_eq!(response["result"]["sandbox"]["enforced"], true);
+            &response["result"]["platform_plan"]
+        };
+        let protected = &plan["filesystem"]["protected"];
         assert_eq!(
             protected,
             &json!(["workspace_metadata", "host_profile", "credential_roots"])
@@ -1704,7 +1666,13 @@ fn workspace_contained_plan_reports_profile_protection_without_private_paths() -
                 .iter()
                 .all(Value::is_string)
         );
+        return Ok(());
     }
+
+    assert_eq!(
+        response["error"]["data"]["code"],
+        "BACKEND_CAPABILITY_MISSING"
+    );
     Ok(())
 }
 
