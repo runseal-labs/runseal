@@ -199,6 +199,22 @@ fn expected_missing_features(additional: &[&'static str]) -> Vec<&'static str> {
     features
 }
 
+fn assert_no_private_windows_setup_terms(value: &Value) {
+    let public_payload = value.to_string();
+    for private_term in [
+        "single-sandbox-user",
+        "restricted-token",
+        "kill-on-close-job",
+        "offline",
+        "online",
+    ] {
+        assert!(
+            !public_payload.contains(private_term),
+            "public protocol must not expose private Windows setup term {private_term}"
+        );
+    }
+}
+
 #[test]
 fn rpc_missing_binary_is_explicit_red_state() {
     if runseal_bin().exists() {
@@ -269,19 +285,7 @@ fn get_capabilities_rpc_contract() -> Result<()> {
     assert_eq!(payload["features"]["direct_network_deny"], false);
     assert_eq!(payload["features"]["managed_proxy"], false);
     assert_eq!(payload["features"]["audit_jsonl"], true);
-    let public_payload = payload.to_string();
-    for private_term in [
-        "single-sandbox-user",
-        "restricted-token",
-        "kill-on-close-job",
-        "offline",
-        "online",
-    ] {
-        assert!(
-            !public_payload.contains(private_term),
-            "capabilities must not expose private Windows setup term {private_term}"
-        );
-    }
+    assert_no_private_windows_setup_terms(payload);
     Ok(())
 }
 
@@ -1117,6 +1121,7 @@ fn sandboxed_policy_without_backend_fails_closed() -> Result<()> {
         assert_eq!(plan["setup"]["requires_managed_proxy"], false);
         assert_eq!(plan["setup"]["requires_process_boundary"], true);
         assert_eq!(plan["setup"]["fail_closed_on_setup_error"], true);
+        assert_no_private_windows_setup_terms(plan);
         assert_eq!(
             plan["required_backend_features"],
             json!([
