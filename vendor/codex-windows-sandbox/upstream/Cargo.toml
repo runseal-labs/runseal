@@ -6,9 +6,6 @@ name = "codex-windows-sandbox"
 publish = false
 version = "0.0.0"
 
-[workspace]
-resolver = "2"
-
 [lib]
 name = "codex_windows_sandbox"
 path = "lib.rs"

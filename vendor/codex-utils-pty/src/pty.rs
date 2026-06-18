@@ -15,21 +15,19 @@ use std::path::Path;
 use std::process::Command as StdCommand;
 #[cfg(unix)]
 use std::process::Stdio;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use anyhow::Result;
+use portable_pty::CommandBuilder;
 #[cfg(not(windows))]
 use portable_pty::native_pty_system;
-use portable_pty::CommandBuilder;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
-#[cfg(unix)]
-use crate::process::exit_code_from_status;
 use crate::process::ChildTerminator;
 use crate::process::ProcessHandle;
 use crate::process::ProcessSignal;
@@ -37,6 +35,8 @@ use crate::process::PtyHandles;
 use crate::process::PtyMasterHandle;
 use crate::process::SpawnedProcess;
 use crate::process::TerminalSize;
+#[cfg(unix)]
+use crate::process::exit_code_from_status;
 
 /// Returns true when ConPTY support is available (Windows only).
 #[cfg(windows)]

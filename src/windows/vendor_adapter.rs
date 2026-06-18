@@ -1,4 +1,13 @@
 use crate::policy::{NetworkMode, SandboxPolicy};
+#[cfg(windows)]
+use codex_protocol::models::{ManagedFileSystemPermissions, PermissionProfile};
+#[cfg(windows)]
+use codex_protocol::permissions::{
+    FileSystemAccessMode, FileSystemPath, FileSystemSandboxEntry, FileSystemSandboxPolicy,
+    NetworkSandboxPolicy,
+};
+#[cfg(windows)]
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -101,6 +110,25 @@ impl WindowsVendorSandboxProfile {
         }
     }
 
+    #[cfg(windows)]
+    pub(crate) fn permission_profile(&self) -> Result<PermissionProfile, String> {
+        let Self::Managed { filesystem, .. } = self else {
+            return Ok(PermissionProfile::Disabled);
+        };
+
+        let entries = filesystem
+            .entries
+            .iter()
+            .map(codex_filesystem_entry)
+            .collect::<Result<Vec<_>, _>>()?;
+        let file_system = FileSystemSandboxPolicy::restricted(entries);
+
+        Ok(PermissionProfile::Managed {
+            file_system: ManagedFileSystemPermissions::from_sandbox_policy(&file_system),
+            network: NetworkSandboxPolicy::Restricted,
+        })
+    }
+
     pub(crate) fn sandbox_user_model(&self) -> Option<WindowsVendorSandboxUserModel> {
         match self {
             Self::Disabled => None,
@@ -134,6 +162,10 @@ impl WindowsVendorSandboxProfile {
         else {
             return None;
         };
+        #[cfg(windows)]
+        if self.permission_profile().is_err() {
+            return None;
+        }
 
         Some(json!({
             "version": SETUP_PAYLOAD_VERSION,
@@ -150,6 +182,27 @@ impl WindowsVendorSandboxProfile {
             "mode": "full",
             "refresh_only": false,
         }))
+    }
+}
+
+#[cfg(windows)]
+fn codex_filesystem_entry(
+    entry: &WindowsVendorFilesystemEntry,
+) -> Result<FileSystemSandboxEntry, String> {
+    let path = AbsolutePathBuf::from_absolute_path_checked(Path::new(&entry.path))
+        .map_err(|err| format!("invalid filesystem path {}: {err}", entry.path))?;
+    Ok(FileSystemSandboxEntry {
+        path: FileSystemPath::Path { path },
+        access: codex_access_mode(entry.access),
+    })
+}
+
+#[cfg(windows)]
+fn codex_access_mode(access: WindowsVendorFilesystemAccess) -> FileSystemAccessMode {
+    match access {
+        WindowsVendorFilesystemAccess::Read => FileSystemAccessMode::Read,
+        WindowsVendorFilesystemAccess::Write => FileSystemAccessMode::Write,
+        WindowsVendorFilesystemAccess::Deny => FileSystemAccessMode::Deny,
     }
 }
 
@@ -308,6 +361,62 @@ mod tests {
         assert!(profile.write_roots().is_empty());
         assert!(profile.deny_roots().is_empty());
         assert_eq!(profile.single_user_setup_payload(&cwd, &cwd, "User"), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn managed_profile_builds_codex_windows_permissions() {
+        let cwd = PathBuf::from("C:/workspace");
+        let policy = match normalize_policy(&json!("workspace-write"), &cwd, None) {
+            Ok(policy) => policy,
+            Err(err) => panic!("workspace-write policy must normalize: {}", err.reason),
+        };
+        let profile = WindowsVendorSandboxProfile::from_policy(&policy);
+        let permission_profile = match profile.permission_profile() {
+            Ok(permission_profile) => permission_profile,
+            Err(err) => panic!("vendor permission profile must build: {err}"),
+        };
+        let workspace_root = match AbsolutePathBuf::from_absolute_path_checked(&cwd) {
+            Ok(path) => path,
+            Err(err) => panic!("workspace root must be absolute: {err}"),
+        };
+        if let Err(err) =
+            codex_windows_sandbox::ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_workspace_roots(
+                &permission_profile,
+                &[workspace_root],
+            )
+        {
+            panic!("codex windows sandbox permissions must resolve: {err}");
+        }
+        let (file_system, network) = permission_profile.to_runtime_permissions();
+
+        assert_eq!(network, NetworkSandboxPolicy::Restricted);
+        assert_eq!(file_system.entries.len(), 5);
+        assert_eq!(
+            file_system
+                .entries
+                .iter()
+                .filter(|entry| entry.access == FileSystemAccessMode::Write)
+                .count(),
+            1
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn disabled_profile_builds_disabled_codex_permission_profile() {
+        let cwd = PathBuf::from("C:/workspace");
+        let policy = match normalize_policy(&json!("danger-full-access"), &cwd, None) {
+            Ok(policy) => policy,
+            Err(err) => panic!("danger-full-access policy must normalize: {}", err.reason),
+        };
+        let profile = WindowsVendorSandboxProfile::from_policy(&policy);
+        let permission_profile = match profile.permission_profile() {
+            Ok(permission_profile) => permission_profile,
+            Err(err) => panic!("vendor permission profile must build: {err}"),
+        };
+
+        assert_eq!(permission_profile, PermissionProfile::Disabled);
     }
 
     #[test]

@@ -49,8 +49,8 @@ mod procthreadattr;
 mod psuedocon;
 
 pub use conpty::ConPtySystem;
-pub use psuedocon::conpty_supported;
 pub use psuedocon::PsuedoCon;
+pub use psuedocon::conpty_supported;
 
 #[derive(Debug)]
 pub struct WinChild {
@@ -143,11 +143,7 @@ impl Child for WinChild {
 
     fn process_id(&self) -> Option<u32> {
         let res = unsafe { GetProcessId(self.proc.lock().unwrap().as_raw_handle() as _) };
-        if res == 0 {
-            None
-        } else {
-            Some(res)
-        }
+        if res == 0 { None } else { Some(res) }
     }
 
     fn as_raw_handle(&self) -> Option<std::os::windows::io::RawHandle> {

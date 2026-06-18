@@ -92,12 +92,11 @@ impl AbsolutePathBuf {
 }
 
 fn normalize_path_for_platform(path: &Path) -> Cow<'_, Path> {
-    if cfg!(windows) {
-        if let Some(path) = path.to_str() {
-            if let Some(normalized) = normalize_windows_device_path(path) {
-                return Cow::Owned(dunce::simplified(Path::new(&normalized)).to_path_buf());
-            }
-        }
+    if cfg!(windows)
+        && let Some(path) = path.to_str()
+        && let Some(normalized) = normalize_windows_device_path(path)
+    {
+        return Cow::Owned(dunce::simplified(Path::new(&normalized)).to_path_buf());
     }
     Cow::Owned(dunce::simplified(path).to_path_buf())
 }

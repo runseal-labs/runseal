@@ -3,9 +3,9 @@ use std::io;
 #[cfg(unix)]
 use std::os::fd::RawFd;
 use std::process::ExitStatus;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::atomic::AtomicBool;
 
 use anyhow::anyhow;
 use portable_pty::MasterPty;
@@ -161,10 +161,10 @@ impl ProcessHandle {
 
     /// Returns a channel sender for writing raw bytes to the child stdin.
     pub fn writer_sender(&self) -> mpsc::Sender<Vec<u8>> {
-        if let Ok(writer_tx) = self.writer_tx.lock() {
-            if let Some(writer_tx) = writer_tx.as_ref() {
-                return writer_tx.clone();
-            }
+        if let Ok(writer_tx) = self.writer_tx.lock()
+            && let Some(writer_tx) = writer_tx.as_ref()
+        {
+            return writer_tx.clone();
         }
 
         let (writer_tx, writer_rx) = mpsc::channel(1);
@@ -219,10 +219,10 @@ impl ProcessHandle {
     /// Attempts to kill the child while leaving the reader/writer tasks alive
     /// so callers can still drain output until EOF.
     pub fn request_terminate(&self) {
-        if let Ok(mut killer_opt) = self.killer.lock() {
-            if let Some(mut killer) = killer_opt.take() {
-                let _ = killer.kill();
-            }
+        if let Ok(mut killer_opt) = self.killer.lock()
+            && let Some(mut killer) = killer_opt.take()
+        {
+            let _ = killer.kill();
         }
     }
 
@@ -241,25 +241,25 @@ impl ProcessHandle {
     pub fn terminate(&self) {
         self.request_terminate();
 
-        if let Ok(mut h) = self.reader_handle.lock() {
-            if let Some(handle) = h.take() {
-                handle.abort();
-            }
+        if let Ok(mut h) = self.reader_handle.lock()
+            && let Some(handle) = h.take()
+        {
+            handle.abort();
         }
         if let Ok(mut handles) = self.reader_abort_handles.lock() {
             for handle in handles.drain(..) {
                 handle.abort();
             }
         }
-        if let Ok(mut h) = self.writer_handle.lock() {
-            if let Some(handle) = h.take() {
-                handle.abort();
-            }
+        if let Ok(mut h) = self.writer_handle.lock()
+            && let Some(handle) = h.take()
+        {
+            handle.abort();
         }
-        if let Ok(mut h) = self.wait_handle.lock() {
-            if let Some(handle) = h.take() {
-                handle.abort();
-            }
+        if let Ok(mut h) = self.wait_handle.lock()
+            && let Some(handle) = h.take()
+        {
+            handle.abort();
         }
     }
 }

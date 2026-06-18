@@ -3,6 +3,9 @@ use std::path::Path;
 
 use pretty_assertions::assert_eq;
 
+use crate::ProcessDriver;
+use crate::SpawnedProcess;
+use crate::TerminalSize;
 use crate::combine_output_receivers;
 #[cfg(unix)]
 use crate::pipe::spawn_process_no_stdin_with_inherited_fds;
@@ -12,9 +15,6 @@ use crate::spawn_from_driver;
 use crate::spawn_pipe_process;
 use crate::spawn_pipe_process_no_stdin;
 use crate::spawn_pty_process;
-use crate::ProcessDriver;
-use crate::SpawnedProcess;
-use crate::TerminalSize;
 
 fn find_python() -> Option<String> {
     for candidate in ["python3", "python"] {

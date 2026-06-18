@@ -12,6 +12,14 @@ workspace = true
 
 [workspace]
 members = ["."]
+exclude = [
+    "vendor/codex-otel",
+    "vendor/codex-protocol",
+    "vendor/codex-utils-absolute-path",
+    "vendor/codex-utils-pty",
+    "vendor/codex-utils-string",
+    "vendor/codex-windows-sandbox/upstream",
+]
 
 [workspace.lints]
 rust = {}
@@ -67,4 +75,12 @@ serde_json = "1"
 tempfile = "3"
 
 [target."cfg(windows)".dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_Security"] }
+codex-protocol = { path = "vendor/codex-protocol" }
+codex-utils-absolute-path = { path = "vendor/codex-utils-absolute-path" }
+codex-windows-sandbox = { path = "vendor/codex-windows-sandbox/upstream" }
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
