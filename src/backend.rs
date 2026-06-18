@@ -106,7 +106,7 @@ impl SandboxBackend for LocalBackend {
                 "network_disabled": false,
                 "network_proxy": false,
                 "resource_limits": false,
-                "audit_jsonl": false,
+                "audit_jsonl": true,
                 "otel_export": false,
             },
             "sandbox_levels": {
@@ -162,7 +162,7 @@ impl SandboxBackend for WindowsReferenceBackend {
                 "network_disabled": false,
                 "network_proxy": false,
                 "resource_limits": false,
-                "audit_jsonl": false,
+                "audit_jsonl": true,
                 "otel_export": false,
             },
             "sandbox_levels": {

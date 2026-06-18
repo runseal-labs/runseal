@@ -19,5 +19,6 @@ The tests are black-box by design:
 - Policy denials use stable error codes.
 - Standard profiles materialize to canonical policy JSON and stable hashes.
 - Events are structured and align with the RFC event model.
+- Executions write JSONL audit events under `.runseal/audit/`.
 - `danger-full-access` is explicit local execution with no sandbox guarantee.
 - Sandboxed policies fail closed unless a backend can enforce them.

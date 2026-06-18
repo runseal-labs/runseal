@@ -131,7 +131,7 @@ fn get_capabilities_rpc_contract() -> Result<()> {
     assert_eq!(payload["sandbox_levels"]["danger-full-access"], "supported");
     assert_eq!(payload["sandbox_levels"]["workspace-write"], "unsupported");
     assert_eq!(payload["network_modes"]["disabled"], "unsupported");
-    assert_eq!(payload["features"]["audit_jsonl"], false);
+    assert_eq!(payload["features"]["audit_jsonl"], true);
     Ok(())
 }
 
@@ -307,6 +307,10 @@ fn execute_rpc_streams_events_and_final_result() -> Result<()> {
     assert!(event_types.contains(&"execution.finished"));
     assert_eq!(response["result"]["status"], "finished");
     assert_eq!(response["result"]["exit_code"], 0);
+    assert!(response["result"]["audit_path"]
+        .as_str()
+        .unwrap_or_default()
+        .starts_with(".runseal/audit/exec_"));
     assert_eq!(response["result"]["sandbox"]["enforced"], false);
     assert_eq!(
         response["result"]["backend"]["name"],

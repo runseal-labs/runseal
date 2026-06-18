@@ -1,6 +1,7 @@
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
 use std::env;
+use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Output};
 use tempfile::TempDir;
@@ -111,6 +112,7 @@ fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
     assert!(payload["platform"].as_str().is_some());
     assert_eq!(payload["features"]["local_execution"], true);
     assert_eq!(payload["features"]["filesystem_policy"], false);
+    assert_eq!(payload["features"]["audit_jsonl"], true);
     assert_eq!(payload["sandbox_levels"]["danger-full-access"], "supported");
     assert_eq!(payload["sandbox_levels"]["read-only"], "unsupported");
     assert_eq!(payload["network_modes"]["proxy"], "unsupported");
@@ -230,6 +232,23 @@ fn exec_json_returns_execution_result() -> Result<()> {
         .as_str()
         .unwrap_or_default()
         .starts_with("sha256:"));
+    let audit_path = payload["audit_path"]
+        .as_str()
+        .expect("ExecutionResult must include audit_path");
+    let audit_file = tmp.path().join(audit_path);
+    let audit_jsonl = fs::read_to_string(&audit_file)
+        .with_context(|| format!("audit file must exist at {}", audit_file.display()))?;
+    let audit_events: Vec<Value> = audit_jsonl
+        .lines()
+        .map(|line| serde_json::from_str(line).context("audit line must be JSON"))
+        .collect::<Result<_>>()?;
+    let audit_event_types: Vec<_> = audit_events
+        .iter()
+        .filter_map(|event| event["type"].as_str())
+        .collect();
+    assert!(audit_event_types.contains(&"execution.started"));
+    assert!(audit_event_types.contains(&"execution.stdout"));
+    assert!(audit_event_types.contains(&"execution.finished"));
     assert!(payload["stdout_bytes"].as_u64().unwrap_or_default() > 0);
     assert!(payload["resource_usage"]["duration_ms"].as_u64().is_some());
     Ok(())

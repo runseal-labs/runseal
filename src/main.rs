@@ -1,6 +1,8 @@
+mod audit;
 mod backend;
 mod policy;
 
+use audit::AuditWriter;
 use backend::{active_backend, SandboxBackend};
 use policy::{normalize_policy, NetworkMode, PolicyError, SandboxPolicy, POLICY_VERSION};
 use serde_json::{json, Value};
@@ -368,11 +370,19 @@ fn execute_command(
     let backend_name = backend.name();
     let backend_status = backend.status();
     let backend_platform = backend.platform();
+    let mut audit = AuditWriter::create(cwd, &execution_id).map_err(|err| {
+        RunSealError::new(
+            "INTERNAL_ERROR",
+            format!("failed to create audit writer: {err}"),
+        )
+    })?;
+    let audit_path = audit.relative_path().to_string();
     let started = json!({
         "type": "execution.started",
         "execution_id": execution_id,
         "policy_id": policy_id,
         "policy_hash": policy_hash,
+        "audit_path": audit_path,
         "sandbox": {
             "level": policy.sandbox_level.as_str(),
             "enforced": false,
@@ -386,6 +396,12 @@ fn execute_command(
             "platform": backend_platform,
         }
     });
+    audit.write_event(&started).map_err(|err| {
+        RunSealError::new(
+            "INTERNAL_ERROR",
+            format!("failed to write audit event: {err}"),
+        )
+    })?;
 
     let timer = Instant::now();
     let output = spawn_command(command, cwd)?;
@@ -396,27 +412,48 @@ fn execute_command(
 
     let mut events = vec![started];
     if !stdout.is_empty() {
-        events.push(json!({
+        let event = json!({
             "type": "execution.stdout",
             "execution_id": execution_id,
             "text": stdout,
             "bytes": output.stdout.len(),
-        }));
+        });
+        audit.write_event(&event).map_err(|err| {
+            RunSealError::new(
+                "INTERNAL_ERROR",
+                format!("failed to write audit event: {err}"),
+            )
+        })?;
+        events.push(event);
     }
     if !stderr.is_empty() {
-        events.push(json!({
+        let event = json!({
             "type": "execution.stderr",
             "execution_id": execution_id,
             "text": stderr,
             "bytes": output.stderr.len(),
-        }));
+        });
+        audit.write_event(&event).map_err(|err| {
+            RunSealError::new(
+                "INTERNAL_ERROR",
+                format!("failed to write audit event: {err}"),
+            )
+        })?;
+        events.push(event);
     }
-    events.push(json!({
+    let finished = json!({
         "type": "execution.finished",
         "execution_id": execution_id,
         "exit_code": exit_code,
         "status": "finished",
-    }));
+    });
+    audit.write_event(&finished).map_err(|err| {
+        RunSealError::new(
+            "INTERNAL_ERROR",
+            format!("failed to write audit event: {err}"),
+        )
+    })?;
+    events.push(finished);
 
     let result = json!({
         "execution_id": execution_id,
@@ -424,6 +461,7 @@ fn execute_command(
         "exit_code": exit_code,
         "policy_id": policy_id,
         "policy_hash": policy_hash,
+        "audit_path": audit_path,
         "sandbox": {
             "level": policy.sandbox_level.as_str(),
             "enforced": false,
