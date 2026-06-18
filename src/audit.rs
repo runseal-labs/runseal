@@ -1,3 +1,4 @@
+use crate::error::RunSealError;
 use serde_json::Value;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
@@ -40,6 +41,43 @@ fn audit_path(session_id: &str) -> String {
         .join(format!("{session_id}.jsonl"))
         .to_string_lossy()
         .replace('\\', "/")
+}
+
+pub(crate) fn create_audit_writer(
+    cwd: &Path,
+    session_id: &str,
+) -> Result<AuditWriter, RunSealError> {
+    AuditWriter::create(cwd, session_id).map_err(|err| {
+        RunSealError::new(
+            "INTERNAL_ERROR",
+            format!("failed to create audit writer: {err}"),
+        )
+    })
+}
+
+fn write_audit_event(audit: &mut AuditWriter, event: &Value) -> Result<(), RunSealError> {
+    audit.write_event(event).map_err(|err| {
+        RunSealError::new(
+            "INTERNAL_ERROR",
+            format!("failed to write audit event: {err}"),
+        )
+    })
+}
+
+pub(crate) fn write_audit_event_with_metadata(
+    audit: &mut AuditWriter,
+    event: &Value,
+    metadata: &Option<Value>,
+) -> Result<(), RunSealError> {
+    let Some(metadata) = metadata else {
+        return write_audit_event(audit, event);
+    };
+
+    let mut audit_event = event.clone();
+    if let Some(object) = audit_event.as_object_mut() {
+        object.insert("metadata".to_string(), metadata.clone());
+    }
+    write_audit_event(audit, &audit_event)
 }
 
 #[cfg(test)]

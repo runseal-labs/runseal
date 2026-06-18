@@ -7,7 +7,7 @@ mod policy;
 mod rpc;
 mod windows;
 
-use audit::AuditWriter;
+use audit::{create_audit_writer, write_audit_event_with_metadata};
 use backend::{
     ExecutionEnv, ExecutionStdin, SandboxBackend, active_backend, matches_environment_scrub_pattern,
 };
@@ -906,40 +906,6 @@ fn validate_execution_cwd(cwd: &Path) -> Result<(), RunSealError> {
     }
 
     Ok(())
-}
-
-fn create_audit_writer(cwd: &Path, session_id: &str) -> Result<AuditWriter, RunSealError> {
-    AuditWriter::create(cwd, session_id).map_err(|err| {
-        RunSealError::new(
-            "INTERNAL_ERROR",
-            format!("failed to create audit writer: {err}"),
-        )
-    })
-}
-
-fn write_audit_event(audit: &mut AuditWriter, event: &Value) -> Result<(), RunSealError> {
-    audit.write_event(event).map_err(|err| {
-        RunSealError::new(
-            "INTERNAL_ERROR",
-            format!("failed to write audit event: {err}"),
-        )
-    })
-}
-
-fn write_audit_event_with_metadata(
-    audit: &mut AuditWriter,
-    event: &Value,
-    metadata: &Option<Value>,
-) -> Result<(), RunSealError> {
-    let Some(metadata) = metadata else {
-        return write_audit_event(audit, event);
-    };
-
-    let mut audit_event = event.clone();
-    if let Some(object) = audit_event.as_object_mut() {
-        object.insert("metadata".to_string(), metadata.clone());
-    }
-    write_audit_event(audit, &audit_event)
 }
 
 fn current_dir() -> PathBuf {
