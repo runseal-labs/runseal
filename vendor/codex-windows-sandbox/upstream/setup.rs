@@ -886,6 +886,28 @@ fn scheduled_setup_task_command_path(xml: &str) -> Option<PathBuf> {
     (!command.is_empty()).then(|| PathBuf::from(command))
 }
 
+fn scheduled_setup_task_arguments(xml: &str) -> Option<String> {
+    let start = xml.find("<Arguments>")? + "<Arguments>".len();
+    let end = xml[start..].find("</Arguments>")?;
+    Some(decode_scheduled_task_xml_text(
+        xml[start..start + end].trim(),
+    ))
+}
+
+fn scheduled_setup_task_targets_broker_home(xml: &str, broker_home: &Path) -> bool {
+    let Some(arguments) = scheduled_setup_task_arguments(xml) else {
+        let haystack = normalized_scheduled_task_text(xml);
+        let needle = normalized_scheduled_task_text(&broker_home.to_string_lossy());
+        return haystack.contains("--task-run") && haystack.contains(&needle);
+    };
+    let Some(rest) = arguments.trim().strip_prefix("--task-run") else {
+        return false;
+    };
+    let broker_arg = rest.trim().trim_matches('"');
+    normalized_scheduled_task_text(broker_arg)
+        == normalized_scheduled_task_text(&broker_home.to_string_lossy())
+}
+
 fn scheduled_setup_task_is_usable(broker_home: &Path) -> bool {
     let output = Command::new("schtasks.exe")
         .args(["/Query", "/TN", SCHEDULED_SETUP_TASK_NAME, "/XML"])
@@ -903,10 +925,7 @@ fn scheduled_setup_task_is_usable(broker_home: &Path) -> bool {
     }
 
     let xml = decode_scheduled_task_xml_text(&String::from_utf8_lossy(&output.stdout));
-    let haystack = normalized_scheduled_task_text(&xml);
-    let needle = normalized_scheduled_task_text(&broker_home.to_string_lossy());
-    haystack.contains("--task-run")
-        && haystack.contains(&needle)
+    scheduled_setup_task_targets_broker_home(&xml, broker_home)
         && scheduled_setup_task_command_path(&xml).is_some_and(|path| path.is_file())
 }
 
@@ -1556,6 +1575,22 @@ mod tests {
         );
 
         assert_eq!(super::scheduled_setup_task_command_path(&xml), Some(helper));
+    }
+
+    #[test]
+    fn scheduled_setup_task_arguments_match_exact_broker_home() {
+        let broker_home = PathBuf::from(r"C:\runseal\broker");
+        let matching_xml = r#"<Task><Actions><Exec><Arguments>--task-run "C:\runseal\broker"</Arguments></Exec></Actions></Task>"#;
+        let prefix_xml = r#"<Task><Actions><Exec><Arguments>--task-run "C:\runseal\broker-old"</Arguments></Exec></Actions></Task>"#;
+
+        assert!(super::scheduled_setup_task_targets_broker_home(
+            matching_xml,
+            &broker_home
+        ));
+        assert!(!super::scheduled_setup_task_targets_broker_home(
+            prefix_xml,
+            &broker_home
+        ));
     }
 
     fn permissions_for(
