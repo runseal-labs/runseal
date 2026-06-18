@@ -96,6 +96,18 @@ fn vendored_windows_sandbox_uses_local_trimmed_dependencies() {
 }
 
 #[test]
+fn vendored_windows_setup_helper_uses_runseal_binary_name() {
+    let setup = VENDOR_SETUP_SOURCES
+        .iter()
+        .find_map(|(name, source)| (*name == "setup.rs").then_some(*source))
+        .expect("setup.rs must be included");
+
+    assert!(WINDOWS_SANDBOX_MANIFEST.contains("name = \"runseal-windows-sandbox-setup\""));
+    assert!(setup.contains("runseal-windows-sandbox-setup.exe"));
+    assert!(!setup.contains("codex-windows-sandbox-setup.exe"));
+}
+
+#[test]
 fn vendored_windows_setup_launch_suppresses_shell_error_ui() {
     let setup = VENDOR_SETUP_SOURCES
         .iter()

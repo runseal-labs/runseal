@@ -1,7 +1,7 @@
 use std::env;
 use std::path::PathBuf;
 
-const SETUP_BIN: &str = "codex-windows-sandbox-setup";
+const SETUP_BIN: &str = "runseal-windows-sandbox-setup";
 const SETUP_MANIFEST: &str = "codex-windows-sandbox-setup.manifest";
 
 fn main() -> Result<(), String> {
@@ -16,7 +16,7 @@ fn main() -> Result<(), String> {
     let manifest_path = PathBuf::from(manifest_dir).join(SETUP_MANIFEST);
     let manifest_path = manifest_path.display();
 
-    // Keep this scoped to the setup helper so Codex binaries that link the
+    // Keep this scoped to the setup helper so binaries that link the
     // library do not inherit any resource metadata from this package.
     match (
         env::var("CARGO_CFG_TARGET_ENV").as_deref(),

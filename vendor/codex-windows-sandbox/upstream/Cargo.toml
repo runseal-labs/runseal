@@ -12,7 +12,7 @@ path = "lib.rs"
 doctest = false
 
 [[bin]]
-name = "codex-windows-sandbox-setup"
+name = "runseal-windows-sandbox-setup"
 path = "bin/setup_main/main.rs"
 
 [[bin]]
