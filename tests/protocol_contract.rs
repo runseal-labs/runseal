@@ -1894,16 +1894,21 @@ fn execute_rpc_streams_events_and_final_result() -> Result<()> {
     assert!(event_types.contains(&"execution.started"));
     assert!(event_types.contains(&"execution.stdout"));
     assert!(event_types.contains(&"execution.finished"));
+    let execution_id = response["result"]["execution_id"]
+        .as_str()
+        .expect("ExecutionResult must include execution_id");
     let session_id = response["result"]["session_id"]
         .as_str()
         .expect("ExecutionResult must include session_id");
     let seal_id = response["result"]["seal_id"]
         .as_str()
         .expect("ExecutionResult must include seal_id");
+    assert!(execution_id.starts_with("exec_"));
     assert!(session_id.starts_with("sess_"));
     assert!(seal_id.starts_with("seal_"));
     for notification in &notifications {
         assert_event_envelope(&notification["params"])?;
+        assert_eq!(notification["params"]["execution_id"], execution_id);
         assert_eq!(notification["params"]["session_id"], session_id);
         assert_eq!(notification["params"]["seal_id"], seal_id);
     }
