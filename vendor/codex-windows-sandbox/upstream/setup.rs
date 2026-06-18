@@ -886,6 +886,16 @@ fn scheduled_setup_task_command_path(xml: &str) -> Option<PathBuf> {
     (!command.is_empty()).then(|| PathBuf::from(command))
 }
 
+fn scheduled_setup_task_command_is_setup_helper(xml: &str) -> bool {
+    scheduled_setup_task_command_path(xml).is_some_and(|path| {
+        path.is_file()
+            && path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.eq_ignore_ascii_case(SETUP_EXE_FILENAME))
+    })
+}
+
 fn scheduled_setup_task_arguments(xml: &str) -> Option<String> {
     let start = xml.find("<Arguments>")? + "<Arguments>".len();
     let end = xml[start..].find("</Arguments>")?;
@@ -926,7 +936,7 @@ fn scheduled_setup_task_is_usable(broker_home: &Path) -> bool {
 
     let xml = decode_scheduled_task_xml_text(&String::from_utf8_lossy(&output.stdout));
     scheduled_setup_task_targets_broker_home(&xml, broker_home)
-        && scheduled_setup_task_command_path(&xml).is_some_and(|path| path.is_file())
+        && scheduled_setup_task_command_is_setup_helper(&xml)
 }
 
 fn try_run_setup_exe_via_scheduled_task(
@@ -1575,6 +1585,30 @@ mod tests {
         );
 
         assert_eq!(super::scheduled_setup_task_command_path(&xml), Some(helper));
+    }
+
+    #[test]
+    fn scheduled_setup_task_command_must_be_setup_helper() {
+        let tmp = TempDir::new().expect("tempdir");
+        let helper = tmp.path().join("runseal-windows-sandbox-setup.exe");
+        let other = tmp.path().join("not-runseal.exe");
+        fs::write(&helper, b"helper").expect("write helper");
+        fs::write(&other, b"other").expect("write other");
+        let helper_xml = format!(
+            "<Task><Actions><Exec><Command>{}</Command></Exec></Actions></Task>",
+            helper.display()
+        );
+        let other_xml = format!(
+            "<Task><Actions><Exec><Command>{}</Command></Exec></Actions></Task>",
+            other.display()
+        );
+
+        assert!(super::scheduled_setup_task_command_is_setup_helper(
+            &helper_xml
+        ));
+        assert!(!super::scheduled_setup_task_command_is_setup_helper(
+            &other_xml
+        ));
     }
 
     #[test]
