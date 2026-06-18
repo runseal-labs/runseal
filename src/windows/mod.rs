@@ -1,3 +1,2 @@
 pub(crate) mod policy;
-
-mod vendor_adapter;
+pub(crate) mod vendor_adapter;

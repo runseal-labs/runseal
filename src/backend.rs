@@ -5,6 +5,7 @@ use crate::windows::policy::{
     WindowsFilesystemAclPlan, WindowsFilesystemAclTransactionPlan, WindowsFilesystemRule,
     WindowsHostRoots, WindowsPolicyPlan, WindowsRuntimeRoots,
 };
+use crate::windows::vendor_adapter::WindowsVendorSandboxProfile;
 mod filesystem;
 mod process;
 mod runtime;
@@ -199,6 +200,7 @@ pub struct PlatformSandboxPlan {
     private_setup_account_name: &'static str,
     private_setup_group_name: &'static str,
     private_setup_identity_artifacts: &'static str,
+    private_setup_payload: Option<String>,
     pub network_mode: &'static str,
     pub network_direct_egress: &'static str,
     pub network_managed_proxy: &'static str,
@@ -251,6 +253,7 @@ impl PlatformSandboxPlan {
             private_setup_account_name: "current-user",
             private_setup_group_name: "current-user",
             private_setup_identity_artifacts: "current-user",
+            private_setup_payload: None,
             network_mode: policy.network.mode.as_str(),
             network_direct_egress: "unmanaged",
             network_managed_proxy: "none",
@@ -355,6 +358,7 @@ impl PlatformSandboxPlan {
             && self.private_setup_account_name == "RunSealSandbox"
             && self.private_setup_group_name == "RunSealSandboxUsers"
             && self.private_setup_identity_artifacts == "single-sandbox-user-artifacts"
+            && has_single_user_setup_payload(self.private_setup_payload.as_deref())
         {
             return Ok(());
         }
@@ -818,6 +822,8 @@ impl WindowsReferenceBackend {
             .setup_identity_artifacts();
         let private_process_token = windows_policy.process.token.as_str();
         let private_process_job = windows_policy.process.job.as_str();
+        let private_setup_payload = WindowsVendorSandboxProfile::from_policy(policy)
+            .single_user_setup_payload(&synthetic_home, cwd);
         let filesystem_write = windows_policy.filesystem.effective_write_roots();
 
         PlatformSandboxPlan {
@@ -849,6 +855,7 @@ impl WindowsReferenceBackend {
             private_setup_account_name,
             private_setup_group_name,
             private_setup_identity_artifacts,
+            private_setup_payload: private_setup_payload.map(|payload| payload.to_string()),
             network_mode: windows_policy.network.guard.as_str(),
             network_direct_egress: windows_policy.network.direct_egress.as_str(),
             network_managed_proxy: windows_policy.network.managed_proxy.as_str(),
@@ -859,6 +866,20 @@ impl WindowsReferenceBackend {
             required_backend_features: policy.required_backend_feature_names(),
         }
     }
+}
+
+fn has_single_user_setup_payload(payload: Option<&str>) -> bool {
+    let Some(payload) = payload else {
+        return false;
+    };
+    let Ok(payload) = serde_json::from_str::<Value>(payload) else {
+        return false;
+    };
+
+    payload.get("sandbox_user").and_then(Value::as_str) == Some("RunSealSandbox")
+        && payload.get("sandbox_group").and_then(Value::as_str) == Some("RunSealSandboxUsers")
+        && payload.get("offline_username").is_none()
+        && payload.get("online_username").is_none()
 }
 
 fn environment_runtime_json(entries: &[(String, String)]) -> Value {
@@ -2275,6 +2296,28 @@ mod tests {
 
         let Err(err) = plan.prepare_sandbox_setup() else {
             panic!("non-single sandbox user setup artifacts must fail sandbox setup");
+        };
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains("setup identity artifacts"));
+        assert!(!runtime_root.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn sandbox_setup_rejects_missing_single_user_setup_payload_before_runtime_tree()
+    -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&cwd)?;
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+        let mut plan =
+            WindowsReferenceBackend.fail_closed_plan("exec_missing_setup_payload", &cwd, &policy);
+        let runtime_root = PathBuf::from(plan.runtime_root.as_ref().unwrap());
+        plan.private_setup_payload = None;
+
+        let Err(err) = plan.prepare_sandbox_setup() else {
+            panic!("missing single-user setup payload must fail sandbox setup");
         };
 
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);

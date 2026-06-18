@@ -1,4 +1,8 @@
 use crate::policy::{NetworkMode, SandboxPolicy};
+use serde_json::{Value, json};
+use std::path::Path;
+
+const SETUP_PAYLOAD_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum WindowsVendorSandboxProfile {
@@ -117,6 +121,40 @@ impl WindowsVendorSandboxProfile {
                 .collect(),
         }
     }
+
+    pub(crate) fn single_user_setup_payload(
+        &self,
+        sandbox_home: &Path,
+        command_cwd: &Path,
+    ) -> Option<Value> {
+        let Self::Managed {
+            sandbox_user_model, ..
+        } = self
+        else {
+            return None;
+        };
+
+        Some(json!({
+            "version": SETUP_PAYLOAD_VERSION,
+            "sandbox_user": sandbox_user_model.local_account_name(),
+            "sandbox_group": sandbox_user_model.local_group_name(),
+            "sandbox_home": path_string(sandbox_home),
+            "command_cwd": path_string(command_cwd),
+            "read_roots": self.read_roots(),
+            "write_roots": self.write_roots(),
+            "deny_roots": self.deny_roots(),
+            "network": self.network_policy().map(WindowsVendorNetworkPolicy::as_str),
+        }))
+    }
+}
+
+impl WindowsVendorNetworkPolicy {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::Proxy => "proxy",
+        }
+    }
 }
 
 impl WindowsVendorSandboxUserModel {
@@ -143,6 +181,10 @@ impl WindowsVendorSandboxUserModel {
             Self::SingleSandboxUser => "single-sandbox-user-artifacts",
         }
     }
+}
+
+fn path_string(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
 }
 
 fn filesystem_entries(policy: &SandboxPolicy) -> Vec<WindowsVendorFilesystemEntry> {
@@ -269,5 +311,27 @@ mod tests {
         assert!(profile.read_roots().is_empty());
         assert!(profile.write_roots().is_empty());
         assert!(profile.deny_roots().is_empty());
+        assert_eq!(profile.single_user_setup_payload(&cwd, &cwd), None);
+    }
+
+    #[test]
+    fn setup_payload_uses_one_sandbox_identity() {
+        let cwd = PathBuf::from("C:/workspace");
+        let sandbox_home = PathBuf::from("C:/runseal/sandbox");
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+        let profile = WindowsVendorSandboxProfile::from_policy(&policy);
+        let payload = profile
+            .single_user_setup_payload(&sandbox_home, &cwd)
+            .unwrap();
+
+        assert_eq!(payload["version"], SETUP_PAYLOAD_VERSION);
+        assert_eq!(payload["sandbox_user"], "RunSealSandbox");
+        assert_eq!(payload["sandbox_group"], "RunSealSandboxUsers");
+        assert_eq!(payload["sandbox_home"], "C:/runseal/sandbox");
+        assert_eq!(payload["command_cwd"], "C:/workspace");
+        assert_eq!(payload["network"], "proxy");
+        let serialized = payload.to_string();
+        assert!(!serialized.contains("offline"));
+        assert!(!serialized.contains("online"));
     }
 }
