@@ -937,6 +937,41 @@ fn policy_denial_uses_stable_error_code() -> Result<()> {
 }
 
 #[test]
+fn execute_rejects_missing_cwd_without_creating_it() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let missing_cwd = tmp.path().join("missing-workspace");
+    let output = run_rpc(&rpc_request(
+        "execute",
+        json!({
+            "command": [python_bin(), "-c", "print('must not run')"],
+            "cwd": missing_cwd,
+            "policy": "danger-full-access"
+        }),
+    ))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = messages
+        .iter()
+        .find(|message| message.get("id") == Some(&json!(1)))
+        .unwrap();
+
+    assert_eq!(response["error"]["data"]["code"], "INVALID_REQUEST");
+    assert!(
+        response["error"]["data"]["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("params.cwd must be an existing directory")
+    );
+    assert!(!missing_cwd.exists());
+    Ok(())
+}
+
+#[test]
 fn inline_policy_rejects_unknown_required_fields() -> Result<()> {
     let tmp = TempDir::new()?;
     let output = run_rpc(&rpc_request(

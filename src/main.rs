@@ -12,6 +12,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use policy::{NetworkMode, POLICY_VERSION, PolicyError, SandboxPolicy, normalize_policy};
 use serde_json::{Map, Value, json};
 use std::env;
+use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -696,6 +697,7 @@ fn execute_command(
     if command.is_empty() {
         return Err(RunSealError::new("INVALID_REQUEST", "command is empty"));
     }
+    validate_execution_cwd(cwd)?;
 
     let ids = new_execution_ids();
     let policy_id = policy.id.clone();
@@ -1023,6 +1025,26 @@ fn execute_command(
     });
 
     Ok((events, result))
+}
+
+fn validate_execution_cwd(cwd: &Path) -> Result<(), RunSealError> {
+    let metadata = fs::symlink_metadata(cwd).map_err(|err| {
+        RunSealError::new(
+            "INVALID_REQUEST",
+            format!("params.cwd must be an existing directory: {err}"),
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(RunSealError::new(
+            "INVALID_REQUEST",
+            format!(
+                "params.cwd must be an existing directory: {}",
+                cwd.display()
+            ),
+        ));
+    }
+
+    Ok(())
 }
 
 fn stream_event(
