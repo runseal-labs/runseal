@@ -1,7 +1,7 @@
 use crate::policy::{BackendFeature, SandboxLevel, SandboxPolicy};
 use crate::windows_plan::{
-    WindowsFilesystemAclEntry, WindowsFilesystemAclPlan, WindowsFilesystemRule, WindowsHostRoots,
-    WindowsPolicyPlan, WindowsRuntimeRoots,
+    WindowsFilesystemAclEntry, WindowsFilesystemAclPlan, WindowsFilesystemAclTransactionPlan,
+    WindowsFilesystemRule, WindowsHostRoots, WindowsPolicyPlan, WindowsRuntimeRoots,
 };
 use serde_json::Map;
 use serde_json::{Value, json};
@@ -335,8 +335,10 @@ impl PlatformSandboxPlan {
 
     pub fn prepare_filesystem_rules(&self) -> io::Result<Vec<String>> {
         let acl_plan = WindowsFilesystemAclPlan::from_rules(&self.private_filesystem_rules);
+        let transaction = WindowsFilesystemAclTransactionPlan::from_acl_plan(&acl_plan);
+        validate_private_filesystem_acl_transaction(&transaction)?;
         let mut prepared = Vec::new();
-        for entry in acl_plan.entries() {
+        for entry in transaction.apply_entries() {
             validate_private_filesystem_acl_entry(entry)?;
             if !prepared.iter().any(|root| root == entry.root()) {
                 prepared.push(entry.root().to_string());
@@ -424,6 +426,21 @@ fn prepare_unique_runtime_root(prepared: &mut Vec<String>, root: &str) -> io::Re
     fs::create_dir_all(root)?;
     if !prepared.iter().any(|item| item == root) {
         prepared.push(root.to_string());
+    }
+    Ok(())
+}
+
+fn validate_private_filesystem_acl_transaction(
+    transaction: &WindowsFilesystemAclTransactionPlan,
+) -> io::Result<()> {
+    if !transaction.captures_before_apply() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "private filesystem ACL transaction must capture rollback state before applying entries",
+        ));
+    }
+    for root in transaction.rollback_roots() {
+        validate_private_filesystem_rule_root(root)?;
     }
     Ok(())
 }

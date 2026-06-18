@@ -67,6 +67,18 @@ pub(crate) enum WindowsFilesystemAclScope {
     RootAndDescendants,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WindowsFilesystemAclTransactionPlan {
+    steps: Vec<WindowsFilesystemAclTransactionStep>,
+    rollback_roots: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum WindowsFilesystemAclTransactionStep {
+    CaptureRollback { root: String },
+    ApplyEntry { entry: WindowsFilesystemAclEntry },
+}
+
 impl WindowsFilesystemAclPlan {
     pub(crate) fn from_rules(rules: &[WindowsFilesystemRule]) -> Self {
         Self {
@@ -79,6 +91,59 @@ impl WindowsFilesystemAclPlan {
 
     pub(crate) fn entries(&self) -> &[WindowsFilesystemAclEntry] {
         &self.entries
+    }
+}
+
+impl WindowsFilesystemAclTransactionPlan {
+    pub(crate) fn from_acl_plan(acl_plan: &WindowsFilesystemAclPlan) -> Self {
+        let mut steps = Vec::new();
+        let mut rollback_roots = Vec::new();
+        for entry in acl_plan.entries() {
+            if !contains_same_windows_root(&rollback_roots, entry.root()) {
+                rollback_roots.push(entry.root().to_string());
+                steps.push(WindowsFilesystemAclTransactionStep::CaptureRollback {
+                    root: entry.root().to_string(),
+                });
+            }
+            steps.push(WindowsFilesystemAclTransactionStep::ApplyEntry {
+                entry: entry.clone(),
+            });
+        }
+
+        Self {
+            steps,
+            rollback_roots,
+        }
+    }
+
+    pub(crate) fn rollback_roots(&self) -> &[String] {
+        &self.rollback_roots
+    }
+
+    pub(crate) fn apply_entries(&self) -> impl Iterator<Item = &WindowsFilesystemAclEntry> {
+        self.steps.iter().filter_map(|step| match step {
+            WindowsFilesystemAclTransactionStep::CaptureRollback { .. } => None,
+            WindowsFilesystemAclTransactionStep::ApplyEntry { entry } => Some(entry),
+        })
+    }
+
+    pub(crate) fn captures_before_apply(&self) -> bool {
+        let mut captured_roots = Vec::new();
+        for step in &self.steps {
+            match step {
+                WindowsFilesystemAclTransactionStep::CaptureRollback { root } => {
+                    if !contains_same_windows_root(&captured_roots, root) {
+                        captured_roots.push(root.clone());
+                    }
+                }
+                WindowsFilesystemAclTransactionStep::ApplyEntry { entry } => {
+                    if !contains_same_windows_root(&captured_roots, entry.root()) {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
     }
 }
 
@@ -679,6 +744,7 @@ mod tests {
         let plan = WindowsPolicyPlan::from_policy_and_runtime_roots(&policy, None);
         let rules = plan.filesystem.enforcement_rules();
         let acl_plan = WindowsFilesystemAclPlan::from_rules(&rules);
+        let transaction = WindowsFilesystemAclTransactionPlan::from_acl_plan(&acl_plan);
 
         assert_eq!(
             rules[0],
@@ -710,6 +776,12 @@ mod tests {
                 .entries()
                 .iter()
                 .any(|entry| entry.root() == "/workspace" && entry.requires_existing_root())
+        );
+        assert!(transaction.captures_before_apply());
+        assert_eq!(transaction.rollback_roots().len(), acl_plan.entries().len());
+        assert_eq!(
+            transaction.apply_entries().count(),
+            acl_plan.entries().len()
         );
     }
 
