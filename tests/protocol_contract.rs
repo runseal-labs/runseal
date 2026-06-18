@@ -9,7 +9,14 @@ use tempfile::TempDir;
 fn runseal_bin() -> PathBuf {
     env::var_os("RUNSEAL_BIN")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/debug/runseal"))
+        .or_else(|| option_env!("CARGO_BIN_EXE_runseal").map(PathBuf::from))
+        .unwrap_or_else(|| {
+            let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/debug/runseal");
+            if cfg!(windows) {
+                path.set_extension("exe");
+            }
+            path
+        })
 }
 
 fn require_runseal_bin() -> Result<PathBuf> {
@@ -58,6 +65,9 @@ fn stdout_json_lines(output: &Output) -> Result<Vec<Value>> {
 
 #[test]
 fn rpc_missing_binary_is_explicit_red_state() {
+    if runseal_bin().exists() {
+        return;
+    }
     let error = run_rpc(&rpc_request("getVersion", json!({})))
         .expect_err("missing implementation should be RED");
     assert!(error.to_string().contains("RunSeal binary not found"));
@@ -152,6 +162,38 @@ fn policy_denial_uses_stable_error_code() -> Result<()> {
 }
 
 #[test]
+fn sandboxed_policy_without_backend_fails_closed() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let output = run_rpc(&rpc_request(
+        "execute",
+        json!({
+            "command": ["python3", "-c", "print('must not run')"],
+            "cwd": tmp.path(),
+            "policy": "read-only"
+        }),
+    ))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = messages
+        .iter()
+        .find(|message| message.get("id") == Some(&json!(1)))
+        .unwrap();
+    assert_eq!(
+        response["error"]["data"]["code"],
+        "BACKEND_CAPABILITY_MISSING"
+    );
+    assert!(messages
+        .iter()
+        .all(|message| message.get("method") != Some(&json!("event"))));
+    Ok(())
+}
+
+#[test]
 fn execute_rpc_streams_events_and_final_result() -> Result<()> {
     let tmp = TempDir::new()?;
     let output = run_rpc(&rpc_request(
@@ -159,7 +201,7 @@ fn execute_rpc_streams_events_and_final_result() -> Result<()> {
         json!({
             "command": ["python3", "-c", "print('protocol ok')"],
             "cwd": tmp.path(),
-            "policy": "read-only"
+            "policy": "danger-full-access"
         }),
     ))?;
 
@@ -187,5 +229,6 @@ fn execute_rpc_streams_events_and_final_result() -> Result<()> {
     assert!(event_types.contains(&"execution.finished"));
     assert_eq!(response["result"]["status"], "finished");
     assert_eq!(response["result"]["exit_code"], 0);
+    assert_eq!(response["result"]["sandbox"]["enforced"], false);
     Ok(())
 }

@@ -8,7 +8,14 @@ use tempfile::TempDir;
 fn runseal_bin() -> PathBuf {
     env::var_os("RUNSEAL_BIN")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/debug/runseal"))
+        .or_else(|| option_env!("CARGO_BIN_EXE_runseal").map(PathBuf::from))
+        .unwrap_or_else(|| {
+            let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/debug/runseal");
+            if cfg!(windows) {
+                path.set_extension("exe");
+            }
+            path
+        })
 }
 
 fn require_runseal_bin() -> Result<PathBuf> {
@@ -44,6 +51,9 @@ fn stdout_json_lines(output: &Output) -> Result<Vec<Value>> {
 
 #[test]
 fn missing_binary_is_explicit_red_state() {
+    if runseal_bin().exists() {
+        return;
+    }
     let error = run_cli(&["--version"]).expect_err("missing implementation should be RED");
     let message = error.to_string();
     assert!(message.contains("RunSeal binary not found"), "{message}");
@@ -78,7 +88,7 @@ fn exec_events_stream_uses_execution_vocabulary() -> Result<()> {
         "exec",
         "--events",
         "--policy",
-        "read-only",
+        "danger-full-access",
         "--cwd",
         &cwd,
         "--",
@@ -120,7 +130,7 @@ fn exec_json_returns_execution_result() -> Result<()> {
         "exec",
         "--json",
         "--policy",
-        "read-only",
+        "danger-full-access",
         "--cwd",
         &cwd,
         "--",
@@ -141,7 +151,8 @@ fn exec_json_returns_execution_result() -> Result<()> {
         .as_str()
         .unwrap_or_default()
         .starts_with("exec_"));
-    assert_eq!(payload["policy_id"], "read-only");
+    assert_eq!(payload["policy_id"], "danger-full-access");
+    assert_eq!(payload["sandbox"]["enforced"], false);
     assert!(payload["policy_hash"]
         .as_str()
         .unwrap_or_default()

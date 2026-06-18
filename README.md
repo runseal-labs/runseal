@@ -8,7 +8,9 @@ RunSeal is **not** a cloud VM sandbox, a Docker Desktop replacement, or a microV
 
 ## Status
 
-Pre-implementation. This repository starts with conformance tests and protocol fixtures before runtime code.
+Phase 0 implementation. The repository contains the first buildable CLI/RPC shell and black-box conformance tests.
+
+Current execution support is intentionally narrow: only explicit `danger-full-access` runs as local, non-sandboxed execution. Sandboxed policies such as `read-only`, `workspace-contained`, and `workspace-write` must fail closed until a platform backend can enforce them.
 
 The design lives in the RFC repository:
 
@@ -25,6 +27,12 @@ The initial test suite is intentionally black-box and protocol-oriented. Runtime
 
 ```bash
 runseal exec --policy workspace-proxy -- python skill.py
+```
+
+For the Phase 0 local execution baseline:
+
+```bash
+runseal exec --policy danger-full-access -- python skill.py
 ```
 
 ## Intended protocol
@@ -44,15 +52,13 @@ runseal exec --policy workspace-proxy -- python skill.py
 
 ## Running tests
 
-The conformance tests are Rust integration tests. They expect a future RunSeal binary path through `RUNSEAL_BIN`:
+The conformance tests are Rust integration tests. `cargo test` builds and runs the local `runseal` binary.
 
 ```bash
 cargo test
 ```
 
-Until an implementation exists, most CLI/protocol tests should fail with a clear missing-binary error. That is the current RED state.
-
-To run with an implementation:
+To run the same tests against another candidate implementation:
 
 ```bash
 RUNSEAL_BIN=target/debug/runseal cargo test
