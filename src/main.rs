@@ -9,7 +9,7 @@ use serde_json::{Map, Value, json};
 use std::env;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const PROTOCOL_VERSION: &str = "runseal.protocol/v1";
 
@@ -150,8 +150,8 @@ fn run_exec(args: &[String]) -> Result<(), String> {
         request.network,
     )
     .map_err(|err| err.reason)?;
-    let (events, result) =
-        execute_command(&request.command, &request.cwd, &policy).map_err(|err| err.message)?;
+    let (events, result) = execute_command(&request.command, &request.cwd, &policy, None)
+        .map_err(|err| err.message)?;
 
     if request.events {
         for event in events {
@@ -316,8 +316,16 @@ fn execute_from_params(params: &Value) -> Result<(Vec<Value>, Value), RunSealErr
     validate_param_keys(
         params,
         "execute",
-        &["command", "cwd", "policy", "network", "network_mode"],
+        &[
+            "command",
+            "cwd",
+            "policy",
+            "network",
+            "network_mode",
+            "timeout_ms",
+        ],
     )?;
+    let timeout = timeout_from_params(params)?;
     let command = params
         .get("command")
         .and_then(Value::as_array)
@@ -341,7 +349,7 @@ fn execute_from_params(params: &Value) -> Result<(Vec<Value>, Value), RunSealErr
     let network = network_override_from_params(params)?;
     let policy = normalize_policy(&policy, &cwd, network)?;
 
-    execute_command(&command, &cwd, &policy)
+    execute_command(&command, &cwd, &policy, timeout)
 }
 
 fn execution_not_found_from_params(params: &Value) -> Result<Value, RunSealError> {
@@ -428,10 +436,22 @@ fn network_override_from_params(
     })
 }
 
+fn timeout_from_params(params: &Map<String, Value>) -> Result<Option<Duration>, RunSealError> {
+    let Some(value) = params.get("timeout_ms") else {
+        return Ok(None);
+    };
+    let timeout_ms = value.as_u64().ok_or_else(|| {
+        RunSealError::new("INVALID_REQUEST", "params.timeout_ms must be an integer")
+    })?;
+
+    Ok(Some(Duration::from_millis(timeout_ms)))
+}
+
 fn execute_command(
     command: &[String],
     cwd: &Path,
     policy: &SandboxPolicy,
+    timeout: Option<Duration>,
 ) -> Result<(Vec<Value>, Value), RunSealError> {
     if command.is_empty() {
         return Err(RunSealError::new("INVALID_REQUEST", "command is empty"));
@@ -607,13 +627,43 @@ fn execute_command(
     write_audit_event(&mut audit, &started)?;
 
     let timer = Instant::now();
-    let output = backend.execute_plan(&plan, command, cwd).map_err(|err| {
-        RunSealError::new(
-            "EXECUTION_FAILED_TO_START",
-            format!("failed to spawn command {}: {err}", command[0]),
-        )
-    })?;
+    let execution_output = backend
+        .execute_plan(&plan, command, cwd, timeout)
+        .map_err(|err| {
+            RunSealError::new(
+                "EXECUTION_FAILED_TO_START",
+                format!("failed to spawn command {}: {err}", command[0]),
+            )
+        })?;
+    let output = execution_output.output;
     let duration_ms = timer.elapsed().as_millis() as u64;
+    if execution_output.timed_out {
+        let timeout_ms = timeout.map(|duration| duration.as_millis() as u64);
+        let failed = json!({
+            "type": "execution.failed",
+            "execution_id": execution_id,
+            "policy_id": policy_id,
+            "policy_hash": policy_hash,
+            "audit_path": audit_path,
+            "status": "failed",
+            "reason": "execution timed out",
+            "timeout_ms": timeout_ms,
+            "duration_ms": duration_ms,
+        });
+        write_audit_event(&mut audit, &failed)?;
+
+        return Err(RunSealError::with_details(
+            "EXECUTION_TIMEOUT",
+            "execution timed out",
+            json!({
+                "execution_id": execution_id,
+                "audit_path": audit_path,
+                "timeout_ms": timeout_ms,
+                "stdout_bytes": output.stdout.len(),
+                "stderr_bytes": output.stderr.len(),
+            }),
+        ));
+    }
     let exit_code = output.status.code().unwrap_or(1);
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();

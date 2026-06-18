@@ -6,6 +6,8 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::thread;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CapabilityStatus {
@@ -62,8 +64,15 @@ pub trait SandboxBackend {
         plan: &PlatformSandboxPlan,
         command: &[String],
         cwd: &Path,
-    ) -> io::Result<Output>;
+        timeout: Option<Duration>,
+    ) -> io::Result<BackendExecutionOutput>;
     fn capabilities_json(&self) -> Value;
+}
+
+#[derive(Debug)]
+pub struct BackendExecutionOutput {
+    pub output: Output,
+    pub timed_out: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -116,8 +125,9 @@ impl SandboxBackend for ActiveBackend {
         plan: &PlatformSandboxPlan,
         command: &[String],
         cwd: &Path,
-    ) -> io::Result<Output> {
-        self.as_backend().execute_plan(plan, command, cwd)
+        timeout: Option<Duration>,
+    ) -> io::Result<BackendExecutionOutput> {
+        self.as_backend().execute_plan(plan, command, cwd, timeout)
     }
 
     fn capabilities_json(&self) -> Value {
@@ -341,8 +351,9 @@ impl SandboxBackend for LocalBackend {
         plan: &PlatformSandboxPlan,
         command: &[String],
         cwd: &Path,
-    ) -> io::Result<Output> {
-        spawn_local_command(plan, command, cwd)
+        timeout: Option<Duration>,
+    ) -> io::Result<BackendExecutionOutput> {
+        spawn_local_command(plan, command, cwd, timeout)
     }
 
     fn capabilities_json(&self) -> Value {
@@ -442,8 +453,9 @@ impl SandboxBackend for WindowsReferenceBackend {
         plan: &PlatformSandboxPlan,
         command: &[String],
         cwd: &Path,
-    ) -> io::Result<Output> {
-        spawn_local_command(plan, command, cwd)
+        timeout: Option<Duration>,
+    ) -> io::Result<BackendExecutionOutput> {
+        spawn_local_command(plan, command, cwd, timeout)
     }
 
     fn capabilities_json(&self) -> Value {
@@ -492,8 +504,9 @@ impl SandboxBackend for MacosExperimentalBackend {
         plan: &PlatformSandboxPlan,
         command: &[String],
         cwd: &Path,
-    ) -> io::Result<Output> {
-        spawn_local_command(plan, command, cwd)
+        timeout: Option<Duration>,
+    ) -> io::Result<BackendExecutionOutput> {
+        spawn_local_command(plan, command, cwd, timeout)
     }
 
     fn capabilities_json(&self) -> Value {
@@ -541,8 +554,9 @@ impl SandboxBackend for LinuxCommunityBackend {
         plan: &PlatformSandboxPlan,
         command: &[String],
         cwd: &Path,
-    ) -> io::Result<Output> {
-        spawn_local_command(plan, command, cwd)
+        timeout: Option<Duration>,
+    ) -> io::Result<BackendExecutionOutput> {
+        spawn_local_command(plan, command, cwd, timeout)
     }
 
     fn capabilities_json(&self) -> Value {
@@ -585,14 +599,54 @@ fn spawn_local_command(
     plan: &PlatformSandboxPlan,
     command: &[String],
     cwd: &Path,
-) -> io::Result<Output> {
+    timeout: Option<Duration>,
+) -> io::Result<BackendExecutionOutput> {
     let mut process = Command::new(&command[0]);
     process
         .args(&command[1..])
         .current_dir(cwd)
         .env_clear()
         .envs(minimal_environment(plan));
-    process.output()
+
+    let Some(timeout) = timeout else {
+        return process.output().map(|output| BackendExecutionOutput {
+            output,
+            timed_out: false,
+        });
+    };
+
+    let start = Instant::now();
+    let mut child = process.spawn()?;
+    loop {
+        if child.try_wait()?.is_some() {
+            return child
+                .wait_with_output()
+                .map(|output| BackendExecutionOutput {
+                    output,
+                    timed_out: false,
+                });
+        }
+
+        if start.elapsed() >= timeout {
+            if let Err(err) = child.kill()
+                && err.kind() != io::ErrorKind::InvalidInput
+            {
+                return Err(err);
+            }
+            return child
+                .wait_with_output()
+                .map(|output| BackendExecutionOutput {
+                    output,
+                    timed_out: true,
+                });
+        }
+
+        thread::sleep(
+            timeout
+                .saturating_sub(start.elapsed())
+                .min(Duration::from_millis(10)),
+        );
+    }
 }
 
 fn minimal_environment(plan: &PlatformSandboxPlan) -> Vec<(OsString, OsString)> {

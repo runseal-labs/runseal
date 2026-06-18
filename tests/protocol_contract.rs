@@ -209,7 +209,6 @@ fn execute_rejects_unsupported_request_fields() -> Result<()> {
     let unsupported_cases = [
         ("env", json!({"CI": "1"})),
         ("stdin", json!({"mode": "empty"})),
-        ("timeout_ms", json!(1000)),
         ("metadata", json!({"agent_id": "agent_test"})),
     ];
 
@@ -242,6 +241,39 @@ fn execute_rejects_unsupported_request_fields() -> Result<()> {
                 .contains(&format!("params.{field} is not supported"))
         );
     }
+    Ok(())
+}
+
+#[test]
+fn execute_timeout_returns_stable_error_and_audit_event() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let output = run_rpc(&rpc_request(
+        "execute",
+        json!({
+            "command": ["python3", "-c", "import time; time.sleep(1)"],
+            "cwd": tmp.path(),
+            "policy": "danger-full-access",
+            "timeout_ms": 10
+        }),
+    ))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = &messages[0];
+
+    assert_eq!(response["error"]["data"]["code"], "EXECUTION_TIMEOUT");
+    assert_eq!(response["error"]["data"]["timeout_ms"], 10);
+    let audit_path = response["error"]["data"]["audit_path"]
+        .as_str()
+        .expect("timeout error must return audit_path");
+    let audit_events = read_audit_events(tmp.path(), audit_path)?;
+    assert!(audit_events.iter().any(
+        |event| event["type"] == "execution.failed" && event["reason"] == "execution timed out"
+    ));
     Ok(())
 }
 
