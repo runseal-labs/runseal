@@ -6,6 +6,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Output};
 use tempfile::TempDir;
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 fn runseal_bin() -> PathBuf {
     env::var_os("RUNSEAL_BIN")
@@ -52,6 +53,7 @@ fn stdout_json_lines(output: &Output) -> Result<Vec<Value>> {
 }
 
 fn decode_stream_event(event: &Value) -> Result<String> {
+    assert_rfc3339_timestamp(&event["time"])?;
     assert_eq!(event["encoding"], "base64");
     assert_eq!(event["stream_offset"], 0);
     assert!(event.get("text").is_none());
@@ -63,6 +65,13 @@ fn decode_stream_event(event: &Value) -> Result<String> {
         .decode(encoded)
         .context("stream data must decode")?;
     String::from_utf8(bytes).context("stream data must be UTF-8 for this test")
+}
+
+fn assert_rfc3339_timestamp(value: &Value) -> Result<()> {
+    let timestamp = value.as_str().context("timestamp must be a string")?;
+    OffsetDateTime::parse(timestamp, &Rfc3339)
+        .with_context(|| format!("timestamp must be RFC3339 UTC: {timestamp}"))?;
+    Ok(())
 }
 
 fn expected_backend_name() -> &'static str {
@@ -217,6 +226,9 @@ fn exec_events_stream_uses_execution_vocabulary() -> Result<()> {
     assert!(event_types.contains(&"execution.started"));
     assert!(event_types.contains(&"execution.stdout"));
     assert!(event_types.contains(&"execution.finished"));
+    for event in &events {
+        assert_rfc3339_timestamp(&event["time"])?;
+    }
     let stdout_event = events
         .iter()
         .find(|event| event["type"] == "execution.stdout")
@@ -260,6 +272,9 @@ fn exec_json_returns_execution_result() -> Result<()> {
     let payload = stdout_json(&output)?;
     assert_eq!(payload["status"], "finished");
     assert_eq!(payload["exit_code"], 0);
+    assert_eq!(payload["signal"], Value::Null);
+    assert_rfc3339_timestamp(&payload["started_at"])?;
+    assert_rfc3339_timestamp(&payload["finished_at"])?;
     assert!(
         payload["execution_id"]
             .as_str()
@@ -297,6 +312,9 @@ fn exec_json_returns_execution_result() -> Result<()> {
     assert!(audit_event_types.contains(&"execution.started"));
     assert!(audit_event_types.contains(&"execution.stdout"));
     assert!(audit_event_types.contains(&"execution.finished"));
+    for event in &audit_events {
+        assert_rfc3339_timestamp(&event["time"])?;
+    }
     let audit_stdout = audit_events
         .iter()
         .find(|event| event["type"] == "execution.stdout")

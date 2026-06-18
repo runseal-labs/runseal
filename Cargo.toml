@@ -57,6 +57,7 @@ unwrap_used = "deny"
 base64 = "0.22"
 serde_json = "1"
 sha2 = "0.10"
+time = { version = "0.3", features = ["formatting", "parsing"] }
 
 [dev-dependencies]
 anyhow = "1"

@@ -7,6 +7,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use tempfile::TempDir;
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 fn runseal_bin() -> PathBuf {
     env::var_os("RUNSEAL_BIN")
@@ -71,6 +72,7 @@ fn stdout_json_lines(output: &Output) -> Result<Vec<Value>> {
 }
 
 fn decode_stream_event(event: &Value) -> Result<String> {
+    assert_rfc3339_timestamp(&event["time"])?;
     assert_eq!(event["encoding"], "base64");
     assert_eq!(event["stream_offset"], 0);
     assert!(event.get("text").is_none());
@@ -82,6 +84,13 @@ fn decode_stream_event(event: &Value) -> Result<String> {
         .decode(encoded)
         .context("stream data must decode")?;
     String::from_utf8(bytes).context("stream data must be UTF-8 for this test")
+}
+
+fn assert_rfc3339_timestamp(value: &Value) -> Result<()> {
+    let timestamp = value.as_str().context("timestamp must be a string")?;
+    OffsetDateTime::parse(timestamp, &Rfc3339)
+        .with_context(|| format!("timestamp must be RFC3339 UTC: {timestamp}"))?;
+    Ok(())
 }
 
 fn read_audit_events(root: &std::path::Path, audit_path: &str) -> Result<Vec<Value>> {
@@ -304,6 +313,7 @@ fn execute_copies_metadata_to_audit_events() -> Result<()> {
             .iter()
             .find(|event| event["type"] == event_type)
             .with_context(|| format!("audit event {event_type} must exist"))?;
+        assert_rfc3339_timestamp(&event["time"])?;
         assert_eq!(event["metadata"], metadata);
     }
     Ok(())
@@ -452,6 +462,11 @@ fn execute_timeout_returns_stable_error_and_audit_event() -> Result<()> {
     assert!(audit_events.iter().any(
         |event| event["type"] == "execution.failed" && event["reason"] == "execution timed out"
     ));
+    let failed_event = audit_events
+        .iter()
+        .find(|event| event["type"] == "execution.failed")
+        .context("execution.failed audit event must exist")?;
+    assert_rfc3339_timestamp(&failed_event["time"])?;
     Ok(())
 }
 
@@ -807,6 +822,9 @@ fn execute_rpc_streams_events_and_final_result() -> Result<()> {
     assert!(event_types.contains(&"execution.started"));
     assert!(event_types.contains(&"execution.stdout"));
     assert!(event_types.contains(&"execution.finished"));
+    for notification in &notifications {
+        assert_rfc3339_timestamp(&notification["params"]["time"])?;
+    }
     let stdout_event = notifications
         .iter()
         .map(|message| &message["params"])
@@ -815,6 +833,9 @@ fn execute_rpc_streams_events_and_final_result() -> Result<()> {
     assert!(decode_stream_event(stdout_event)?.contains("protocol ok"));
     assert_eq!(response["result"]["status"], "finished");
     assert_eq!(response["result"]["exit_code"], 0);
+    assert_eq!(response["result"]["signal"], Value::Null);
+    assert_rfc3339_timestamp(&response["result"]["started_at"])?;
+    assert_rfc3339_timestamp(&response["result"]["finished_at"])?;
     assert_eq!(
         response["result"]["platform_plan"]["enforcement"],
         "local-execution"
