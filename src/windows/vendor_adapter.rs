@@ -142,6 +142,11 @@ fn filesystem_entries(policy: &SandboxPolicy) -> Vec<WindowsVendorFilesystemEntr
     );
     extend_entries(
         &mut entries,
+        &policy.filesystem.read_only,
+        WindowsVendorFilesystemAccess::Read,
+    );
+    extend_entries(
+        &mut entries,
         &policy.filesystem.write,
         WindowsVendorFilesystemAccess::Write,
     );

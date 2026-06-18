@@ -92,6 +92,7 @@ impl BackendFeature {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FilesystemPolicy {
     pub read: Vec<String>,
+    pub read_only: Vec<String>,
     pub write: Vec<String>,
     pub deny: Vec<String>,
     pub protect_vcs: bool,
@@ -134,6 +135,7 @@ impl SandboxPolicy {
             "sandbox_level": self.sandbox_level.as_str(),
             "filesystem": {
                 "read": self.filesystem.read.clone(),
+                "read_only": self.filesystem.read_only.clone(),
                 "write": self.filesystem.write.clone(),
                 "deny": self.filesystem.deny.clone(),
                 "protect_vcs": self.filesystem.protect_vcs,
@@ -165,6 +167,7 @@ impl SandboxPolicy {
             "sandbox_level": self.sandbox_level.as_str(),
             "filesystem": {
                 "read": self.filesystem.read.clone(),
+                "read_only": self.filesystem.read_only.clone(),
                 "write": self.filesystem.write.clone(),
                 "deny": self.filesystem.deny.clone(),
                 "protect_vcs": self.filesystem.protect_vcs,
@@ -352,6 +355,7 @@ fn profile_filesystem(cwd: &Path, sandbox_level: SandboxLevel) -> FilesystemPoli
     match sandbox_level {
         SandboxLevel::DangerFullAccess => FilesystemPolicy {
             read: vec!["*".to_string()],
+            read_only: Vec::new(),
             write: vec!["*".to_string()],
             deny: Vec::new(),
             protect_vcs: false,
@@ -359,6 +363,7 @@ fn profile_filesystem(cwd: &Path, sandbox_level: SandboxLevel) -> FilesystemPoli
         },
         SandboxLevel::ReadOnly => FilesystemPolicy {
             read: vec![path_string(cwd)],
+            read_only: Vec::new(),
             write: Vec::new(),
             deny: Vec::new(),
             protect_vcs: false,
@@ -366,6 +371,7 @@ fn profile_filesystem(cwd: &Path, sandbox_level: SandboxLevel) -> FilesystemPoli
         },
         SandboxLevel::WorkspaceContained | SandboxLevel::WorkspaceWrite => FilesystemPolicy {
             read: vec![path_string(cwd)],
+            read_only: Vec::new(),
             write: vec![path_string(cwd)],
             deny: protected_subpaths(cwd),
             protect_vcs: true,
@@ -383,13 +389,14 @@ fn inline_filesystem(
         validate_keys(
             filesystem,
             "filesystem",
-            &["read", "write", "deny", "protect_vcs"],
+            &["read", "read_only", "write", "deny", "protect_vcs"],
         )?;
     }
     let read = string_array(filesystem, "read")?.unwrap_or_else(|| match sandbox_level {
         SandboxLevel::DangerFullAccess => vec!["*".to_string()],
         _ => vec![path_string(cwd)],
     });
+    let read_only = string_array(filesystem, "read_only")?.unwrap_or_default();
     let write = string_array(filesystem, "write")?.unwrap_or_else(|| match sandbox_level {
         SandboxLevel::DangerFullAccess => vec!["*".to_string()],
         SandboxLevel::ReadOnly => Vec::new(),
@@ -405,6 +412,7 @@ fn inline_filesystem(
         }
     });
     validate_path_entries(&read, "filesystem.read", false)?;
+    validate_path_entries(&read_only, "filesystem.read_only", false)?;
     validate_path_entries(
         &write,
         "filesystem.write",
@@ -414,6 +422,7 @@ fn inline_filesystem(
 
     Ok(FilesystemPolicy {
         read,
+        read_only,
         write,
         deny,
         protect_vcs,
@@ -702,10 +711,35 @@ mod tests {
                 "version": POLICY_VERSION,
                 "filesystem": {
                     "read": ["/workspace"],
-                    "read_only": ["/cache"]
+                    "execute": ["/tools"]
                 }
             }),
-            "filesystem.read_only",
+            "filesystem.execute",
+        );
+    }
+
+    #[test]
+    fn inline_policy_materializes_read_only_roots() {
+        let cwd = PathBuf::from("/workspace");
+        let policy = normalize_policy(
+            &json!({
+                "version": POLICY_VERSION,
+                "filesystem": {
+                    "read": ["/workspace"],
+                    "read_only": ["/cache"],
+                    "write": ["/workspace"]
+                },
+                "network": {"mode": "disabled"}
+            }),
+            &cwd,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(policy.filesystem.read_only, vec!["/cache"]);
+        assert_eq!(
+            policy.canonical_json()["filesystem"]["read_only"],
+            json!(["/cache"])
         );
     }
 

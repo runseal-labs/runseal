@@ -226,7 +226,13 @@ impl PlatformSandboxPlan {
             profile_root: None,
             synthetic_home: None,
             temp_root: None,
-            filesystem_read: policy.filesystem.read.clone(),
+            filesystem_read: policy
+                .filesystem
+                .read
+                .iter()
+                .chain(policy.filesystem.read_only.iter())
+                .cloned()
+                .collect(),
             filesystem_write: policy.filesystem.write.clone(),
             filesystem_deny: policy.filesystem.deny.clone(),
             filesystem_protected: protected_filesystem_labels(policy),

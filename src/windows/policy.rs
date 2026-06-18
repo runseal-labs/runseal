@@ -793,6 +793,35 @@ mod tests {
     }
 
     #[test]
+    fn read_only_filesystem_roots_become_read_only_rules() {
+        let cwd = PathBuf::from("/workspace");
+        let policy = normalize_policy(
+            &json!({
+                "version": crate::policy::POLICY_VERSION,
+                "filesystem": {
+                    "read": ["/workspace"],
+                    "read_only": ["/cache"],
+                    "write": ["/workspace"]
+                },
+                "network": {"mode": "disabled"}
+            }),
+            &cwd,
+            None,
+        )
+        .unwrap();
+
+        let plan = WindowsPolicyPlan::from_policy_and_runtime_roots(&policy, None);
+        let rules = plan.filesystem.enforcement_rules();
+
+        assert!(plan.filesystem.read_roots.contains(&"/cache".to_string()));
+        assert!(rules.iter().any(|rule| {
+            rule.root == "/cache"
+                && rule.access == WindowsFilesystemAccess::ReadOnly
+                && rule.source == WindowsFilesystemRuleSource::PolicyRead
+        }));
+    }
+
+    #[test]
     fn filesystem_rules_prioritize_denies_over_workspace_writes() {
         let cwd = PathBuf::from("/workspace");
         let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();

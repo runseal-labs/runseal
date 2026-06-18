@@ -990,8 +990,10 @@ fn execute_rejects_missing_cwd_without_creating_it() -> Result<()> {
 }
 
 #[test]
-fn inline_policy_rejects_unknown_required_fields() -> Result<()> {
+fn inline_policy_accepts_read_only_filesystem_roots() -> Result<()> {
     let tmp = TempDir::new()?;
+    let cache = tmp.path().join("cache");
+    let cache = cache.to_string_lossy().to_string();
     let output = run_rpc(&rpc_request(
         "explainPolicy",
         json!({
@@ -1000,8 +1002,10 @@ fn inline_policy_rejects_unknown_required_fields() -> Result<()> {
                 "version": "runseal.policy/v1",
                 "filesystem": {
                     "read": [tmp.path()],
-                    "read_only": [tmp.path()]
-                }
+                    "read_only": [cache],
+                    "write": [tmp.path()]
+                },
+                "network": {"mode": "disabled"}
             }
         }),
     ))?;
@@ -1012,14 +1016,12 @@ fn inline_policy_rejects_unknown_required_fields() -> Result<()> {
         String::from_utf8_lossy(&output.stderr)
     );
     let messages = stdout_json_lines(&output)?;
-    let response = &messages[0];
+    let payload = &messages[0]["result"];
 
-    assert_eq!(response["error"]["data"]["code"], "POLICY_INVALID");
-    assert!(
-        response["error"]["data"]["reason"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("filesystem.read_only")
+    assert_eq!(payload["filesystem"]["read_only"], json!([cache]));
+    assert_eq!(
+        payload["canonical_policy"]["filesystem"]["read_only"],
+        json!([cache])
     );
     Ok(())
 }
