@@ -1919,9 +1919,16 @@ fn execute_rpc_streams_events_and_final_result() -> Result<()> {
         .map(|message| &message["params"])
         .find(|event| event["type"] == "execution.stdout")
         .context("execution.stdout notification must exist")?;
+    let finished_event = notifications
+        .iter()
+        .map(|message| &message["params"])
+        .find(|event| event["type"] == "execution.finished")
+        .context("execution.finished notification must exist")?;
     assert!(decode_stream_event(stdout_event)?.contains("protocol ok"));
     assert_eq!(response["result"]["status"], "finished");
     assert_eq!(response["result"]["exit_code"], 0);
+    assert_eq!(finished_event["status"], response["result"]["status"]);
+    assert_eq!(finished_event["exit_code"], response["result"]["exit_code"]);
     assert_eq!(response["result"]["signal"], Value::Null);
     assert_rfc3339_timestamp(&response["result"]["started_at"])?;
     assert_rfc3339_timestamp(&response["result"]["finished_at"])?;
