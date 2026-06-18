@@ -250,7 +250,7 @@ fn policy_denial_uses_stable_error_code() -> Result<()> {
             "policy": {
                 "version": "runseal.policy/v1",
                 "filesystem": {"read": [tmp.path()], "write": []},
-                "network": {"mode": "none"}
+                "network": {"mode": "disabled"}
             }
         }),
     ))?;
@@ -275,6 +275,41 @@ fn policy_denial_uses_stable_error_code() -> Result<()> {
         audit_events
             .iter()
             .any(|event| event["type"] == "policy.denied" && event["decision"] == "denied")
+    );
+    Ok(())
+}
+
+#[test]
+fn inline_policy_rejects_unknown_required_fields() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let output = run_rpc(&rpc_request(
+        "explainPolicy",
+        json!({
+            "cwd": tmp.path(),
+            "policy": {
+                "version": "runseal.policy/v1",
+                "filesystem": {
+                    "read": [tmp.path()],
+                    "read_only": [tmp.path()]
+                }
+            }
+        }),
+    ))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = &messages[0];
+
+    assert_eq!(response["error"]["data"]["code"], "POLICY_INVALID");
+    assert!(
+        response["error"]["data"]["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("filesystem.read_only")
     );
     Ok(())
 }

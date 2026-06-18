@@ -1,4 +1,4 @@
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 
@@ -26,7 +26,7 @@ impl SandboxLevel {
         match value {
             "read-only" => Some(Self::ReadOnly),
             "workspace-contained" => Some(Self::WorkspaceContained),
-            "workspace-write" | "workspace-proxy" => Some(Self::WorkspaceWrite),
+            "workspace-write" => Some(Self::WorkspaceWrite),
             "danger-full-access" => Some(Self::DangerFullAccess),
             _ => None,
         }
@@ -53,7 +53,7 @@ impl NetworkMode {
 
     pub fn from_str(value: &str) -> Option<Self> {
         match value {
-            "disabled" | "none" => Some(Self::Disabled),
+            "disabled" => Some(Self::Disabled),
             "proxy" => Some(Self::Proxy),
             _ => None,
         }
@@ -239,33 +239,60 @@ pub fn normalize_policy(
     let object = input
         .as_object()
         .ok_or_else(|| PolicyError::invalid("policy must be a profile name or object"))?;
+    validate_keys(
+        object,
+        "policy",
+        &[
+            "version",
+            "id",
+            "description",
+            "sandbox_level",
+            "filesystem",
+            "network",
+            "environment",
+            "process",
+            "resources",
+            "audit",
+            "approval",
+            "backend",
+        ],
+    )?;
 
-    let version = object
-        .get("version")
-        .and_then(Value::as_str)
-        .unwrap_or(POLICY_VERSION);
+    let version = optional_string(object, "version")?.unwrap_or(POLICY_VERSION);
     if version != POLICY_VERSION {
         return Err(PolicyError::invalid(format!(
             "unsupported policy version: {version}"
         )));
     }
+    optional_string(object, "description")?;
+    reject_non_empty_section(object, "environment")?;
+    reject_non_empty_section(object, "process")?;
+    reject_non_empty_section(object, "resources")?;
+    reject_non_empty_section(object, "audit")?;
+    reject_non_empty_section(object, "approval")?;
+    reject_non_empty_section(object, "backend")?;
 
-    let id = object
-        .get("id")
-        .and_then(Value::as_str)
+    let id = optional_string(object, "id")?
         .unwrap_or("inline")
         .to_string();
-    let filesystem = object.get("filesystem");
-    let sandbox_level = object
-        .get("sandbox_level")
-        .or_else(|| object.get("level"))
-        .and_then(Value::as_str)
-        .and_then(SandboxLevel::from_str)
-        .unwrap_or_else(|| infer_level(filesystem));
+    let filesystem = optional_object(object, "filesystem")?;
+    let sandbox_level = if let Some(level) = optional_string(object, "sandbox_level")? {
+        SandboxLevel::from_str(level).ok_or_else(|| {
+            PolicyError::invalid(format!(
+                "sandbox_level must be read-only, workspace-contained, workspace-write, or danger-full-access, got {level}"
+            ))
+        })?
+    } else {
+        infer_level(filesystem)
+    };
+    let inline_network = match inline_network_mode(object.get("network")) {
+        Some(network) => Some(network?),
+        None => None,
+    };
     let network = if let Some(network) = network_override {
         network
-    } else if let Some(network) = inline_network_mode(object.get("network")) {
-        network?
+    } else if let Some(network) = inline_network {
+        network
     } else {
         default_network_mode(sandbox_level)
     };
@@ -326,10 +353,17 @@ fn profile_filesystem(cwd: &Path, sandbox_level: SandboxLevel) -> FilesystemPoli
 }
 
 fn inline_filesystem(
-    filesystem: Option<&Value>,
+    filesystem: Option<&Map<String, Value>>,
     cwd: &Path,
     sandbox_level: SandboxLevel,
 ) -> Result<FilesystemPolicy, PolicyError> {
+    if let Some(filesystem) = filesystem {
+        validate_keys(
+            filesystem,
+            "filesystem",
+            &["read", "write", "deny", "protect_vcs"],
+        )?;
+    }
     let read = string_array(filesystem, "read")?.unwrap_or_else(|| match sandbox_level {
         SandboxLevel::DangerFullAccess => vec!["*".to_string()],
         _ => vec![path_string(cwd)],
@@ -339,9 +373,7 @@ fn inline_filesystem(
         SandboxLevel::ReadOnly => Vec::new(),
         SandboxLevel::WorkspaceContained | SandboxLevel::WorkspaceWrite => vec![path_string(cwd)],
     });
-    let protect_vcs = filesystem
-        .and_then(|value| value.get("protect_vcs"))
-        .and_then(Value::as_bool)
+    let protect_vcs = optional_bool(filesystem, "protect_vcs")?
         .unwrap_or_else(|| sandbox_level.protects_workspace());
     let deny = string_array(filesystem, "deny")?.unwrap_or_else(|| {
         if protect_vcs {
@@ -361,7 +393,7 @@ fn inline_filesystem(
 }
 
 fn string_array(
-    object: Option<&Value>,
+    object: Option<&Map<String, Value>>,
     field: &'static str,
 ) -> Result<Option<Vec<String>>, PolicyError> {
     let Some(value) = object.and_then(|object| object.get(field)) else {
@@ -387,10 +419,22 @@ fn inline_network_mode(network: Option<&Value>) -> Option<Result<NetworkMode, Po
     let mode = if let Some(mode) = value.as_str() {
         mode
     } else {
-        value
-            .get("mode")
-            .and_then(Value::as_str)
-            .unwrap_or("disabled")
+        let object = match value.as_object() {
+            Some(object) => object,
+            None => {
+                return Some(Err(PolicyError::invalid(
+                    "network must be a string or object",
+                )));
+            }
+        };
+        if let Err(err) = validate_keys(object, "network", &["mode"]) {
+            return Some(Err(err));
+        }
+        match optional_string(object, "mode") {
+            Ok(Some(mode)) => mode,
+            Ok(None) => "disabled",
+            Err(err) => return Some(Err(err)),
+        }
     };
 
     Some(NetworkMode::from_str(mode).ok_or_else(|| {
@@ -421,9 +465,9 @@ fn default_environment(network: NetworkMode) -> EnvironmentPolicy {
     }
 }
 
-fn infer_level(filesystem: Option<&Value>) -> SandboxLevel {
+fn infer_level(filesystem: Option<&Map<String, Value>>) -> SandboxLevel {
     if filesystem
-        .and_then(|value| value.get("write"))
+        .and_then(|object| object.get("write"))
         .and_then(Value::as_array)
         .is_some_and(Vec::is_empty)
     {
@@ -444,10 +488,92 @@ fn path_string(path: &Path) -> String {
     path.to_string_lossy().to_string()
 }
 
+fn validate_keys(
+    object: &Map<String, Value>,
+    context: &'static str,
+    allowed_keys: &[&'static str],
+) -> Result<(), PolicyError> {
+    for key in object.keys() {
+        if !allowed_keys.contains(&key.as_str()) {
+            return Err(PolicyError::invalid(format!(
+                "{context}.{key} is not supported by {POLICY_VERSION}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn optional_string<'a>(
+    object: &'a Map<String, Value>,
+    field: &'static str,
+) -> Result<Option<&'a str>, PolicyError> {
+    let Some(value) = object.get(field) else {
+        return Ok(None);
+    };
+    value
+        .as_str()
+        .map(Some)
+        .ok_or_else(|| PolicyError::invalid(format!("{field} must be a string")))
+}
+
+fn optional_object<'a>(
+    object: &'a Map<String, Value>,
+    field: &'static str,
+) -> Result<Option<&'a Map<String, Value>>, PolicyError> {
+    let Some(value) = object.get(field) else {
+        return Ok(None);
+    };
+    value
+        .as_object()
+        .map(Some)
+        .ok_or_else(|| PolicyError::invalid(format!("{field} must be an object")))
+}
+
+fn optional_bool(
+    object: Option<&Map<String, Value>>,
+    field: &'static str,
+) -> Result<Option<bool>, PolicyError> {
+    let Some(value) = object.and_then(|object| object.get(field)) else {
+        return Ok(None);
+    };
+    value
+        .as_bool()
+        .map(Some)
+        .ok_or_else(|| PolicyError::invalid(format!("filesystem.{field} must be a boolean")))
+}
+
+fn reject_non_empty_section(
+    object: &Map<String, Value>,
+    field: &'static str,
+) -> Result<(), PolicyError> {
+    let Some(section) = optional_object(object, field)? else {
+        return Ok(());
+    };
+    if section.is_empty() {
+        Ok(())
+    } else {
+        Err(PolicyError::invalid(format!(
+            "{field} requirements are not supported in this build"
+        )))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    fn assert_policy_invalid(input: Value, expected_reason: &str) {
+        let cwd = PathBuf::from("/workspace");
+        let err = normalize_policy(&input, &cwd, None).unwrap_err();
+
+        assert_eq!(err.code, "POLICY_INVALID");
+        assert!(
+            err.reason.contains(expected_reason),
+            "expected reason to contain {expected_reason:?}, got {:?}",
+            err.reason
+        );
+    }
 
     #[test]
     fn named_profile_materializes_canonical_policy() {
@@ -474,5 +600,116 @@ mod tests {
 
         assert_eq!(disabled.network.mode, NetworkMode::Disabled);
         assert_ne!(proxy.hash(), disabled.hash());
+    }
+
+    #[test]
+    fn inline_policy_rejects_unknown_top_level_fields() {
+        assert_policy_invalid(
+            json!({
+                "version": POLICY_VERSION,
+                "filesystem": {},
+                "unknown_requirement": true
+            }),
+            "policy.unknown_requirement",
+        );
+    }
+
+    #[test]
+    fn inline_policy_rejects_unknown_filesystem_fields() {
+        assert_policy_invalid(
+            json!({
+                "version": POLICY_VERSION,
+                "filesystem": {
+                    "read": ["/workspace"],
+                    "read_only": ["/cache"]
+                }
+            }),
+            "filesystem.read_only",
+        );
+    }
+
+    #[test]
+    fn inline_policy_rejects_unsupported_network_routes() {
+        assert_policy_invalid(
+            json!({
+                "version": POLICY_VERSION,
+                "network": {
+                    "mode": "proxy",
+                    "routes": ["github-api"]
+                }
+            }),
+            "network.routes",
+        );
+    }
+
+    #[test]
+    fn network_override_does_not_skip_inline_network_validation() {
+        let cwd = PathBuf::from("/workspace");
+        let err = normalize_policy(
+            &json!({
+                "version": POLICY_VERSION,
+                "network": {
+                    "mode": "proxy",
+                    "routes": ["github-api"]
+                }
+            }),
+            &cwd,
+            Some(NetworkMode::Disabled),
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code, "POLICY_INVALID");
+        assert!(err.reason.contains("network.routes"));
+    }
+
+    #[test]
+    fn inline_policy_rejects_non_empty_unsupported_sections() {
+        assert_policy_invalid(
+            json!({
+                "version": POLICY_VERSION,
+                "environment": {
+                    "set": {
+                        "CI": "1"
+                    }
+                }
+            }),
+            "environment requirements are not supported",
+        );
+        assert_policy_invalid(
+            json!({
+                "version": POLICY_VERSION,
+                "resources": {
+                    "timeout_ms": 1000
+                }
+            }),
+            "resources requirements are not supported",
+        );
+    }
+
+    #[test]
+    fn invalid_sandbox_level_is_not_inferred() {
+        assert_policy_invalid(
+            json!({
+                "version": POLICY_VERSION,
+                "sandbox_level": "workspace-proxy",
+                "filesystem": {
+                    "write": ["/workspace"]
+                }
+            }),
+            "sandbox_level must be",
+        );
+    }
+
+    #[test]
+    fn legacy_network_alias_is_rejected() {
+        assert_policy_invalid(
+            json!({
+                "version": POLICY_VERSION,
+                "network": {
+                    "mode": "none"
+                }
+            }),
+            "network.mode must be disabled or proxy",
+        );
     }
 }
