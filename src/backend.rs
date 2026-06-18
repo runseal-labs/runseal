@@ -989,6 +989,8 @@ fn capabilities_json_for(backend: &dyn SandboxBackend, notes: &[&'static str]) -
         "features": {
             "local_execution": true,
             "filesystem_policy": supported_features.contains(&BackendFeature::FilesystemPolicy),
+            "runtime_roots": supported_features.contains(&BackendFeature::RuntimeRoots),
+            "runtime_environment": supported_features.contains(&BackendFeature::RuntimeEnvironment),
             "process_isolation": supported_features.contains(&BackendFeature::ProcessIsolation),
             "process_cleanup": supported_features.contains(&BackendFeature::ProcessCleanup),
             "network_disabled": supported_features.contains(&BackendFeature::NetworkDisabled),
@@ -1040,6 +1042,8 @@ mod tests {
         assert_eq!(
             missing_backend_features(&policy, &[BackendFeature::FilesystemPolicy]),
             vec![
+                BackendFeature::RuntimeRoots,
+                BackendFeature::RuntimeEnvironment,
                 BackendFeature::ProcessIsolation,
                 BackendFeature::ProcessCleanup,
                 BackendFeature::NetworkProxy,

@@ -106,7 +106,13 @@ fn assert_backend_missing(response: &Value, root: &Path) -> Result<()> {
     assert_backend_missing_features(
         response,
         root,
-        &["filesystem_policy", "process_isolation", "process_cleanup"],
+        &[
+            "filesystem_policy",
+            "runtime_roots",
+            "runtime_environment",
+            "process_isolation",
+            "process_cleanup",
+        ],
     )
 }
 
@@ -288,6 +294,8 @@ fn network_disabled_blocks_direct_egress_when_supported_or_fails_closed() -> Res
             &workspace,
             &[
                 "filesystem_policy",
+                "runtime_roots",
+                "runtime_environment",
                 "process_isolation",
                 "process_cleanup",
                 "network_disabled",
@@ -321,6 +329,8 @@ fn network_proxy_blocks_direct_egress_when_supported_or_fails_closed() -> Result
             &workspace,
             &[
                 "filesystem_policy",
+                "runtime_roots",
+                "runtime_environment",
                 "process_isolation",
                 "process_cleanup",
                 "network_proxy",

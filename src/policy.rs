@@ -63,6 +63,8 @@ impl NetworkMode {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BackendFeature {
     FilesystemPolicy,
+    RuntimeRoots,
+    RuntimeEnvironment,
     ProcessIsolation,
     ProcessCleanup,
     NetworkDisabled,
@@ -73,6 +75,8 @@ impl BackendFeature {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::FilesystemPolicy => "filesystem_policy",
+            Self::RuntimeRoots => "runtime_roots",
+            Self::RuntimeEnvironment => "runtime_environment",
             Self::ProcessIsolation => "process_isolation",
             Self::ProcessCleanup => "process_cleanup",
             Self::NetworkDisabled => "network_disabled",
@@ -202,6 +206,8 @@ impl SandboxPolicy {
 
         let mut features = vec![
             BackendFeature::FilesystemPolicy,
+            BackendFeature::RuntimeRoots,
+            BackendFeature::RuntimeEnvironment,
             BackendFeature::ProcessIsolation,
             BackendFeature::ProcessCleanup,
         ];
@@ -646,6 +652,8 @@ mod tests {
             policy.required_backend_feature_names(),
             vec![
                 "filesystem_policy",
+                "runtime_roots",
+                "runtime_environment",
                 "process_isolation",
                 "process_cleanup",
                 "network_proxy"

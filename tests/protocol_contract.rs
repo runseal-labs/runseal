@@ -220,6 +220,8 @@ fn get_capabilities_rpc_contract() -> Result<()> {
     assert_eq!(payload["sandbox_levels"]["danger-full-access"], "supported");
     assert_eq!(payload["sandbox_levels"]["workspace-write"], "unsupported");
     assert_eq!(payload["network_modes"]["disabled"], "unsupported");
+    assert_eq!(payload["features"]["runtime_roots"], false);
+    assert_eq!(payload["features"]["runtime_environment"], false);
     assert_eq!(payload["features"]["process_isolation"], false);
     assert_eq!(payload["features"]["process_cleanup"], false);
     assert_eq!(payload["features"]["audit_jsonl"], true);
@@ -790,6 +792,8 @@ fn explain_policy_returns_effective_hash_and_network_mode() -> Result<()> {
         payload["required_backend_features"],
         json!([
             "filesystem_policy",
+            "runtime_roots",
+            "runtime_environment",
             "process_isolation",
             "process_cleanup",
             "network_proxy"
@@ -991,6 +995,8 @@ fn sandboxed_policy_without_backend_fails_closed() -> Result<()> {
         response["error"]["data"]["missing_features"],
         json!([
             "filesystem_policy",
+            "runtime_roots",
+            "runtime_environment",
             "process_isolation",
             "process_cleanup",
             "network_disabled"
@@ -1028,6 +1034,8 @@ fn sandboxed_policy_without_backend_fails_closed() -> Result<()> {
             plan["required_backend_features"],
             json!([
                 "filesystem_policy",
+                "runtime_roots",
+                "runtime_environment",
                 "process_isolation",
                 "process_cleanup",
                 "network_disabled"
