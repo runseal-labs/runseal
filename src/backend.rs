@@ -1,5 +1,5 @@
 use crate::policy::{BackendFeature, SandboxPolicy};
-use crate::windows_plan::WindowsPolicyPlan;
+use crate::windows_plan::{WindowsPolicyPlan, WindowsRuntimeRoots};
 use serde_json::{Value, json};
 use std::env;
 use std::ffi::OsString;
@@ -479,11 +479,20 @@ impl WindowsReferenceBackend {
         cwd: &Path,
         policy: &SandboxPolicy,
     ) -> PlatformSandboxPlan {
-        let windows_policy = WindowsPolicyPlan::from_policy(policy);
         let runtime_root = cwd.join(".runseal").join("runtime").join(execution_id);
         let profile_root = runtime_root.join("profile");
         let synthetic_home = runtime_root.join("home");
         let temp_root = runtime_root.join("temp");
+        let windows_policy = WindowsPolicyPlan::from_policy_and_runtime_roots(
+            policy,
+            Some(WindowsRuntimeRoots::new(
+                path_string(&runtime_root),
+                path_string(&profile_root),
+                path_string(&synthetic_home),
+                path_string(&temp_root),
+            )),
+        );
+        let filesystem_write = windows_policy.filesystem.effective_write_roots();
 
         PlatformSandboxPlan {
             backend: self.name(),
@@ -500,7 +509,7 @@ impl WindowsReferenceBackend {
             synthetic_home: Some(path_string(&synthetic_home)),
             temp_root: Some(path_string(&temp_root)),
             filesystem_read: windows_policy.filesystem.read_roots,
-            filesystem_write: windows_policy.filesystem.write_roots,
+            filesystem_write,
             filesystem_deny: windows_policy.filesystem.protected_roots,
             network_mode: windows_policy.network.guard.as_str(),
             environment_inherit: policy.environment.inherit.clone(),
@@ -953,6 +962,35 @@ mod tests {
         );
         assert_eq!(MacosExperimentalBackend.status(), "experimental");
         assert!(MacosExperimentalBackend.supported_features().is_empty());
+    }
+
+    #[test]
+    fn windows_fail_closed_preview_includes_runtime_write_roots() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&cwd)?;
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+
+        let plan = WindowsReferenceBackend.fail_closed_plan("exec_preview", &cwd, &policy);
+
+        assert!(plan.filesystem_write.contains(&path_string(&cwd)));
+        for root in [
+            plan.runtime_root.as_deref(),
+            plan.profile_root.as_deref(),
+            plan.synthetic_home.as_deref(),
+            plan.temp_root.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            assert!(
+                plan.filesystem_write.iter().any(|item| item == root),
+                "filesystem.write must include runtime write root {root}"
+            );
+        }
+        assert_eq!(plan.enforcement, "fail-closed-preview");
+        assert_eq!(WindowsReferenceBackend.supported_features(), &[]);
+        Ok(())
     }
 
     #[test]

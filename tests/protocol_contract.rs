@@ -1011,11 +1011,27 @@ fn sandboxed_policy_without_backend_fails_closed() -> Result<()> {
         assert!(plan["profile_root"].as_str().is_some());
         assert!(plan["synthetic_home"].as_str().is_some());
         assert!(plan["temp_root"].as_str().is_some());
+        let write_roots = plan["filesystem"]["write"]
+            .as_array()
+            .expect("read-only write roots must be an array");
+        assert!(!write_roots.iter().any(|root| root == &plan["cwd"]));
+        for root in [
+            &plan["runtime_root"],
+            &plan["profile_root"],
+            &plan["synthetic_home"],
+            &plan["temp_root"],
+        ] {
+            assert!(
+                write_roots.iter().any(|write_root| write_root == root),
+                "read-only preview write roots must include runtime root {root}"
+            );
+        }
         assert!(
             plan["filesystem"]["write"]
                 .as_array()
                 .expect("read-only write roots must be an array")
-                .is_empty()
+                .iter()
+                .all(Value::is_string)
         );
         let runtime_root = PathBuf::from(
             plan["runtime_root"]
