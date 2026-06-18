@@ -1931,6 +1931,19 @@ fn execute_rpc_streams_events_and_final_result() -> Result<()> {
     assert_eq!(finished_event["status"], response["result"]["status"]);
     assert_eq!(finished_event["exit_code"], response["result"]["exit_code"]);
     assert_eq!(response["result"]["signal"], Value::Null);
+    assert_eq!(stdout_event["bytes"], response["result"]["stdout_bytes"]);
+    assert!(
+        response["result"]["stdout_bytes"]
+            .as_u64()
+            .unwrap_or_default()
+            > 0
+    );
+    assert_eq!(response["result"]["stderr_bytes"], 0);
+    assert!(
+        response["result"]["resource_usage"]["duration_ms"]
+            .as_u64()
+            .is_some()
+    );
     assert_rfc3339_timestamp(&response["result"]["started_at"])?;
     assert_rfc3339_timestamp(&response["result"]["finished_at"])?;
     assert_eq!(
