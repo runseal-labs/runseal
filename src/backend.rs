@@ -1123,7 +1123,7 @@ fn capabilities_json_for(backend: &dyn SandboxBackend, notes: &[&'static str]) -
             "network_disabled": supported_features.contains(&BackendFeature::NetworkDisabled),
             "network_proxy": supported_features.contains(&BackendFeature::NetworkProxy),
             "managed_proxy": supported_features.contains(&BackendFeature::ManagedProxy),
-            "resource_limits": false,
+            "resource_limits": supported_features.contains(&BackendFeature::ResourceLimits),
             "audit_jsonl": true,
             "otel_export": false,
         },
@@ -1284,6 +1284,30 @@ mod tests {
                 BackendFeature::ManagedProxy,
             ]
         );
+    }
+
+    #[test]
+    fn resource_limits_require_backend_feature() {
+        let cwd = PathBuf::from("/workspace");
+        let policy = normalize_policy(
+            &json!({
+                "version": "runseal.policy/v1",
+                "resources": {
+                    "memory_bytes": 2147483648u64,
+                    "cpu_percent": 200
+                }
+            }),
+            &cwd,
+            Some(NetworkMode::Disabled),
+        )
+        .unwrap();
+
+        assert!(
+            policy
+                .required_backend_feature_names()
+                .contains(&"resource_limits")
+        );
+        assert!(missing_backend_features(&policy, &[]).contains(&BackendFeature::ResourceLimits));
     }
 
     #[test]

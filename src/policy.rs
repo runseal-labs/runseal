@@ -74,6 +74,7 @@ pub enum BackendFeature {
     NetworkDisabled,
     NetworkProxy,
     ManagedProxy,
+    ResourceLimits,
 }
 
 impl BackendFeature {
@@ -88,6 +89,7 @@ impl BackendFeature {
             Self::NetworkDisabled => "network_disabled",
             Self::NetworkProxy => "network_proxy",
             Self::ManagedProxy => "managed_proxy",
+            Self::ResourceLimits => "resource_limits",
         }
     }
 }
@@ -120,6 +122,8 @@ pub struct EnvironmentPolicy {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResourcePolicy {
     pub timeout_ms: Option<u64>,
+    pub memory_bytes: Option<u64>,
+    pub cpu_percent: Option<u64>,
     pub max_output_bytes: Option<u64>,
 }
 
@@ -184,6 +188,8 @@ impl SandboxPolicy {
             },
             "resources": {
                 "timeout_ms": self.resources.timeout_ms,
+                "memory_bytes": self.resources.memory_bytes,
+                "cpu_percent": self.resources.cpu_percent,
                 "max_output_bytes": self.resources.max_output_bytes,
             },
             "process": {
@@ -234,6 +240,8 @@ impl SandboxPolicy {
             },
             "resources": {
                 "timeout_ms": self.resources.timeout_ms,
+                "memory_bytes": self.resources.memory_bytes,
+                "cpu_percent": self.resources.cpu_percent,
                 "max_output_bytes": self.resources.max_output_bytes,
             },
             "process": {
@@ -285,6 +293,9 @@ impl SandboxPolicy {
             BackendFeature::ProcessCleanup,
             BackendFeature::DirectNetworkDeny,
         ];
+        if self.resources.memory_bytes.is_some() || self.resources.cpu_percent.is_some() {
+            features.push(BackendFeature::ResourceLimits);
+        }
         match self.network.mode {
             NetworkMode::Disabled => features.push(BackendFeature::NetworkDisabled),
             NetworkMode::Proxy => {
@@ -385,7 +396,7 @@ pub fn normalize_policy(
     };
     let network = inline_network_policy(object.get("network"), network)?;
     let environment = inline_environment(optional_object(object, "environment")?, network.mode)?;
-    let resources = inline_resources(optional_object(object, "resources")?)?;
+    let resources = inline_resources(optional_object(object, "resources")?, sandbox_level)?;
     let process = inline_process(optional_object(object, "process")?, sandbox_level)?;
     let approval = inline_approval(optional_object(object, "approval")?)?;
 
@@ -634,7 +645,10 @@ fn inline_environment(
     Ok(policy)
 }
 
-fn inline_resources(resources: Option<&Map<String, Value>>) -> Result<ResourcePolicy, PolicyError> {
+fn inline_resources(
+    resources: Option<&Map<String, Value>>,
+    sandbox_level: SandboxLevel,
+) -> Result<ResourcePolicy, PolicyError> {
     let Some(resources) = resources else {
         return Ok(default_resources());
     };
@@ -648,10 +662,15 @@ fn inline_resources(resources: Option<&Map<String, Value>>) -> Result<ResourcePo
             "max_output_bytes",
         ],
     )?;
-    reject_present_fields(resources, &["memory_bytes", "cpu_percent"], "resources")?;
+    if sandbox_level == SandboxLevel::DangerFullAccess {
+        reject_backend_resource_requirement(resources, "memory_bytes")?;
+        reject_backend_resource_requirement(resources, "cpu_percent")?;
+    }
 
     Ok(ResourcePolicy {
         timeout_ms: optional_u64(resources, "resources", "timeout_ms")?,
+        memory_bytes: optional_positive_u64(resources, "resources", "memory_bytes")?,
+        cpu_percent: optional_positive_u64(resources, "resources", "cpu_percent")?,
         max_output_bytes: optional_u64(resources, "resources", "max_output_bytes")?,
     })
 }
@@ -830,6 +849,8 @@ fn default_environment(network: NetworkMode) -> EnvironmentPolicy {
 fn default_resources() -> ResourcePolicy {
     ResourcePolicy {
         timeout_ms: None,
+        memory_bytes: None,
+        cpu_percent: None,
         max_output_bytes: None,
     }
 }
@@ -1061,6 +1082,32 @@ fn optional_u64(
         .ok_or_else(|| PolicyError::invalid(format!("{context}.{field} must be an integer")))
 }
 
+fn optional_positive_u64(
+    object: &Map<String, Value>,
+    context: &'static str,
+    field: &'static str,
+) -> Result<Option<u64>, PolicyError> {
+    let value = optional_u64(object, context, field)?;
+    if value == Some(0) {
+        return Err(PolicyError::invalid(format!(
+            "{context}.{field} must be greater than zero"
+        )));
+    }
+    Ok(value)
+}
+
+fn reject_backend_resource_requirement(
+    resources: &Map<String, Value>,
+    field: &'static str,
+) -> Result<(), PolicyError> {
+    if resources.contains_key(field) {
+        return Err(PolicyError::invalid(format!(
+            "resources.{field} requires a sandbox backend"
+        )));
+    }
+    Ok(())
+}
+
 fn reject_non_empty_section(
     object: &Map<String, Value>,
     field: &'static str,
@@ -1075,21 +1122,6 @@ fn reject_non_empty_section(
             "{field} requirements are not supported in this build"
         )))
     }
-}
-
-fn reject_present_fields(
-    object: &Map<String, Value>,
-    fields: &[&'static str],
-    context: &'static str,
-) -> Result<(), PolicyError> {
-    for field in fields {
-        if object.contains_key(*field) {
-            return Err(PolicyError::invalid(format!(
-                "{context}.{field} is not supported in this build"
-            )));
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -1236,6 +1268,8 @@ mod tests {
                 "version": POLICY_VERSION,
                 "resources": {
                     "timeout_ms": 1000,
+                    "memory_bytes": 2147483648u64,
+                    "cpu_percent": 200,
                     "max_output_bytes": 2048
                 }
             }),
@@ -1245,8 +1279,15 @@ mod tests {
         .unwrap();
 
         assert_eq!(policy.resources.timeout_ms, Some(1000));
+        assert_eq!(policy.resources.memory_bytes, Some(2147483648));
+        assert_eq!(policy.resources.cpu_percent, Some(200));
         assert_eq!(policy.resources.max_output_bytes, Some(2048));
         assert_eq!(policy.canonical_json()["resources"]["timeout_ms"], 1000);
+        assert_eq!(
+            policy.canonical_json()["resources"]["memory_bytes"],
+            2147483648u64
+        );
+        assert_eq!(policy.canonical_json()["resources"]["cpu_percent"], 200);
         assert_eq!(
             policy.canonical_json()["resources"]["max_output_bytes"],
             2048
@@ -1377,11 +1418,21 @@ mod tests {
         assert_policy_invalid(
             json!({
                 "version": POLICY_VERSION,
+                "sandbox_level": "danger-full-access",
                 "resources": {
                     "memory_bytes": 1000
                 }
             }),
-            "resources.memory_bytes is not supported",
+            "resources.memory_bytes requires a sandbox backend",
+        );
+        assert_policy_invalid(
+            json!({
+                "version": POLICY_VERSION,
+                "resources": {
+                    "cpu_percent": 0
+                }
+            }),
+            "resources.cpu_percent must be greater than zero",
         );
         assert_policy_invalid(
             json!({

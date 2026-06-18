@@ -1213,6 +1213,8 @@ fn inline_policy_accepts_environment_controls() -> Result<()> {
                 },
                 "resources": {
                     "timeout_ms": 1000,
+                    "memory_bytes": 2147483648u64,
+                    "cpu_percent": 200,
                     "max_output_bytes": 2048
                 },
                 "process": {
@@ -1249,6 +1251,8 @@ fn inline_policy_accepts_environment_controls() -> Result<()> {
     assert_eq!(payload["network"]["routes"], json!(["github-api"]));
     assert_eq!(payload["network"]["direct_allow_hosts"], json!([]));
     assert_eq!(payload["resources"]["timeout_ms"], 1000);
+    assert_eq!(payload["resources"]["memory_bytes"], 2147483648u64);
+    assert_eq!(payload["resources"]["cpu_percent"], 200);
     assert_eq!(payload["resources"]["max_output_bytes"], 2048);
     assert_eq!(payload["process"]["allow_child_processes"], true);
     assert_eq!(payload["process"]["kill_on_parent_exit"], true);
@@ -1267,6 +1271,11 @@ fn inline_policy_accepts_environment_controls() -> Result<()> {
         json!(["github-api"])
     );
     assert_eq!(payload["canonical_policy"]["resources"]["timeout_ms"], 1000);
+    assert_eq!(
+        payload["canonical_policy"]["resources"]["memory_bytes"],
+        2147483648u64
+    );
+    assert_eq!(payload["canonical_policy"]["resources"]["cpu_percent"], 200);
     assert_eq!(
         payload["canonical_policy"]["resources"]["max_output_bytes"],
         2048
