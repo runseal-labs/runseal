@@ -225,6 +225,7 @@ fn get_capabilities_rpc_contract() -> Result<()> {
     assert_eq!(payload["features"]["process_isolation"], false);
     assert_eq!(payload["features"]["process_cleanup"], false);
     assert_eq!(payload["features"]["direct_network_deny"], false);
+    assert_eq!(payload["features"]["managed_proxy"], false);
     assert_eq!(payload["features"]["audit_jsonl"], true);
     Ok(())
 }
@@ -798,7 +799,8 @@ fn explain_policy_returns_effective_hash_and_network_mode() -> Result<()> {
             "process_isolation",
             "process_cleanup",
             "direct_network_deny",
-            "network_proxy"
+            "network_proxy",
+            "managed_proxy"
         ])
     );
     assert!(

@@ -337,6 +337,7 @@ fn network_proxy_blocks_direct_egress_when_supported_or_fails_closed() -> Result
                 "process_cleanup",
                 "direct_network_deny",
                 "network_proxy",
+                "managed_proxy",
             ],
         )?;
         return Ok(());

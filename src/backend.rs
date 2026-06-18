@@ -996,6 +996,7 @@ fn capabilities_json_for(backend: &dyn SandboxBackend, notes: &[&'static str]) -
             "direct_network_deny": supported_features.contains(&BackendFeature::DirectNetworkDeny),
             "network_disabled": supported_features.contains(&BackendFeature::NetworkDisabled),
             "network_proxy": supported_features.contains(&BackendFeature::NetworkProxy),
+            "managed_proxy": supported_features.contains(&BackendFeature::ManagedProxy),
             "resource_limits": false,
             "audit_jsonl": true,
             "otel_export": false,
@@ -1049,6 +1050,7 @@ mod tests {
                 BackendFeature::ProcessCleanup,
                 BackendFeature::DirectNetworkDeny,
                 BackendFeature::NetworkProxy,
+                BackendFeature::ManagedProxy,
             ]
         );
     }

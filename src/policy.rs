@@ -70,6 +70,7 @@ pub enum BackendFeature {
     DirectNetworkDeny,
     NetworkDisabled,
     NetworkProxy,
+    ManagedProxy,
 }
 
 impl BackendFeature {
@@ -83,6 +84,7 @@ impl BackendFeature {
             Self::DirectNetworkDeny => "direct_network_deny",
             Self::NetworkDisabled => "network_disabled",
             Self::NetworkProxy => "network_proxy",
+            Self::ManagedProxy => "managed_proxy",
         }
     }
 }
@@ -214,10 +216,13 @@ impl SandboxPolicy {
             BackendFeature::ProcessCleanup,
             BackendFeature::DirectNetworkDeny,
         ];
-        features.push(match self.network.mode {
-            NetworkMode::Disabled => BackendFeature::NetworkDisabled,
-            NetworkMode::Proxy => BackendFeature::NetworkProxy,
-        });
+        match self.network.mode {
+            NetworkMode::Disabled => features.push(BackendFeature::NetworkDisabled),
+            NetworkMode::Proxy => {
+                features.push(BackendFeature::NetworkProxy);
+                features.push(BackendFeature::ManagedProxy);
+            }
+        }
         features
     }
 
@@ -660,7 +665,8 @@ mod tests {
                 "process_isolation",
                 "process_cleanup",
                 "direct_network_deny",
-                "network_proxy"
+                "network_proxy",
+                "managed_proxy"
             ]
         );
         assert!(policy.hash().starts_with("sha256:"));

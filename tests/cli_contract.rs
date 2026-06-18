@@ -190,6 +190,7 @@ fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
     assert_eq!(payload["features"]["process_isolation"], false);
     assert_eq!(payload["features"]["process_cleanup"], false);
     assert_eq!(payload["features"]["direct_network_deny"], false);
+    assert_eq!(payload["features"]["managed_proxy"], false);
     assert_eq!(payload["features"]["audit_jsonl"], true);
     assert_eq!(payload["sandbox_levels"]["danger-full-access"], "supported");
     assert_eq!(payload["sandbox_levels"]["read-only"], "unsupported");
