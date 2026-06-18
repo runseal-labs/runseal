@@ -13,7 +13,7 @@ use std::io::{self, Write};
 #[cfg(windows)]
 use std::os::windows::io::AsRawHandle;
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 #[cfg(windows)]
@@ -1088,9 +1088,14 @@ fn spawn_local_command(
         process.stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut child = process.spawn()?;
         #[cfg(windows)]
-        let _process_job = assign_windows_process_job(plan, &child)?;
-        if let ExecutionStdin::Bytes(bytes) = stdin {
-            write_child_stdin(&mut child, bytes)?;
+        let _process_job = match assign_windows_process_job(plan, &child) {
+            Ok(process_job) => process_job,
+            Err(err) => return Err(cleanup_child_after_setup_error(child, err)),
+        };
+        if let ExecutionStdin::Bytes(bytes) = stdin
+            && let Err(err) = write_child_stdin(&mut child, bytes)
+        {
+            return Err(cleanup_child_after_setup_error(child, err));
         }
         return child
             .wait_with_output()
@@ -1106,9 +1111,14 @@ fn spawn_local_command(
     let start = Instant::now();
     let mut child = process.spawn()?;
     #[cfg(windows)]
-    let _process_job = assign_windows_process_job(plan, &child)?;
-    if let ExecutionStdin::Bytes(bytes) = stdin {
-        write_child_stdin(&mut child, bytes)?;
+    let _process_job = match assign_windows_process_job(plan, &child) {
+        Ok(process_job) => process_job,
+        Err(err) => return Err(cleanup_child_after_setup_error(child, err)),
+    };
+    if let ExecutionStdin::Bytes(bytes) = stdin
+        && let Err(err) = write_child_stdin(&mut child, bytes)
+    {
+        return Err(cleanup_child_after_setup_error(child, err));
     }
     loop {
         if child.try_wait()?.is_some() {
@@ -1147,6 +1157,28 @@ fn write_child_stdin(child: &mut std::process::Child, bytes: Vec<u8>) -> io::Res
         stdin.write_all(&bytes)?;
     }
     Ok(())
+}
+
+fn cleanup_child_after_setup_error(mut child: Child, setup_err: io::Error) -> io::Error {
+    let kill_err = match child.kill() {
+        Ok(()) => None,
+        Err(err) if err.kind() == io::ErrorKind::InvalidInput => None,
+        Err(err) => Some(err),
+    };
+    let wait_err = child.wait().err();
+
+    match (kill_err, wait_err) {
+        (None, None) => setup_err,
+        (Some(kill_err), None) => io::Error::other(format!(
+            "child setup failed ({setup_err}); cleanup kill failed ({kill_err})"
+        )),
+        (None, Some(wait_err)) => io::Error::other(format!(
+            "child setup failed ({setup_err}); cleanup wait failed ({wait_err})"
+        )),
+        (Some(kill_err), Some(wait_err)) => io::Error::other(format!(
+            "child setup failed ({setup_err}); cleanup kill failed ({kill_err}); cleanup wait failed ({wait_err})"
+        )),
+    }
 }
 
 #[cfg(windows)]
@@ -1394,6 +1426,23 @@ mod tests {
             }
             Ok(())
         }
+    }
+
+    fn long_running_child() -> io::Result<std::process::Child> {
+        let mut command = if cfg!(windows) {
+            let mut command = std::process::Command::new("cmd");
+            command.args(["/C", "ping -n 5 127.0.0.1 >NUL"]);
+            command
+        } else {
+            let mut command = std::process::Command::new("sh");
+            command.args(["-c", "sleep 5"]);
+            command
+        };
+        command
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
     }
 
     #[test]
@@ -1747,6 +1796,17 @@ mod tests {
                 format!("apply:{}", path_string(&cwd)),
             ]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn cleanup_child_after_setup_error_preserves_setup_error() -> io::Result<()> {
+        let child = long_running_child()?;
+
+        let err = cleanup_child_after_setup_error(child, io::Error::other("setup failed"));
+
+        assert_eq!(err.kind(), io::ErrorKind::Other);
+        assert_eq!(err.to_string(), "setup failed");
         Ok(())
     }
 
