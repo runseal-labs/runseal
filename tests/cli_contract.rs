@@ -220,6 +220,19 @@ fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
     assert_eq!(payload["sandbox_levels"]["danger-full-access"], "supported");
     assert_eq!(payload["sandbox_levels"]["read-only"], "unsupported");
     assert_eq!(payload["network_modes"]["proxy"], "unsupported");
+    let public_payload = payload.to_string();
+    for private_term in [
+        "single-sandbox-user",
+        "restricted-token",
+        "kill-on-close-job",
+        "offline",
+        "online",
+    ] {
+        assert!(
+            !public_payload.contains(private_term),
+            "capabilities must not expose private Windows setup term {private_term}"
+        );
+    }
     Ok(())
 }
 

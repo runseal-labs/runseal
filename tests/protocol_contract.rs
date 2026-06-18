@@ -269,6 +269,19 @@ fn get_capabilities_rpc_contract() -> Result<()> {
     assert_eq!(payload["features"]["direct_network_deny"], false);
     assert_eq!(payload["features"]["managed_proxy"], false);
     assert_eq!(payload["features"]["audit_jsonl"], true);
+    let public_payload = payload.to_string();
+    for private_term in [
+        "single-sandbox-user",
+        "restricted-token",
+        "kill-on-close-job",
+        "offline",
+        "online",
+    ] {
+        assert!(
+            !public_payload.contains(private_term),
+            "capabilities must not expose private Windows setup term {private_term}"
+        );
+    }
     Ok(())
 }
 

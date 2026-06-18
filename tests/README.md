@@ -13,7 +13,8 @@ CI runs the suite on Linux and Windows so platform selection, fail-closed behavi
 The tests are black-box by design:
 
 - CLI behavior through `runseal exec`.
-- Capability reporting through `runseal capabilities` and `getCapabilities`.
+- Capability reporting through `runseal capabilities` and `getCapabilities`,
+  without exposing private Windows account or setup identities.
 - Windows hosts select the Windows reference backend scaffold and still fail closed for unsupported sandbox levels.
 - macOS and Linux hosts select explicit experimental/community skeleton backends and still fail closed for unsupported sandbox levels.
 - Windows fail-closed errors include a `PlatformSandboxPlan` preview for runtime root, synthetic home, setup requirements, protected filesystem categories, process boundary state, and network guard planning.
