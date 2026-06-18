@@ -98,6 +98,13 @@ impl WindowsVendorSandboxProfile {
         }
     }
 
+    pub(crate) fn network_policy(&self) -> Option<WindowsVendorNetworkPolicy> {
+        match self {
+            Self::Disabled => None,
+            Self::Managed { network, .. } => Some(*network),
+        }
+    }
+
     pub(crate) fn sandbox_user_model(&self) -> Option<WindowsVendorSandboxUserModel> {
         match self {
             Self::Disabled => None,
@@ -221,6 +228,10 @@ mod tests {
             Some(WindowsVendorSandboxUserModel::SingleSandboxUser)
         );
         assert_eq!(
+            profile.network_policy(),
+            Some(WindowsVendorNetworkPolicy::Restricted)
+        );
+        assert_eq!(
             profile.read_roots(),
             vec![cwd.to_string_lossy().to_string()]
         );
@@ -247,6 +258,7 @@ mod tests {
         assert_eq!(profile, WindowsVendorSandboxProfile::Disabled);
         assert_eq!(profile.token_mode(), None);
         assert_eq!(profile.sandbox_user_model(), None);
+        assert_eq!(profile.network_policy(), None);
         assert!(profile.read_roots().is_empty());
         assert!(profile.write_roots().is_empty());
         assert!(profile.deny_roots().is_empty());

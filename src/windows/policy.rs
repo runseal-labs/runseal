@@ -1,5 +1,6 @@
 use super::vendor_adapter::{
-    WindowsVendorSandboxProfile, WindowsVendorSandboxUserModel, WindowsVendorTokenMode,
+    WindowsVendorNetworkPolicy, WindowsVendorSandboxProfile, WindowsVendorSandboxUserModel,
+    WindowsVendorTokenMode,
 };
 use crate::policy::{SandboxLevel, SandboxPolicy};
 use std::env;
@@ -428,10 +429,13 @@ impl WindowsPolicyPlan {
                 WindowsFilesystemMode::ReadOnlyCapability
             }
         };
-        let guard = if vendor_profile.managed_proxy_required() {
-            WindowsNetworkGuard::Proxy
-        } else {
-            WindowsNetworkGuard::Disabled
+        let guard = match vendor_profile.network_policy() {
+            Some(WindowsVendorNetworkPolicy::Restricted)
+                if vendor_profile.managed_proxy_required() =>
+            {
+                WindowsNetworkGuard::Proxy
+            }
+            Some(WindowsVendorNetworkPolicy::Restricted) | None => WindowsNetworkGuard::Disabled,
         };
         let managed_proxy = match guard {
             WindowsNetworkGuard::Disabled => WindowsManagedProxy::None,
