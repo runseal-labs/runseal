@@ -232,15 +232,15 @@ fn run_windows_sandbox_setup(cwd: &Path) -> Result<(), String> {
     let real_user = env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string());
     codex_windows_sandbox::run_elevated_provisioning_setup(&sandbox_home, &real_user)
         .map_err(|_| WINDOWS_SANDBOX_SETUP_FAILED.to_string())?;
-    println!(
-        "{}",
-        json!({
-            "status": "ok",
-            "setup": "windows-sandbox",
-            "sandbox_home": sandbox_home.to_string_lossy(),
-        })
-    );
+    println!("{}", windows_sandbox_setup_success_payload());
     Ok(())
+}
+
+fn windows_sandbox_setup_success_payload() -> Value {
+    json!({
+        "status": "ok",
+        "setup": "windows-sandbox",
+    })
 }
 
 #[cfg(not(windows))]
@@ -1165,5 +1165,16 @@ mod tests {
     fn windows_setup_failure_message_hides_vendor_codes() {
         assert!(!WINDOWS_SANDBOX_SETUP_FAILED.contains("orchestrator_"));
         assert!(!WINDOWS_SANDBOX_SETUP_FAILED.contains("helper_"));
+    }
+
+    #[test]
+    fn windows_setup_success_payload_hides_internal_paths() {
+        let payload = windows_sandbox_setup_success_payload();
+
+        assert_eq!(payload["status"], "ok");
+        assert_eq!(payload["setup"], "windows-sandbox");
+        assert!(payload.get("sandbox_home").is_none());
+        assert!(payload.get("profile_root").is_none());
+        assert!(payload.get("runtime_root").is_none());
     }
 }
