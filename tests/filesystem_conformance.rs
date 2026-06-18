@@ -407,6 +407,63 @@ fn workspace_write_protects_workspace_metadata_when_supported_or_fails_closed() 
 }
 
 #[test]
+fn runtime_environment_roots_are_per_execution_when_supported_or_fails_closed() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let workspace = tmp.path().join("workspace");
+    fs::create_dir_all(&workspace)?;
+    let marker = "runseal-runtime-isolation-marker.txt";
+    let env_keys = [
+        "USERPROFILE",
+        "HOME",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "TEMP",
+        "TMP",
+    ];
+    let writer_code = format!(
+        "import os, pathlib\n\
+         keys = {env_keys:?}\n\
+         for key in keys:\n\
+             root = os.environ[key]\n\
+             path = pathlib.Path(root) / {marker:?}\n\
+             path.parent.mkdir(parents=True, exist_ok=True)\n\
+             path.write_text(key, encoding='utf-8')"
+    );
+    let first = execute("workspace-write", &workspace, writer_code)?;
+
+    if is_backend_missing(&first) {
+        assert_backend_missing(&first, &workspace)?;
+        return Ok(());
+    }
+    if is_backend_unavailable(&first) {
+        assert_backend_unavailable(&first, &workspace)?;
+        return Ok(());
+    }
+
+    assert_eq!(first["result"]["status"], "finished");
+    assert_eq!(first["result"]["exit_code"], 0);
+
+    let reader_code = format!(
+        "import json, os, pathlib\n\
+         keys = {env_keys:?}\n\
+         leaked = [key for key in keys if (pathlib.Path(os.environ[key]) / {marker:?}).exists()]\n\
+         print(json.dumps(leaked))"
+    );
+    let second = execute("workspace-write", &workspace, reader_code)?;
+
+    assert_eq!(second["result"]["status"], "finished");
+    assert_eq!(second["result"]["exit_code"], 0);
+    let leaked = serde_json::from_str::<Value>(
+        second["result"]["stdout"]
+            .as_str()
+            .context("second execution must return stdout")?
+            .trim(),
+    )?;
+    assert_eq!(leaked, json!([]));
+    Ok(())
+}
+
+#[test]
 fn network_disabled_blocks_direct_egress_when_supported_or_fails_closed() -> Result<()> {
     let tmp = TempDir::new()?;
     let workspace = tmp.path().join("workspace");

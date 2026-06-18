@@ -121,7 +121,7 @@ fn windows_sandbox_execution_gate_for_key(
         .state
         .lock()
         .map_err(|_| io::Error::other("windows sandbox execution gate poisoned"))?;
-    // ponytail: one active policy cohort; add explicit epochs if policy_hash stops being enough.
+    // One active policy cohort is enough while policy_hash captures the full enforcement state.
     while state
         .active_key
         .as_ref()
