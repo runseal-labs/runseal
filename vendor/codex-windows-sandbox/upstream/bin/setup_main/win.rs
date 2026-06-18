@@ -564,11 +564,8 @@ fn provision_and_hide_sandbox_users(
     log: &mut dyn Write,
     sbx_dir: &Path,
 ) -> Result<()> {
-    let provision_result = provision_sandbox_users(
-        &payload.codex_home,
-        &payload.sandbox_username,
-        log,
-    );
+    let provision_result =
+        provision_sandbox_users(&payload.codex_home, &payload.sandbox_username, log);
     if let Err(err) = provision_result {
         if extract_setup_failure(&err).is_some() {
             return Err(err);

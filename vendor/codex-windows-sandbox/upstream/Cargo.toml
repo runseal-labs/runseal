@@ -1,44 +1,45 @@
 [package]
 build = "build.rs"
-edition.workspace = true
-license.workspace = true
+edition = "2024"
+license = "Apache-2.0"
 name = "codex-windows-sandbox"
-version.workspace = true
+publish = false
+version = "0.0.0"
+
+[workspace]
+resolver = "2"
 
 [lib]
 name = "codex_windows_sandbox"
-path = "src/lib.rs"
+path = "lib.rs"
 doctest = false
 
 [[bin]]
 name = "codex-windows-sandbox-setup"
-path = "src/bin/setup_main/main.rs"
+path = "bin/setup_main/main.rs"
 
 [[bin]]
 name = "codex-command-runner"
-path = "src/bin/command_runner/main.rs"
-
-[lints]
-workspace = true
+path = "bin/command_runner/main.rs"
 
 [dependencies]
 anyhow = "1.0"
-base64 = { workspace = true }
+base64 = "0.22"
 chrono = { version = "0.4.42", default-features = false, features = [
     "clock",
     "std",
 ] }
-codex-utils-pty = { workspace = true }
-codex-utils-absolute-path = { workspace = true }
-codex-utils-string = { workspace = true }
-codex-otel = { workspace = true }
+codex-utils-pty = { path = "../../codex-utils-pty" }
+codex-utils-absolute-path = { path = "../../codex-utils-absolute-path" }
+codex-utils-string = { path = "../../codex-utils-string" }
+codex-otel = { path = "../../codex-otel" }
 dunce = "1.0"
-glob = { workspace = true }
+glob = "0.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tempfile = "3"
-tokio = { workspace = true, features = ["sync", "rt", "macros", "signal", "time"] }
-tracing-appender = { workspace = true }
+tokio = { version = "1", features = ["sync", "rt", "macros", "signal", "time"] }
+tracing-appender = "0.2"
 windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_NetworkManagement_WindowsFirewall",
@@ -48,7 +49,7 @@ windows = { version = "0.58", features = [
 
 [dependencies.codex-protocol]
 package = "codex-protocol"
-path = "../protocol"
+path = "../../codex-protocol"
 
 [dependencies.rand]
 default-features = false
@@ -93,4 +94,4 @@ features = [
 version = "0.52"
 
 [dev-dependencies]
-pretty_assertions = { workspace = true }
+pretty_assertions = "1"

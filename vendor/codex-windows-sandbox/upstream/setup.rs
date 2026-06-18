@@ -1093,9 +1093,9 @@ mod tests {
     use super::gather_full_read_roots_for_permissions;
     use super::gather_read_roots;
     use super::loopback_proxy_port_from_url;
-    use super::sandbox_proxy_settings_from_env;
     use super::profile_read_roots;
     use super::proxy_ports_from_env;
+    use super::sandbox_proxy_settings_from_env;
     use super::verify_setup_completed;
     use crate::helper_materialization::BIN_DIRNAME;
     use crate::helper_materialization::RESOURCES_DIRNAME;

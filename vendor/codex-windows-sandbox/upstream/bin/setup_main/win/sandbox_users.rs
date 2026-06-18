@@ -391,11 +391,7 @@ struct SetupMarker {
     write_roots: Vec<PathBuf>,
 }
 
-fn write_secrets(
-    codex_home: &Path,
-    sandbox_user: &str,
-    sandbox_pwd: &str,
-) -> Result<()> {
+fn write_secrets(codex_home: &Path, sandbox_user: &str, sandbox_pwd: &str) -> Result<()> {
     let secrets_dir = sandbox_secrets_dir(codex_home);
     std::fs::create_dir_all(&secrets_dir).map_err(|err| {
         anyhow::Error::new(SetupFailure::new(

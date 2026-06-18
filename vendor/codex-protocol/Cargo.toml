@@ -1,0 +1,16 @@
+[package]
+name = "codex-protocol"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[lib]
+name = "codex_protocol"
+path = "src/lib.rs"
+doctest = false
+
+[dependencies]
+codex-utils-absolute-path = { path = "../codex-utils-absolute-path" }
+dunce = "1.0"
+glob = "0.3"
+serde = { version = "1", features = ["derive"] }

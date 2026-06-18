@@ -4,10 +4,9 @@ Source: `openai/codex`, `codex-rs/windows-sandbox-rs`
 
 Imported commit: `3931bc2bde3e89876da5f96335629c71d635bd72`
 
-The snapshot under `upstream/` is intentionally not a workspace member yet.
-RunSeal should first adapt its public `SandboxPolicy`, `PlatformSandboxPlan`,
-audit, and conformance layers around this upstream boundary, then wire the
-vendored crate into the build when the adapter is ready.
+The snapshot under `upstream/` is intentionally not a main workspace member.
+It is a standalone vendor crate that can be checked directly with local,
+trimmed `codex-*` dependency crates under `vendor/`.
 
 Keep local RunSeal changes outside `upstream/` unless they are deliberately
 tracked as vendor patches.
@@ -20,6 +19,8 @@ Local vendor patches:
   sandbox identity plus a network guard; guarded by `tests/vendor_boundary.rs`.
 - Collapse setup firewall rule names and helper entry points to RunSeal sandbox
   network guard vocabulary; guarded by `tests/vendor_boundary.rs`.
+- Replace upstream workspace/git dependency inheritance with local trimmed
+  vendor crates; guarded by `tests/vendor_boundary.rs`.
 
 Prior non-public integrations may be used as pitfall evidence only after
 redaction. Land those lessons as public acceptance criteria, adapter behavior,

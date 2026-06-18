@@ -214,7 +214,7 @@ pub fn require_logon_sandbox_creds(
                 deny_write_paths: Some(deny_write_paths_override.to_vec()),
             },
         )?;
-        identity = select_identity(network_identity, codex_home)?;
+        identity = select_identity(network_guard, codex_home)?;
     }
     // Always refresh ACLs (non-elevated) for current roots via the setup binary.
     run_setup_refresh_with_overrides(

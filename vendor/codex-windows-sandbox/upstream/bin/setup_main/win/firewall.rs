@@ -37,8 +37,7 @@ const SANDBOX_BLOCK_LOOPBACK_UDP_RULE_NAME: &str = "runseal_sandbox_block_loopba
 const SANDBOX_BLOCK_RULE_FRIENDLY: &str = "RunSeal Sandbox - Block Non-Loopback Outbound";
 const SANDBOX_BLOCK_LOOPBACK_TCP_RULE_FRIENDLY: &str =
     "RunSeal Sandbox - Block Loopback TCP (Except Proxy)";
-const SANDBOX_BLOCK_LOOPBACK_UDP_RULE_FRIENDLY: &str =
-    "RunSeal Sandbox - Block Loopback UDP";
+const SANDBOX_BLOCK_LOOPBACK_UDP_RULE_FRIENDLY: &str = "RunSeal Sandbox - Block Loopback UDP";
 const SANDBOX_PROXY_ALLOW_RULE_NAME: &str = "runseal_sandbox_allow_loopback_proxy";
 const LOOPBACK_REMOTE_ADDRESSES: &str = "127.0.0.0/8,::/127";
 const NON_LOOPBACK_REMOTE_ADDRESSES: &str = "0.0.0.0-126.255.255.255,128.0.0.0-255.255.255.255,::,::2-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff";
