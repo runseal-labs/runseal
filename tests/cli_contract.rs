@@ -185,6 +185,8 @@ fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
     assert!(payload["platform"].as_str().is_some());
     assert_eq!(payload["features"]["local_execution"], true);
     assert_eq!(payload["features"]["filesystem_policy"], false);
+    assert_eq!(payload["features"]["process_isolation"], false);
+    assert_eq!(payload["features"]["process_cleanup"], false);
     assert_eq!(payload["features"]["audit_jsonl"], true);
     assert_eq!(payload["sandbox_levels"]["danger-full-access"], "supported");
     assert_eq!(payload["sandbox_levels"]["read-only"], "unsupported");
@@ -219,7 +221,12 @@ fn explain_policy_cli_materializes_standard_profile() -> Result<()> {
     assert_eq!(payload["backend_requirement"], "sandbox-backend");
     assert_eq!(
         payload["required_backend_features"],
-        serde_json::json!(["filesystem_policy", "network_disabled"])
+        serde_json::json!([
+            "filesystem_policy",
+            "process_isolation",
+            "process_cleanup",
+            "network_disabled"
+        ])
     );
     assert_eq!(
         payload["canonical_policy"]["filesystem"]["protect_vcs"],

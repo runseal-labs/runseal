@@ -103,7 +103,11 @@ fn execute_with_network(
 }
 
 fn assert_backend_missing(response: &Value, root: &Path) -> Result<()> {
-    assert_backend_missing_features(response, root, &["filesystem_policy"])
+    assert_backend_missing_features(
+        response,
+        root,
+        &["filesystem_policy", "process_isolation", "process_cleanup"],
+    )
 }
 
 fn assert_backend_missing_features(
@@ -282,7 +286,12 @@ fn network_disabled_blocks_direct_egress_when_supported_or_fails_closed() -> Res
         assert_backend_missing_features(
             &response,
             &workspace,
-            &["filesystem_policy", "network_disabled"],
+            &[
+                "filesystem_policy",
+                "process_isolation",
+                "process_cleanup",
+                "network_disabled",
+            ],
         )?;
         return Ok(());
     }
@@ -310,7 +319,12 @@ fn network_proxy_blocks_direct_egress_when_supported_or_fails_closed() -> Result
         assert_backend_missing_features(
             &response,
             &workspace,
-            &["filesystem_policy", "network_proxy"],
+            &[
+                "filesystem_policy",
+                "process_isolation",
+                "process_cleanup",
+                "network_proxy",
+            ],
         )?;
         return Ok(());
     }

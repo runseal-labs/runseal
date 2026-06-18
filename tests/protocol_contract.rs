@@ -220,6 +220,8 @@ fn get_capabilities_rpc_contract() -> Result<()> {
     assert_eq!(payload["sandbox_levels"]["danger-full-access"], "supported");
     assert_eq!(payload["sandbox_levels"]["workspace-write"], "unsupported");
     assert_eq!(payload["network_modes"]["disabled"], "unsupported");
+    assert_eq!(payload["features"]["process_isolation"], false);
+    assert_eq!(payload["features"]["process_cleanup"], false);
     assert_eq!(payload["features"]["audit_jsonl"], true);
     Ok(())
 }
@@ -786,7 +788,12 @@ fn explain_policy_returns_effective_hash_and_network_mode() -> Result<()> {
     assert_eq!(payload["support"], "unsupported");
     assert_eq!(
         payload["required_backend_features"],
-        json!(["filesystem_policy", "network_proxy"])
+        json!([
+            "filesystem_policy",
+            "process_isolation",
+            "process_cleanup",
+            "network_proxy"
+        ])
     );
     assert!(
         payload["filesystem"]["write"]
@@ -982,7 +989,12 @@ fn sandboxed_policy_without_backend_fails_closed() -> Result<()> {
     assert_eq!(response["error"]["data"]["support"], "unsupported");
     assert_eq!(
         response["error"]["data"]["missing_features"],
-        json!(["filesystem_policy", "network_disabled"])
+        json!([
+            "filesystem_policy",
+            "process_isolation",
+            "process_cleanup",
+            "network_disabled"
+        ])
     );
     let audit_path = response["error"]["data"]["audit_path"]
         .as_str()
@@ -1014,7 +1026,12 @@ fn sandboxed_policy_without_backend_fails_closed() -> Result<()> {
         assert_eq!(plan["setup"]["fail_closed_on_setup_error"], true);
         assert_eq!(
             plan["required_backend_features"],
-            json!(["filesystem_policy", "network_disabled"])
+            json!([
+                "filesystem_policy",
+                "process_isolation",
+                "process_cleanup",
+                "network_disabled"
+            ])
         );
         assert!(
             plan["runtime_root"]

@@ -63,6 +63,8 @@ impl NetworkMode {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BackendFeature {
     FilesystemPolicy,
+    ProcessIsolation,
+    ProcessCleanup,
     NetworkDisabled,
     NetworkProxy,
 }
@@ -71,6 +73,8 @@ impl BackendFeature {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::FilesystemPolicy => "filesystem_policy",
+            Self::ProcessIsolation => "process_isolation",
+            Self::ProcessCleanup => "process_cleanup",
             Self::NetworkDisabled => "network_disabled",
             Self::NetworkProxy => "network_proxy",
         }
@@ -196,7 +200,11 @@ impl SandboxPolicy {
             return Vec::new();
         }
 
-        let mut features = vec![BackendFeature::FilesystemPolicy];
+        let mut features = vec![
+            BackendFeature::FilesystemPolicy,
+            BackendFeature::ProcessIsolation,
+            BackendFeature::ProcessCleanup,
+        ];
         features.push(match self.network.mode {
             NetworkMode::Disabled => BackendFeature::NetworkDisabled,
             NetworkMode::Proxy => BackendFeature::NetworkProxy,
@@ -636,7 +644,12 @@ mod tests {
         assert!(policy.filesystem.protect_vcs);
         assert_eq!(
             policy.required_backend_feature_names(),
-            vec!["filesystem_policy", "network_proxy"]
+            vec![
+                "filesystem_policy",
+                "process_isolation",
+                "process_cleanup",
+                "network_proxy"
+            ]
         );
         assert!(policy.hash().starts_with("sha256:"));
     }
