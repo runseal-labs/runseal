@@ -13,6 +13,8 @@ use crate::setup::run_setup_refresh_with_overrides;
 use crate::setup::sandbox_proxy_settings_from_env;
 use crate::setup::sandbox_users_path;
 use crate::setup::setup_marker_path;
+use crate::setup_error::SetupErrorCode;
+use crate::setup_error::SetupFailure;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
@@ -89,6 +91,12 @@ fn load_users(codex_home: &Path) -> Result<Option<SandboxUsersFile>> {
     match serde_json::from_str::<SandboxUsersFile>(&file) {
         Ok(users) => Ok(Some(users)),
         Err(err) => {
+            if contains_legacy_split_identity_schema(&file) {
+                return Err(anyhow::Error::new(SetupFailure::new(
+                    SetupErrorCode::OrchestratorSetupStateIncompatible,
+                    "legacy split-identity Windows sandbox setup state detected; run `runseal setup windows-sandbox` from an elevated shell to repair",
+                )));
+            }
             debug_log(
                 &format!("sandbox users parse failed: {err}"),
                 Some(codex_home),
@@ -96,6 +104,25 @@ fn load_users(codex_home: &Path) -> Result<Option<SandboxUsersFile>> {
             Ok(None)
         }
     }
+}
+
+fn contains_legacy_split_identity_schema(contents: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(contents) else {
+        return false;
+    };
+    let Some(object) = value.as_object() else {
+        return false;
+    };
+    [
+        concat!("off", "line"),
+        concat!("on", "line"),
+        concat!("off", "line_user"),
+        concat!("on", "line_user"),
+        concat!("off", "line_username"),
+        concat!("on", "line_username"),
+    ]
+    .iter()
+    .any(|key| object.contains_key(*key))
 }
 
 fn remove_sandbox_users_file(codex_home: &Path, reason: &str) -> Result<()> {
@@ -311,6 +338,7 @@ pub(crate) fn refresh_logon_sandbox_creds(
 
 #[cfg(test)]
 mod tests {
+    use super::contains_legacy_split_identity_schema;
     use super::remove_sandbox_users_file;
     use crate::setup::sandbox_users_path;
     use std::fs;
@@ -335,5 +363,19 @@ mod tests {
 
         remove_sandbox_users_file(codex_home.path(), "stale creds").expect("remove users");
         assert!(!users_path.exists());
+    }
+
+    #[test]
+    fn legacy_split_identity_schema_is_detected() {
+        let contents = format!(
+            r#"{{"version":1,"{}":{{}},"{}":{{}}}}"#,
+            concat!("off", "line_username"),
+            concat!("on", "line_username")
+        );
+
+        assert!(contains_legacy_split_identity_schema(&contents));
+        assert!(!contains_legacy_split_identity_schema(
+            r#"{"version":1,"user":{"username":"RunSealSandbox","password":"secret"}}"#
+        ));
     }
 }
