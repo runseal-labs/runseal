@@ -448,9 +448,9 @@ impl PlatformSandboxPlan {
         let Some(runtime_root) = &self.runtime_root else {
             return Ok(());
         };
+        let expected = normalize_lexical(&self.expected_runtime_root()?);
         let runtime_root = Path::new(runtime_root);
-        let expected = self.expected_runtime_root()?;
-        if normalize_lexical(runtime_root) != normalize_lexical(&expected) {
+        if normalize_lexical(runtime_root) != expected {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 format!(
@@ -459,12 +459,39 @@ impl PlatformSandboxPlan {
                 ),
             ));
         }
-        if runtime_root.exists() && fs::symlink_metadata(runtime_root)?.file_type().is_symlink() {
+        self.validate_runtime_root_path_for_setup(runtime_root, &expected)?;
+        for root in [
+            self.profile_root.as_ref(),
+            self.synthetic_home.as_ref(),
+            self.temp_root.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            self.validate_runtime_root_path_for_setup(Path::new(root), &expected)?;
+        }
+        for (_, root) in &self.environment_runtime {
+            self.validate_runtime_root_path_for_setup(Path::new(root), &expected)?;
+        }
+        Ok(())
+    }
+
+    fn validate_runtime_root_path_for_setup(&self, root: &Path, expected: &Path) -> io::Result<()> {
+        if !normalize_lexical(root).starts_with(expected) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "refusing to prepare runtime root outside planned workspace runtime directory: {}",
+                    root.display()
+                ),
+            ));
+        }
+        if root.exists() && fs::symlink_metadata(root)?.file_type().is_symlink() {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 format!(
                     "refusing to prepare symlinked runtime root: {}",
-                    runtime_root.display()
+                    root.display()
                 ),
             ));
         }
@@ -2579,6 +2606,43 @@ mod tests {
         let mut plan =
             WindowsReferenceBackend.fail_closed_plan("exec_outside_setup", &cwd, &policy);
         plan.runtime_root = Some(path_string(&outside));
+
+        let err = plan.prepare_runtime_roots().unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        assert!(!outside.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_setup_refuses_child_root_outside_workspace_runtime_dir() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&cwd)?;
+        let outside = tmp.path().join("outside-profile");
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+        let mut plan =
+            WindowsReferenceBackend.fail_closed_plan("exec_outside_child_setup", &cwd, &policy);
+        plan.profile_root = Some(path_string(&outside));
+
+        let err = plan.prepare_runtime_roots().unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+        assert!(!outside.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_setup_refuses_environment_root_outside_workspace_runtime_dir() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&cwd)?;
+        let outside = tmp.path().join("outside-env");
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+        let mut plan =
+            WindowsReferenceBackend.fail_closed_plan("exec_outside_env_setup", &cwd, &policy);
+        plan.environment_runtime
+            .push(("RUNSEAL_BAD".to_string(), path_string(&outside)));
 
         let err = plan.prepare_runtime_roots().unwrap_err();
 
