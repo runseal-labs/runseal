@@ -603,6 +603,28 @@ fn explain_policy_cli_materializes_standard_profile() -> Result<()> {
 }
 
 #[test]
+fn explain_policy_cli_normalizes_relative_cwd() -> Result<()> {
+    let output = run_cli(&[
+        "explain-policy",
+        "--policy",
+        "workspace-write",
+        "--cwd",
+        ".",
+    ])?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload = stdout_json(&output)?;
+    let cwd = std::env::current_dir()?.to_string_lossy().to_string();
+    assert_eq!(payload["canonical_policy"]["filesystem"]["write"][0], cwd);
+    assert_ne!(payload["canonical_policy"]["filesystem"]["write"][0], ".");
+    Ok(())
+}
+
+#[test]
 fn exec_events_stream_uses_execution_vocabulary() -> Result<()> {
     let tmp = TempDir::new()?;
     let cwd = tmp.path().to_string_lossy().to_string();

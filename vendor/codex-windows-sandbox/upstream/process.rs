@@ -22,13 +22,16 @@ use windows_sys::Win32::System::Console::STD_ERROR_HANDLE;
 use windows_sys::Win32::System::Console::STD_INPUT_HANDLE;
 use windows_sys::Win32::System::Console::STD_OUTPUT_HANDLE;
 use windows_sys::Win32::System::Pipes::CreatePipe;
+use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
 use windows_sys::Win32::System::Threading::CREATE_UNICODE_ENVIRONMENT;
 use windows_sys::Win32::System::Threading::CreateProcessAsUserW;
 use windows_sys::Win32::System::Threading::EXTENDED_STARTUPINFO_PRESENT;
 use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
+use windows_sys::Win32::System::Threading::STARTF_USESHOWWINDOW;
 use windows_sys::Win32::System::Threading::STARTF_USESTDHANDLES;
 use windows_sys::Win32::System::Threading::STARTUPINFOEXW;
 use windows_sys::Win32::System::Threading::STARTUPINFOW;
+use windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE;
 
 pub struct CreatedProcess {
     pub process_info: PROCESS_INFORMATION,
@@ -99,7 +102,8 @@ pub unsafe fn create_process_as_user(
             // if lpDesktop is not set when launching with a restricted token.
             // Point explicitly at the interactive desktop or a private desktop.
             si.StartupInfo.lpDesktop = desktop.startup_info_desktop();
-            si.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
+            si.StartupInfo.dwFlags |= STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+            si.StartupInfo.wShowWindow = SW_HIDE as u16;
             si.StartupInfo.hStdInput = stdin_h;
             si.StartupInfo.hStdOutput = stdout_h;
             si.StartupInfo.hStdError = stderr_h;
@@ -119,7 +123,8 @@ pub unsafe fn create_process_as_user(
             attrs.set_handle_list(inherited_handles)?;
             si.lpAttributeList = attrs.as_mut_ptr();
 
-            let creation_flags = CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT;
+            let creation_flags =
+                CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW;
             let ok = CreateProcessAsUserW(
                 h_token,
                 std::ptr::null(),
@@ -159,8 +164,10 @@ pub unsafe fn create_process_as_user(
             si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
             si.lpDesktop = desktop.startup_info_desktop();
             ensure_inheritable_stdio(&mut si)?;
+            si.dwFlags |= STARTF_USESHOWWINDOW;
+            si.wShowWindow = SW_HIDE as u16;
 
-            let creation_flags = CREATE_UNICODE_ENVIRONMENT;
+            let creation_flags = CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW;
             let ok = CreateProcessAsUserW(
                 h_token,
                 std::ptr::null(),

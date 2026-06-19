@@ -271,9 +271,17 @@ fn run_exec(args: &[String]) -> Result<(), String> {
         }
         Err(err) => return Err(err),
     };
+    let cwd = match normalize_execution_cwd(&request.cwd) {
+        Ok(cwd) => cwd,
+        Err(err) if request.json || request.events => {
+            println!("{}", cli_error_payload(err));
+            return Err(String::new());
+        }
+        Err(err) => return Err(err.message),
+    };
     let policy = match normalize_policy(
         &Value::String(request.policy.clone()),
-        &request.cwd,
+        &cwd,
         request.network,
     ) {
         Ok(policy) => policy,
@@ -285,7 +293,7 @@ fn run_exec(args: &[String]) -> Result<(), String> {
     };
     let (events, result) = match execute_command(
         &request.command,
-        &request.cwd,
+        &cwd,
         &policy,
         ExecutionStdin::Empty,
         ExecutionEnv::default(),
@@ -418,13 +426,17 @@ fn parse_windows_setup_args(args: &[String]) -> Result<WindowsSetupArgs, String>
 
 #[cfg(windows)]
 fn run_windows_sandbox_setup(cwd: &Path, json_output: bool) -> Result<(), String> {
-    if let Err(err) = validate_execution_cwd(cwd) {
-        if json_output {
-            println!("{}", cli_error_payload(err));
-            return Err(String::new());
+    let cwd = match normalize_execution_cwd(cwd) {
+        Ok(cwd) => cwd,
+        Err(err) => {
+            if json_output {
+                println!("{}", cli_error_payload(err));
+                return Err(String::new());
+            }
+            return Err(err.message);
         }
-        return Err(err.message);
-    }
+    };
+    let cwd = cwd.as_path();
     let setup_status = match windows_sandbox_setup_status_for_cwd(cwd) {
         Ok(status) => status,
         Err(err) if json_output => {
@@ -467,27 +479,33 @@ fn run_windows_sandbox_setup(cwd: &Path, json_output: bool) -> Result<(), String
 
 #[cfg(windows)]
 fn run_windows_sandbox_setup_status(cwd: &Path, json_output: bool) -> Result<(), String> {
-    if let Err(err) = validate_execution_cwd(cwd) {
-        if json_output {
-            println!("{}", cli_error_payload(err));
-            return Err(String::new());
+    let cwd = match normalize_execution_cwd(cwd) {
+        Ok(cwd) => cwd,
+        Err(err) => {
+            if json_output {
+                println!("{}", cli_error_payload(err));
+                return Err(String::new());
+            }
+            return Err(err.message);
         }
-        return Err(err.message);
-    }
-    println!("{}", windows_sandbox_setup_status_for_cwd(cwd)?);
+    };
+    println!("{}", windows_sandbox_setup_status_for_cwd(&cwd)?);
     Ok(())
 }
 
 #[cfg(not(windows))]
 fn run_windows_sandbox_setup_status(cwd: &Path, json_output: bool) -> Result<(), String> {
-    if let Err(err) = validate_execution_cwd(cwd) {
-        if json_output {
-            println!("{}", cli_error_payload(err));
-            return Err(String::new());
+    let cwd = match normalize_execution_cwd(cwd) {
+        Ok(cwd) => cwd,
+        Err(err) => {
+            if json_output {
+                println!("{}", cli_error_payload(err));
+                return Err(String::new());
+            }
+            return Err(err.message);
         }
-        return Err(err.message);
-    }
-    println!("{}", windows_sandbox_setup_status_for_cwd(cwd)?);
+    };
+    println!("{}", windows_sandbox_setup_status_for_cwd(&cwd)?);
     Ok(())
 }
 
@@ -582,17 +600,20 @@ fn windows_sandbox_setup_success_payload(cwd: &Path) -> Value {
 
 #[cfg(not(windows))]
 fn run_windows_sandbox_setup(cwd: &Path, json_output: bool) -> Result<(), String> {
-    if let Err(err) = validate_execution_cwd(cwd) {
-        if json_output {
-            println!("{}", cli_error_payload(err));
-            return Err(String::new());
+    let cwd = match normalize_execution_cwd(cwd) {
+        Ok(cwd) => cwd,
+        Err(err) => {
+            if json_output {
+                println!("{}", cli_error_payload(err));
+                return Err(String::new());
+            }
+            return Err(err.message);
         }
-        return Err(err.message);
-    }
+    };
     if json_output {
         println!(
             "{}",
-            cli_error_payload(windows_sandbox_setup_failed_error(cwd))
+            cli_error_payload(windows_sandbox_setup_failed_error(&cwd))
         );
         return Err(String::new());
     }
@@ -605,14 +626,15 @@ fn run_explain_policy(args: &[String]) -> Result<(), String> {
         return Ok(());
     }
     let request = parse_policy_args(args)?;
+    let cwd = normalize_execution_cwd(&request.cwd).map_err(|err| err.reason)?;
     let policy = normalize_policy(
         &Value::String(request.policy.clone()),
-        &request.cwd,
+        &cwd,
         request.network,
     )
     .map_err(|err| err.reason)?;
 
-    println!("{}", explain_policy_json(&policy, &request.cwd));
+    println!("{}", explain_policy_json(&policy, &cwd));
     Ok(())
 }
 
@@ -645,6 +667,7 @@ fn explain_policy_from_params(params: &Value) -> Result<Value, RunSealError> {
         .and_then(Value::as_str)
         .map(PathBuf::from)
         .unwrap_or_else(current_dir);
+    let cwd = normalize_execution_cwd(&cwd)?;
     let policy = params
         .get("policy")
         .cloned()
@@ -688,6 +711,7 @@ fn execute_from_params(params: &Value) -> Result<(Vec<Value>, Value), RunSealErr
         .and_then(Value::as_str)
         .map(PathBuf::from)
         .unwrap_or_else(current_dir);
+    let cwd = normalize_execution_cwd(&cwd)?;
     let stdin = stdin_from_params(params, &cwd)?;
     let policy = params
         .get("policy")
@@ -1683,6 +1707,32 @@ fn validate_execution_cwd(cwd: &Path) -> Result<(), RunSealError> {
     }
 
     Ok(())
+}
+
+fn normalize_execution_cwd(cwd: &Path) -> Result<PathBuf, RunSealError> {
+    validate_execution_cwd(cwd)?;
+    fs::canonicalize(cwd)
+        .map(simplify_windows_extended_path)
+        .map_err(|err| {
+            RunSealError::new(
+                "INVALID_REQUEST",
+                format!("params.cwd must be an existing directory: {err}"),
+            )
+        })
+}
+
+fn simplify_windows_extended_path(path: PathBuf) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let value = path.to_string_lossy();
+        if let Some(stripped) = value.strip_prefix(r"\\?\UNC\") {
+            return PathBuf::from(format!(r"\\{stripped}"));
+        }
+        if let Some(stripped) = value.strip_prefix(r"\\?\") {
+            return PathBuf::from(stripped);
+        }
+    }
+    path
 }
 
 fn current_dir() -> PathBuf {

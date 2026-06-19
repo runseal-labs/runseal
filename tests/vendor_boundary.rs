@@ -25,6 +25,10 @@ const VENDOR_SETUP_SOURCES: &[(&str, &str)] = &[
         "wfp_setup.rs",
         include_str!("../vendor/codex-windows-sandbox/upstream/wfp_setup.rs"),
     ),
+    (
+        "process.rs",
+        include_str!("../vendor/codex-windows-sandbox/upstream/process.rs"),
+    ),
 ];
 
 const WINDOWS_SANDBOX_MANIFEST: &str =
@@ -141,6 +145,24 @@ fn vendored_windows_wfp_objects_use_runseal_namespace() {
         assert!(!source.contains("codex_wfp_"));
         assert!(!source.contains("Codex-owned"));
     }
+}
+
+#[test]
+fn vendored_windows_sandbox_child_processes_do_not_open_console_windows() {
+    let process = VENDOR_SETUP_SOURCES
+        .iter()
+        .find_map(|(name, source)| (*name == "process.rs").then_some(*source))
+        .expect("process.rs must be included");
+
+    assert!(process.contains("CREATE_NO_WINDOW"));
+    assert!(process.contains("STARTF_USESHOWWINDOW"));
+    assert!(process.contains("SW_HIDE"));
+    assert!(process.contains("CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW"));
+    assert!(
+        process.contains(
+            "CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW"
+        )
+    );
 }
 
 #[test]
