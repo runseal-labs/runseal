@@ -273,67 +273,79 @@ fn readme_does_not_expose_private_windows_setup_terms() {
 fn setup_status_reports_setup_readiness_without_running_setup() -> Result<()> {
     let tmp = TempDir::new()?;
     let cwd = tmp.path().to_string_lossy().to_string();
-    let output = run_cli(&["setup", "windows-sandbox", "--cwd", &cwd, "--status"])?;
+    for args in [
+        vec!["setup", "windows-sandbox", "--cwd", &cwd, "--status"],
+        vec![
+            "setup",
+            "windows-sandbox",
+            "--cwd",
+            &cwd,
+            "--status",
+            "--json",
+        ],
+    ] {
+        let output = run_cli(&args)?;
 
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(output.stderr.is_empty());
-    let payload = stdout_json(&output)?;
-    assert_eq!(payload["setup"], "windows-sandbox");
-    assert_eq!(payload["platform_supported"], cfg!(windows));
-    if cfg!(windows) {
-        assert!(payload["elevated"].is_boolean(), "{payload}");
-        let elevated = payload["elevated"].as_bool().unwrap_or(false);
-        let broker_available = payload["broker"] == "available";
-        assert_eq!(
-            payload["can_repair"].as_bool(),
-            Some(elevated || broker_available),
-            "{payload}"
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
         );
-        assert_eq!(
-            payload["can_run_setup_now"].as_bool(),
-            Some(elevated || broker_available),
-            "{payload}"
-        );
-    } else {
-        assert!(payload["elevated"].is_null(), "{payload}");
-        assert_eq!(payload["can_repair"], false, "{payload}");
-        assert_eq!(payload["can_run_setup_now"], false, "{payload}");
-    }
-    assert!(
-        matches!(
-            payload["broker"].as_str(),
-            Some("available" | "unavailable")
-        ),
-        "{payload}"
-    );
-    assert!(payload["requires_setup"].is_boolean(), "{payload}");
-    assert!(
-        matches!(
-            payload["next_action"].as_str(),
-            Some("none" | "run_setup" | "open_elevated_shell" | "unsupported")
-        ),
-        "{payload}"
-    );
-    match payload["next_action"].as_str() {
-        Some("run_setup" | "open_elevated_shell") => {
-            assert_eq!(payload["requires_setup"], true, "{payload}");
+        assert!(output.stderr.is_empty());
+        let payload = stdout_json(&output)?;
+        assert_eq!(payload["setup"], "windows-sandbox");
+        assert_eq!(payload["platform_supported"], cfg!(windows));
+        if cfg!(windows) {
+            assert!(payload["elevated"].is_boolean(), "{payload}");
+            let elevated = payload["elevated"].as_bool().unwrap_or(false);
+            let broker_available = payload["broker"] == "available";
             assert_eq!(
-                payload["next_command"],
-                "runseal setup windows-sandbox --cwd <absolute-workspace-path> --json",
+                payload["can_repair"].as_bool(),
+                Some(elevated || broker_available),
                 "{payload}"
             );
+            assert_eq!(
+                payload["can_run_setup_now"].as_bool(),
+                Some(elevated || broker_available),
+                "{payload}"
+            );
+        } else {
+            assert!(payload["elevated"].is_null(), "{payload}");
+            assert_eq!(payload["can_repair"], false, "{payload}");
+            assert_eq!(payload["can_run_setup_now"], false, "{payload}");
         }
-        Some("none" | "unsupported") => {
-            assert_eq!(payload["requires_setup"], false, "{payload}");
-            assert!(payload["next_command"].is_null(), "{payload}");
+        assert!(
+            matches!(
+                payload["broker"].as_str(),
+                Some("available" | "unavailable")
+            ),
+            "{payload}"
+        );
+        assert!(payload["requires_setup"].is_boolean(), "{payload}");
+        assert!(
+            matches!(
+                payload["next_action"].as_str(),
+                Some("none" | "run_setup" | "open_elevated_shell" | "unsupported")
+            ),
+            "{payload}"
+        );
+        match payload["next_action"].as_str() {
+            Some("run_setup" | "open_elevated_shell") => {
+                assert_eq!(payload["requires_setup"], true, "{payload}");
+                assert_eq!(
+                    payload["next_command"],
+                    "runseal setup windows-sandbox --cwd <absolute-workspace-path> --json",
+                    "{payload}"
+                );
+            }
+            Some("none" | "unsupported") => {
+                assert_eq!(payload["requires_setup"], false, "{payload}");
+                assert!(payload["next_command"].is_null(), "{payload}");
+            }
+            _ => unreachable!("{payload}"),
         }
-        _ => unreachable!("{payload}"),
+        assert_no_private_windows_setup_terms(&payload.to_string());
     }
-    assert_no_private_windows_setup_terms(&payload.to_string());
     Ok(())
 }
 
