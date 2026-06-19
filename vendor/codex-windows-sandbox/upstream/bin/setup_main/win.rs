@@ -1051,24 +1051,37 @@ fn lock_sandbox_bin_dir(
     sandbox_group_sid: &[u8],
     log: &mut dyn Write,
 ) -> Result<()> {
-    lock_sandbox_dir(
-        &sandbox_bin_dir(&payload.codex_home),
-        &payload.real_user,
-        sandbox_group_sid,
-        GRANT_ACCESS,
-        FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
-        FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
-        log,
-    )
-    .map_err(|err| {
-        anyhow::Error::new(SetupFailure::new(
-            SetupErrorCode::HelperSandboxLockFailed,
-            format!(
-                "lock sandbox bin dir {} failed: {err}",
-                sandbox_bin_dir(&payload.codex_home).display()
-            ),
-        ))
-    })
+    for dir in sandbox_bin_dirs_to_lock(&payload.codex_home) {
+        lock_sandbox_dir(
+            &dir,
+            &payload.real_user,
+            sandbox_group_sid,
+            GRANT_ACCESS,
+            FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+            FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
+            log,
+        )
+        .map_err(|err| {
+            anyhow::Error::new(SetupFailure::new(
+                SetupErrorCode::HelperSandboxLockFailed,
+                format!("lock sandbox bin dir {} failed: {err}", dir.display()),
+            ))
+        })?;
+    }
+    Ok(())
+}
+
+fn sandbox_bin_dirs_to_lock(codex_home: &Path) -> Vec<PathBuf> {
+    sandbox_bin_dirs_to_lock_for_broker(codex_home, &scheduled_setup_broker_home(codex_home))
+}
+
+fn sandbox_bin_dirs_to_lock_for_broker(codex_home: &Path, broker_home: &Path) -> Vec<PathBuf> {
+    let mut dirs = vec![sandbox_bin_dir(codex_home)];
+    let broker_bin = sandbox_bin_dir(broker_home);
+    if !dirs.iter().any(|dir| dir == &broker_bin) {
+        dirs.push(broker_bin);
+    }
+    dirs
 }
 
 fn run_provision_only(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Result<()> {
@@ -1588,6 +1601,27 @@ mod tests {
                 .as_str()
                 .expect("result message")
                 .contains("failed to parse payload json")
+        );
+    }
+
+    #[test]
+    fn sandbox_bin_lock_includes_broker_bin() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let broker_home = temp.path().join("broker-home");
+
+        let dirs = super::sandbox_bin_dirs_to_lock_for_broker(&codex_home, &broker_home);
+
+        assert_eq!(
+            dirs,
+            vec![
+                codex_windows_sandbox::sandbox_bin_dir(&codex_home),
+                codex_windows_sandbox::sandbox_bin_dir(&broker_home),
+            ]
+        );
+        assert_eq!(
+            super::sandbox_bin_dirs_to_lock_for_broker(&codex_home, &codex_home),
+            vec![codex_windows_sandbox::sandbox_bin_dir(&codex_home)]
         );
     }
 

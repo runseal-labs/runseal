@@ -22,6 +22,8 @@ Local vendor patches:
 - Register the scheduled setup broker with a materialized setup helper under
   the sandbox bin directory instead of the helper process launch path; guarded
   by `tests/vendor_boundary.rs`.
+- Lock both workspace and scheduled-broker sandbox bin directories when setup
+  materializes helper binaries; guarded by upstream setup helper tests.
 - Replace upstream workspace/git dependency inheritance with local trimmed
   vendor crates; guarded by `tests/vendor_boundary.rs`.
 
