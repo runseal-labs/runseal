@@ -413,7 +413,7 @@ fn run_windows_sandbox_setup(cwd: &Path, json_output: bool) -> Result<(), String
         }
         Err(err) => return Err(err),
     };
-    if !setup_status["can_run_setup_now"].as_bool().unwrap_or(false) {
+    if !windows_sandbox_setup_can_run_now(&setup_status) {
         if json_output {
             println!(
                 "{}",
@@ -482,6 +482,10 @@ fn windows_sandbox_setup_failed_error(cwd: &Path) -> RunSealError {
         ("WINDOWS_SANDBOX_UNSUPPORTED", WINDOWS_SANDBOX_UNSUPPORTED)
     };
     RunSealError::with_details(code, reason, json!({ "setup_status": setup_status }))
+}
+
+fn windows_sandbox_setup_can_run_now(setup_status: &Value) -> bool {
+    setup_status["can_run_setup_now"].as_bool().unwrap_or(false)
 }
 
 fn windows_sandbox_setup_status_payload(
@@ -1706,16 +1710,21 @@ mod tests {
 
         assert_eq!(elevated["can_repair"], true);
         assert_eq!(elevated["can_run_setup_now"], true);
+        assert!(windows_sandbox_setup_can_run_now(&elevated));
         assert_eq!(elevated["next_action"], "run_setup");
         assert_eq!(broker["can_repair"], true);
         assert_eq!(broker["can_run_setup_now"], true);
+        assert!(windows_sandbox_setup_can_run_now(&broker));
         assert_eq!(broker["next_action"], "none");
         assert_eq!(missing["can_repair"], false);
         assert_eq!(missing["can_run_setup_now"], false);
+        assert!(!windows_sandbox_setup_can_run_now(&missing));
         assert_eq!(missing["next_action"], "open_elevated_shell");
         assert_eq!(unsupported["can_repair"], false);
         assert_eq!(unsupported["can_run_setup_now"], false);
+        assert!(!windows_sandbox_setup_can_run_now(&unsupported));
         assert_eq!(unsupported["next_action"], "unsupported");
+        assert!(!windows_sandbox_setup_can_run_now(&json!({})));
     }
 
     #[test]
