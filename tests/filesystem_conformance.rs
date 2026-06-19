@@ -1018,6 +1018,12 @@ $successText
             .any(|event| event["type"] == "execution.network.proxy_ready"),
         "managed proxy executions must audit proxy readiness"
     );
+    assert!(
+        audit_events
+            .iter()
+            .any(|event| event["type"] == "execution.network.request"),
+        "managed proxy executions must audit proxy requests"
+    );
     Ok(())
 }
 

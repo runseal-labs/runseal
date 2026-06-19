@@ -1,8 +1,10 @@
+use crate::events::timestamp_now;
 use base64::{
     Engine as _,
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
 };
-use std::collections::HashSet;
+use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::{
@@ -31,16 +33,19 @@ const PROXY_KEYS: &[&str] = &[
     "GIT_HTTPS_PROXY",
 ];
 const NO_PROXY_KEYS: &[&str] = &["NO_PROXY", "no_proxy"];
+type ProxyEventBuffer = Arc<Mutex<Vec<Value>>>;
+type ProxyTokenMap = Arc<Mutex<HashMap<String, ProxyEventBuffer>>>;
 
 pub(super) struct ManagedSandboxProxy {
     inner: Arc<ManagedSandboxProxyState>,
     token: String,
+    events: Arc<Mutex<Vec<Value>>>,
 }
 
 struct ManagedSandboxProxyState {
     addr: SocketAddr,
     shutdown: Arc<AtomicBool>,
-    tokens: Arc<Mutex<HashSet<String>>>,
+    tokens: ProxyTokenMap,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -61,10 +66,12 @@ impl ManagedSandboxProxy {
                 *shared = None;
             } else {
                 let token = new_proxy_token()?;
-                inner.add_token(token.clone())?;
+                let events = Arc::new(Mutex::new(Vec::new()));
+                inner.add_token(token.clone(), Arc::clone(&events))?;
                 return Ok(Self {
                     inner: Arc::clone(inner),
                     token,
+                    events,
                 });
             }
         }
@@ -83,7 +90,11 @@ impl ManagedSandboxProxy {
         let addr = listener.local_addr()?;
         let shutdown = Arc::new(AtomicBool::new(false));
         let thread_shutdown = Arc::clone(&shutdown);
-        let tokens = Arc::new(Mutex::new(HashSet::from([token.clone()])));
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let tokens = Arc::new(Mutex::new(HashMap::from([(
+            token.clone(),
+            Arc::clone(&events),
+        )])));
         let thread_tokens = Arc::clone(&tokens);
         let thread = thread::spawn(move || accept_loop(listener, thread_shutdown, thread_tokens));
         let inner = Arc::new(ManagedSandboxProxyState {
@@ -92,7 +103,11 @@ impl ManagedSandboxProxy {
             tokens,
             thread: Some(thread),
         });
-        Ok(Self { inner, token })
+        Ok(Self {
+            inner,
+            token,
+            events,
+        })
     }
 
     #[cfg(test)]
@@ -126,6 +141,13 @@ impl ManagedSandboxProxy {
         );
         env
     }
+
+    pub(super) fn drain_events(&self) -> Vec<Value> {
+        self.events
+            .lock()
+            .map(|mut events| events.drain(..).collect())
+            .unwrap_or_default()
+    }
 }
 
 impl Drop for ManagedSandboxProxy {
@@ -135,11 +157,11 @@ impl Drop for ManagedSandboxProxy {
 }
 
 impl ManagedSandboxProxyState {
-    fn add_token(&self, token: String) -> io::Result<()> {
+    fn add_token(&self, token: String, events: Arc<Mutex<Vec<Value>>>) -> io::Result<()> {
         self.tokens
             .lock()
             .map_err(|_| io::Error::other("managed proxy token lock poisoned"))?
-            .insert(token);
+            .insert(token, events);
         Ok(())
     }
 
@@ -183,11 +205,7 @@ impl Drop for ManagedSandboxProxyState {
     }
 }
 
-fn accept_loop(
-    listener: TcpListener,
-    shutdown: Arc<AtomicBool>,
-    tokens: Arc<Mutex<HashSet<String>>>,
-) {
+fn accept_loop(listener: TcpListener, shutdown: Arc<AtomicBool>, tokens: ProxyTokenMap) {
     while !shutdown.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((client, _)) => {
@@ -203,7 +221,7 @@ fn accept_loop(
         }
     }
 }
-fn handle_client(mut client: TcpStream, tokens: Arc<Mutex<HashSet<String>>>) -> io::Result<()> {
+fn handle_client(mut client: TcpStream, tokens: ProxyTokenMap) -> io::Result<()> {
     let mut buffer = Vec::with_capacity(4096);
     loop {
         let mut chunk = [0_u8; 4096];
@@ -218,31 +236,138 @@ fn handle_client(mut client: TcpStream, tokens: Arc<Mutex<HashSet<String>>>) -> 
         if let Some(header_end) = find_header_end(&buffer) {
             let body_prefix = buffer[header_end..].to_vec();
             let header = String::from_utf8_lossy(&buffer[..header_end]).into_owned();
-            if !authorized_proxy_request(&header, &tokens)? {
+            let Some(events) = authorized_proxy_request(&header, &tokens)? else {
                 client.write_all(
                     b"HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"runseal\"\r\nContent-Length: 0\r\n\r\n",
                 )?;
                 return Ok(());
-            }
-            return forward_request(client, &header, &body_prefix);
+            };
+            let started_at = Instant::now();
+            let result = forward_request(client, &header, &body_prefix);
+            record_proxy_request_event(&events, &header, started_at.elapsed(), result.as_ref());
+            return result;
         }
     }
 }
 
-fn authorized_proxy_request(header: &str, tokens: &Mutex<HashSet<String>>) -> io::Result<bool> {
+fn authorized_proxy_request(
+    header: &str,
+    tokens: &Mutex<HashMap<String, ProxyEventBuffer>>,
+) -> io::Result<Option<ProxyEventBuffer>> {
     let Some(actual) = header_value(header, "Proxy-Authorization") else {
-        return Ok(false);
+        return Ok(None);
     };
     let tokens = tokens
         .lock()
         .map_err(|_| io::Error::other("managed proxy token lock poisoned"))?;
-    Ok(tokens
-        .iter()
-        .any(|token| actual == proxy_basic_auth_value(token)))
+    Ok(tokens.iter().find_map(|(token, events)| {
+        (actual == proxy_basic_auth_value(token)).then(|| Arc::clone(events))
+    }))
 }
 
 fn proxy_basic_auth_value(token: &str) -> String {
     format!("Basic {}", STANDARD.encode(format!("runseal:{token}")))
+}
+
+fn record_proxy_request_event(
+    events: &Mutex<Vec<Value>>,
+    header: &str,
+    duration: Duration,
+    result: Result<&(), &io::Error>,
+) {
+    let Ok(mut events) = events.lock() else {
+        return;
+    };
+    let request = proxy_request_metadata(header);
+    let (event_type, decision) = if result.is_ok() {
+        ("execution.network.request", "allowed")
+    } else {
+        ("execution.network.error", "error")
+    };
+    let mut event = json!({
+        "type": event_type,
+        "time": timestamp_now(),
+        "decision": decision,
+        "method": request.method,
+        "scheme": request.scheme,
+        "host": request.host,
+        "path": request.path,
+        "duration_ms": duration.as_millis(),
+    });
+    if let (Some(object), Err(err)) = (event.as_object_mut(), result) {
+        object.insert("reason".to_string(), json!(err.to_string()));
+    }
+    events.push(event);
+}
+
+struct ProxyRequestMetadata {
+    method: String,
+    scheme: String,
+    host: String,
+    path: String,
+}
+
+fn proxy_request_metadata(header: &str) -> ProxyRequestMetadata {
+    let request_line = header.split("\r\n").next().unwrap_or_default();
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().unwrap_or_default().to_ascii_uppercase();
+    let target = parts.next().unwrap_or_default();
+    let (scheme, host, path) = if method == "CONNECT" {
+        (
+            "https".to_string(),
+            host_without_port(target),
+            String::new(),
+        )
+    } else if let Some(rest) = strip_http_scheme(target) {
+        let (authority, path) = split_proxy_target_for_audit(rest);
+        ("http".to_string(), host_without_port(authority), path)
+    } else {
+        (
+            "http".to_string(),
+            find_host_header(header)
+                .map(|host| host_without_port(&host))
+                .unwrap_or_default(),
+            path_without_query(target),
+        )
+    };
+    ProxyRequestMetadata {
+        method,
+        scheme,
+        host,
+        path,
+    }
+}
+
+fn split_proxy_target_for_audit(rest: &str) -> (&str, String) {
+    match rest.split_once('/') {
+        Some((authority, path)) => (authority, path_without_query(&format!("/{path}"))),
+        None => match rest.split_once('?') {
+            Some((authority, _)) => (authority, "/".to_string()),
+            None => (rest, "/".to_string()),
+        },
+    }
+}
+
+fn path_without_query(path: &str) -> String {
+    path.split_once('?')
+        .map_or(path, |(path, _)| path)
+        .to_string()
+}
+
+fn host_without_port(authority: &str) -> String {
+    let authority = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, value)| value);
+    if let Some(host) = authority.strip_prefix('[') {
+        return host
+            .split_once(']')
+            .map_or(authority, |(host, _)| host)
+            .to_string();
+    }
+    authority
+        .rsplit_once(':')
+        .map_or(authority, |(host, _)| host)
+        .to_string()
 }
 
 fn forward_request(mut client: TcpStream, header: &str, body_prefix: &[u8]) -> io::Result<()> {
@@ -588,6 +713,16 @@ mod tests {
             .expect("read proxy response");
         assert!(response.ends_with("\r\n\r\nok"));
         upstream_thread.join().expect("upstream thread");
+        let events = wait_for_proxy_events(&proxy);
+        let event = events
+            .iter()
+            .find(|event| event["type"] == "execution.network.request")
+            .expect("proxy request audit event");
+        assert_eq!(event["decision"], "allowed");
+        assert_eq!(event["method"], "GET");
+        assert_eq!(event["scheme"], "http");
+        assert_eq!(event["host"], "127.0.0.1");
+        assert_eq!(event["path"], "/ok");
     }
 
     #[test]
@@ -604,5 +739,16 @@ mod tests {
             .expect("read proxy response");
 
         assert!(response.starts_with("HTTP/1.1 407 Proxy Authentication Required\r\n"));
+    }
+
+    fn wait_for_proxy_events(proxy: &ManagedSandboxProxy) -> Vec<Value> {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            let events = proxy.drain_events();
+            if !events.is_empty() || Instant::now() >= deadline {
+                return events;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 }

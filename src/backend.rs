@@ -1263,7 +1263,7 @@ fn execute_windows_sandbox_plan(
         } else {
             None
         };
-        let events = if managed_proxy.is_some() {
+        let mut events = if managed_proxy.is_some() {
             vec![json!({
                 "type": "execution.network.proxy_ready",
                 "time": timestamp_now(),
@@ -1315,6 +1315,9 @@ fn execute_windows_sandbox_plan(
                 }
                 io::Error::other(err.to_string())
             })?;
+        if let Some(managed_proxy) = &managed_proxy {
+            events.extend(managed_proxy.drain_events());
+        }
         Ok((capture, events))
     })();
     let cleanup = plan.cleanup_runtime_roots();
