@@ -40,6 +40,7 @@ const MAX_ENV_ENTRIES: usize = 64;
 const MAX_ENV_KEY_BYTES: usize = 128;
 const MAX_ENV_VALUE_BYTES: usize = 4096;
 const WINDOWS_SANDBOX_SETUP_FAILED: &str = "windows sandbox setup failed; first install requires an elevated shell; later repairs can reuse the setup broker";
+const WINDOWS_SANDBOX_UNSUPPORTED: &str = "windows sandbox setup is only supported on Windows";
 const HELP_TEXT: &str = "\
 Usage: runseal <command> [options]
 
@@ -451,11 +452,12 @@ fn windows_sandbox_setup_status_for_cwd(cwd: &Path) -> Result<Value, String> {
 fn windows_sandbox_setup_failed_error(cwd: &Path) -> RunSealError {
     let setup_status = windows_sandbox_setup_status_for_cwd(cwd)
         .unwrap_or_else(|_| windows_sandbox_setup_status_payload(cfg!(windows), false, None));
-    RunSealError::with_details(
-        "WINDOWS_SANDBOX_SETUP_FAILED",
-        WINDOWS_SANDBOX_SETUP_FAILED,
-        json!({ "setup_status": setup_status }),
-    )
+    let (code, reason) = if cfg!(windows) {
+        ("WINDOWS_SANDBOX_SETUP_FAILED", WINDOWS_SANDBOX_SETUP_FAILED)
+    } else {
+        ("WINDOWS_SANDBOX_UNSUPPORTED", WINDOWS_SANDBOX_UNSUPPORTED)
+    };
+    RunSealError::with_details(code, reason, json!({ "setup_status": setup_status }))
 }
 
 fn windows_sandbox_setup_status_payload(
@@ -515,7 +517,7 @@ fn run_windows_sandbox_setup(cwd: &Path, json_output: bool) -> Result<(), String
         );
         return Err(String::new());
     }
-    Err("windows sandbox setup is only supported on Windows".to_string())
+    Err(WINDOWS_SANDBOX_UNSUPPORTED.to_string())
 }
 
 fn run_explain_policy(args: &[String]) -> Result<(), String> {
@@ -1640,9 +1642,19 @@ mod tests {
     fn windows_setup_failed_json_includes_setup_status() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let err = windows_sandbox_setup_failed_error(tmp.path());
+        let expected_code = if cfg!(windows) {
+            "WINDOWS_SANDBOX_SETUP_FAILED"
+        } else {
+            "WINDOWS_SANDBOX_UNSUPPORTED"
+        };
+        let expected_reason = if cfg!(windows) {
+            WINDOWS_SANDBOX_SETUP_FAILED
+        } else {
+            WINDOWS_SANDBOX_UNSUPPORTED
+        };
 
-        assert_eq!(err.code, "WINDOWS_SANDBOX_SETUP_FAILED");
-        assert_eq!(err.reason, WINDOWS_SANDBOX_SETUP_FAILED);
+        assert_eq!(err.code, expected_code);
+        assert_eq!(err.reason, expected_reason);
         let details = err.details.expect("details");
         assert_eq!(details["setup_status"]["setup"], "windows-sandbox");
         assert!(details["setup_status"]["next_action"].as_str().is_some());
