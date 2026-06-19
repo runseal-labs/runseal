@@ -122,8 +122,9 @@ fn redact_audit_value(value: &Value) -> Value {
 }
 
 fn is_sensitive_audit_key(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
     matches!(
-        key.to_ascii_lowercase().as_str(),
+        key.as_str(),
         "authorization"
             | "proxy-authorization"
             | "cookie"
@@ -136,7 +137,13 @@ fn is_sensitive_audit_key(key: &str) -> bool {
             | "token"
             | "password"
             | "secret"
-    )
+    ) || key.ends_with("_token")
+        || key.ends_with("_key")
+        || key.ends_with("_secret")
+        || key.ends_with("_password")
+        || key.ends_with("_authorization")
+        || key.ends_with("_cookie")
+        || key.starts_with("aws_")
 }
 
 #[cfg(test)]
@@ -215,7 +222,10 @@ mod tests {
             },
             "items": [
                 {"proxy-authorization": "Basic secret"},
-                {"token": "secret"}
+                {"token": "secret"},
+                {"github_token": "secret"},
+                {"service_api_key": "secret"},
+                {"aws_region": "secret"}
             ]
         });
 
@@ -229,7 +239,10 @@ mod tests {
                 },
                 "items": [
                     {"proxy-authorization": REDACTED},
-                    {"token": REDACTED}
+                    {"token": REDACTED},
+                    {"github_token": REDACTED},
+                    {"service_api_key": REDACTED},
+                    {"aws_region": REDACTED}
                 ]
             })
         );
