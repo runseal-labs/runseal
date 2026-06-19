@@ -531,11 +531,11 @@ fn run_explain_policy(args: &[String]) -> Result<(), String> {
     )
     .map_err(|err| err.reason)?;
 
-    println!("{}", explain_policy_json(&policy));
+    println!("{}", explain_policy_json(&policy, &request.cwd));
     Ok(())
 }
 
-fn explain_policy_json(policy: &SandboxPolicy) -> Value {
+fn explain_policy_json(policy: &SandboxPolicy, cwd: &Path) -> Value {
     let backend = active_backend();
     let missing_features = backend.missing_feature_names(policy);
     let mut result = policy.explain_json();
@@ -549,6 +549,9 @@ fn explain_policy_json(policy: &SandboxPolicy) -> Value {
             }),
         );
         result.insert("missing_features".to_string(), json!(missing_features));
+        if let Ok(setup_status) = windows_sandbox_setup_status_for_cwd(cwd) {
+            result.insert("setup_status".to_string(), setup_status);
+        }
     }
     result
 }
@@ -568,7 +571,7 @@ fn explain_policy_from_params(params: &Value) -> Result<Value, RunSealError> {
     let network = network_override_from_params(params)?;
     let policy = normalize_policy(&policy, &cwd, network)?;
 
-    Ok(explain_policy_json(&policy))
+    Ok(explain_policy_json(&policy, &cwd))
 }
 
 fn execute_from_params(params: &Value) -> Result<(Vec<Value>, Value), RunSealError> {

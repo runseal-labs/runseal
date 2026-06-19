@@ -1683,6 +1683,8 @@ fn explain_policy_returns_effective_hash_and_network_mode() -> Result<()> {
         payload["support"],
         expected_status(expected_windows_sandbox_supported())
     );
+    assert_eq!(payload["setup_status"]["setup"], "windows-sandbox");
+    assert!(payload["setup_status"]["can_run_setup_now"].is_boolean());
     assert_eq!(
         payload["required_backend_features"],
         json!([

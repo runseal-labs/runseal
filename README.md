@@ -79,6 +79,8 @@ same `setup_status` object is included in sandboxed execution
 `execution.failed` audit event.
 `runseal capabilities` also includes this `setup_status` object so support
 claims and local readiness can be checked from one response.
+`runseal explain-policy` includes it alongside policy support for the requested
+workspace.
 `can_repair` is true when the current process is elevated or when the scheduled
 setup broker is already available.
 

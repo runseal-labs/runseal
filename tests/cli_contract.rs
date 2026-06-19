@@ -516,6 +516,8 @@ fn explain_policy_cli_materializes_standard_profile() -> Result<()> {
         payload["support"],
         expected_status(expected_windows_sandbox_supported())
     );
+    assert_eq!(payload["setup_status"]["setup"], "windows-sandbox");
+    assert!(payload["setup_status"]["can_run_setup_now"].is_boolean());
     assert_eq!(
         payload["required_backend_features"],
         serde_json::json!([
