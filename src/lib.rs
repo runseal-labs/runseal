@@ -1139,9 +1139,7 @@ fn execute_command(
             "type": "policy.resolved",
             "decision": "resolved",
             "sandbox_level": policy.sandbox_level.as_str(),
-            "network": {
-                "mode": policy.network.mode.as_str(),
-            },
+            "network": network_audit_json(policy),
             "backend_requirement": if policy.allows_local_execution() {
                 "local-execution"
             } else {
@@ -1376,9 +1374,7 @@ fn execute_command(
                 "level": policy.sandbox_level.as_str(),
                 "enforced": sandbox_enforced,
             },
-            "network": {
-                "mode": policy.network.mode.as_str(),
-            },
+            "network": network_audit_json(policy),
         }),
         &event_context,
     );
@@ -1395,9 +1391,7 @@ fn execute_command(
                 "level": policy.sandbox_level.as_str(),
                 "enforced": sandbox_enforced,
             },
-            "network": {
-                "mode": policy.network.mode.as_str(),
-            },
+            "network": network_audit_json(policy),
             "backend": {
                 "name": plan.backend,
                 "status": plan.backend_status,
@@ -1658,9 +1652,7 @@ fn execute_command(
             "level": policy.sandbox_level.as_str(),
             "enforced": sandbox_enforced,
         },
-        "network": {
-            "mode": policy.network.mode.as_str(),
-        },
+        "network": network_audit_json(policy),
         "backend": {
             "name": plan.backend,
             "status": plan.backend_status,
@@ -1698,6 +1690,13 @@ fn backend_execution_error(
         ));
     }
     None
+}
+
+fn network_audit_json(policy: &SandboxPolicy) -> Value {
+    json!({
+        "mode": policy.network.mode.as_str(),
+        "routes": policy.network.routes,
+    })
 }
 
 fn generic_backend_unavailable_reason() -> &'static str {

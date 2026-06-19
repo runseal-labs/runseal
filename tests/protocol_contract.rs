@@ -1058,6 +1058,56 @@ fn execute_copies_metadata_to_audit_events() -> Result<()> {
 }
 
 #[test]
+fn execute_audits_effective_network_routes() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let routes = json!(["github-api", "crm-readonly"]);
+    let output = run_rpc(&rpc_request(
+        "execute",
+        json!({
+            "command": [python_bin(), "-c", "print('routes ok')"],
+            "cwd": tmp.path(),
+            "policy": {
+                "version": "runseal.policy/v1",
+                "sandbox_level": "danger-full-access",
+                "network": {
+                    "mode": "proxy",
+                    "routes": routes
+                }
+            }
+        }),
+    ))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = messages
+        .iter()
+        .find(|message| message.get("id") == Some(&json!(1)))
+        .unwrap();
+
+    assert_eq!(response["result"]["status"], "finished");
+    assert_eq!(response["result"]["network"]["mode"], "proxy");
+    assert_eq!(response["result"]["network"]["routes"], routes);
+
+    let audit_path = response["result"]["audit_path"]
+        .as_str()
+        .expect("execution result must include audit_path");
+    let audit_events = read_audit_events(tmp.path(), audit_path)?;
+    for event_type in ["policy.resolved", "policy.allowed", "execution.started"] {
+        let event = audit_events
+            .iter()
+            .find(|event| event["type"] == event_type)
+            .with_context(|| format!("audit event {event_type} must exist"))?;
+        assert_eq!(event["network"]["mode"], "proxy");
+        assert_eq!(event["network"]["routes"], routes);
+    }
+    Ok(())
+}
+
+#[test]
 fn execute_redacts_sensitive_metadata_in_audit_events() -> Result<()> {
     let tmp = TempDir::new()?;
     let output = run_rpc(&rpc_request(
