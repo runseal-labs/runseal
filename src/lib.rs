@@ -423,7 +423,7 @@ fn windows_sandbox_setup_status_payload(
         "platform_supported": platform_supported,
         "broker": if broker_available { "available" } else { "unavailable" },
         "elevated": elevated,
-        "can_repair": platform_supported && elevated.unwrap_or(false),
+        "can_repair": platform_supported && (elevated.unwrap_or(false) || broker_available),
         "requires_setup": platform_supported && !broker_available,
     })
 }
@@ -1561,6 +1561,17 @@ mod tests {
         assert!(payload.get("sandbox_home").is_none());
         assert!(payload.get("profile_root").is_none());
         assert!(payload.get("runtime_root").is_none());
+    }
+
+    #[test]
+    fn windows_setup_status_can_repair_via_elevation_or_broker() {
+        let elevated = windows_sandbox_setup_status_payload(true, false, Some(true));
+        let broker = windows_sandbox_setup_status_payload(true, true, Some(false));
+        let unsupported = windows_sandbox_setup_status_payload(false, true, Some(true));
+
+        assert_eq!(elevated["can_repair"], true);
+        assert_eq!(broker["can_repair"], true);
+        assert_eq!(unsupported["can_repair"], false);
     }
 
     #[test]

@@ -262,8 +262,11 @@ fn assert_backend_unavailable(response: &Value, root: &std::path::Path) -> Resul
             "{setup_status}"
         );
         assert!(setup_status["elevated"].is_boolean(), "{setup_status}");
+        let elevated = setup_status["elevated"].as_bool().unwrap_or(false);
+        let broker_available = setup_status["broker"] == "available";
         assert_eq!(
-            setup_status["can_repair"], setup_status["elevated"],
+            setup_status["can_repair"].as_bool(),
+            Some(elevated || broker_available),
             "{setup_status}"
         );
     }

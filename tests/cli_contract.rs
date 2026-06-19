@@ -274,7 +274,13 @@ fn setup_status_reports_broker_readiness_without_running_setup() -> Result<()> {
     assert_eq!(payload["platform_supported"], cfg!(windows));
     if cfg!(windows) {
         assert!(payload["elevated"].is_boolean(), "{payload}");
-        assert_eq!(payload["can_repair"], payload["elevated"], "{payload}");
+        let elevated = payload["elevated"].as_bool().unwrap_or(false);
+        let broker_available = payload["broker"] == "available";
+        assert_eq!(
+            payload["can_repair"].as_bool(),
+            Some(elevated || broker_available),
+            "{payload}"
+        );
     } else {
         assert!(payload["elevated"].is_null(), "{payload}");
         assert_eq!(payload["can_repair"], false, "{payload}");
