@@ -280,11 +280,8 @@ fn run_setup_refresh_inner(
 pub struct SetupMarker {
     pub version: u32,
     pub sandbox_username: String,
-    #[serde(default)]
-    pub created_at: Option<String>,
-    #[serde(default)]
+    pub created_at: String,
     pub proxy_ports: Vec<u16>,
-    #[serde(default)]
     pub allow_local_binding: bool,
 }
 
@@ -2041,7 +2038,7 @@ mod tests {
         let marker = super::SetupMarker {
             version: super::SETUP_VERSION,
             sandbox_username: "sandbox".to_string(),
-            created_at: None,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
             proxy_ports: vec![3128],
             allow_local_binding: false,
         };
@@ -2061,7 +2058,7 @@ mod tests {
         let marker = super::SetupMarker {
             version: super::SETUP_VERSION,
             sandbox_username: "sandbox".to_string(),
-            created_at: None,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
             proxy_ports: vec![3128],
             allow_local_binding: false,
         };
@@ -2077,6 +2074,17 @@ mod tests {
                     .to_string()
             )
         );
+    }
+
+    #[test]
+    fn setup_marker_requires_network_guard_fields() {
+        let marker = serde_json::json!({
+            "version": super::SETUP_VERSION,
+            "sandbox_username": "sandbox",
+            "created_at": "2026-01-01T00:00:00Z"
+        });
+
+        assert!(serde_json::from_value::<super::SetupMarker>(marker).is_err());
     }
 
     #[test]

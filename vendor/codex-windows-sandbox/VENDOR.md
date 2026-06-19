@@ -35,6 +35,9 @@ Local vendor patches:
 - Treat scheduled setup tasks as usable only when their XML explicitly carries
   the exact broker home in `--task-run` arguments; guarded by upstream setup
   helper tests.
+- Treat setup markers as strict single-user network-guard state; missing
+  marker fields fail closed instead of defaulting to a stale schema; guarded by
+  upstream setup tests and `tests/vendor_boundary.rs`.
 - Replace upstream workspace/git dependency inheritance with local trimmed
   vendor crates; guarded by `tests/vendor_boundary.rs`.
 
@@ -55,8 +58,9 @@ Single-user vendor wiring acceptance criteria:
   identities.
 - Setup secrets use only a single-user schema such as `{ version, user }`; do
   not add readers or migrations for upstream `offline` and `online` records.
-- Setup markers use only one sandbox username field; do not add marker fields
-  for upstream offline/online identities.
+- Setup markers use only one sandbox username field and require explicit
+  network-guard fields; do not add marker fields for upstream offline/online
+  identities.
 - Diagnostics and smoke/conformance tests must assert that exactly the expected
   sandbox identity exists and the sandbox group exists before sandboxed
   execution is reported as supported.

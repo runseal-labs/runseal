@@ -85,6 +85,21 @@ fn vendored_windows_setup_state_uses_single_user_schema() {
             .iter()
             .any(|(_, source)| source.contains("user: SandboxUserRecord"))
     );
+
+    let setup = VENDOR_SETUP_SOURCES
+        .iter()
+        .find_map(|(name, source)| (*name == "setup.rs").then_some(*source))
+        .expect("setup.rs must be included");
+    let marker = setup
+        .split_once("pub struct SetupMarker {")
+        .and_then(|(_, tail)| tail.split_once("impl SetupMarker"))
+        .map(|(marker, _)| marker)
+        .expect("setup marker struct must be present");
+    assert!(marker.contains("pub created_at: String,"));
+    assert!(marker.contains("pub proxy_ports: Vec<u16>,"));
+    assert!(marker.contains("pub allow_local_binding: bool,"));
+    assert!(!marker.contains("pub created_at: Option<String>"));
+    assert!(!marker.contains("#[serde(default)]"));
 }
 
 #[test]
