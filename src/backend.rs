@@ -1246,6 +1246,7 @@ fn execute_windows_sandbox_plan(
     };
     let vendor_sandbox_home = vendor_sandbox_home(cwd);
     let workspace_roots = windows_sandbox_workspace_roots_for_plan(cwd, plan)?;
+    let write_roots_override = windows_sandbox_write_roots_for_plan(plan);
     let permission_profile = plan.vendor_permission_profile()?;
     plan.prepare_runtime_roots()?;
 
@@ -1284,7 +1285,7 @@ fn execute_windows_sandbox_plan(
                 proxy_enforced: plan.network_managed_proxy == "required",
                 read_roots_override: None,
                 read_roots_include_platform_defaults: workspace_contained,
-                write_roots_override: None,
+                write_roots_override: Some(write_roots_override.as_slice()),
                 deny_read_paths_override: deny_read_paths.as_slice(),
                 deny_write_paths_override: &[],
             },
@@ -1319,6 +1320,11 @@ fn execute_windows_sandbox_plan(
         },
         timed_out: capture.timed_out,
     })
+}
+
+#[cfg(windows)]
+fn windows_sandbox_write_roots_for_plan(plan: &PlatformSandboxPlan) -> Vec<PathBuf> {
+    plan.filesystem_write.iter().map(PathBuf::from).collect()
 }
 
 #[cfg(windows)]
@@ -2409,6 +2415,33 @@ mod tests {
             plan.temp_root.unwrap(),
         ] {
             assert!(root_keys.contains(&windows_sandbox_path_key(Path::new(&root))));
+        }
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_sandbox_write_roots_include_runtime_roots() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&cwd)?;
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+        let plan =
+            WindowsReferenceBackend.fail_closed_plan("exec_vendor_write_roots", &cwd, &policy);
+
+        let roots = windows_sandbox_write_roots_for_plan(&plan)
+            .into_iter()
+            .map(|root| windows_sandbox_path_key(&root))
+            .collect::<HashSet<_>>();
+
+        for root in [
+            path_string(&cwd),
+            plan.runtime_root.clone().unwrap(),
+            plan.profile_root.clone().unwrap(),
+            plan.synthetic_home.clone().unwrap(),
+            plan.temp_root.unwrap(),
+        ] {
+            assert!(roots.contains(&windows_sandbox_path_key(Path::new(&root))));
         }
         Ok(())
     }

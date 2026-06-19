@@ -9,6 +9,8 @@ mod rpc;
 mod stdin;
 mod windows;
 
+#[cfg(windows)]
+use crate::windows::vendor_adapter::WindowsVendorSandboxProfile;
 use audit::{create_audit_writer, write_audit_event_with_metadata};
 use backend::{
     ExecutionEnv, ExecutionStdin, SandboxBackend, active_backend, backend_unavailable_reason,
@@ -462,19 +464,52 @@ fn run_windows_sandbox_setup(cwd: &Path, json_output: bool) -> Result<(), String
         return Err(WINDOWS_SANDBOX_SETUP_FAILED.to_string());
     }
     let sandbox_home = backend::windows_sandbox_home(cwd);
-    let real_user = env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string());
-    if codex_windows_sandbox::run_elevated_provisioning_setup(&sandbox_home, &real_user).is_err() {
+    if let Err(err) = run_windows_sandbox_full_setup(cwd, &sandbox_home) {
         if json_output {
             println!(
                 "{}",
-                cli_error_payload(windows_sandbox_setup_failed_error(cwd))
+                cli_error_payload(windows_sandbox_setup_failed_error_with_detail(cwd, &err))
             );
             return Err(String::new());
         }
-        return Err(WINDOWS_SANDBOX_SETUP_FAILED.to_string());
+        return Err(format!("{WINDOWS_SANDBOX_SETUP_FAILED}: {err}"));
     }
     println!("{}", windows_sandbox_setup_success_payload(cwd));
     Ok(())
+}
+
+#[cfg(windows)]
+fn run_windows_sandbox_full_setup(cwd: &Path, sandbox_home: &Path) -> Result<(), String> {
+    let policy = normalize_policy(&json!("workspace-write"), cwd, Some(NetworkMode::Disabled))
+        .map_err(|err| err.reason)?;
+    let vendor_profile = WindowsVendorSandboxProfile::from_policy(&policy);
+    let permission_profile = vendor_profile.permission_profile()?;
+    let workspace_roots = vec![
+        codex_utils_absolute_path::AbsolutePathBuf::try_from(cwd)
+            .map_err(|err| format!("invalid setup cwd {}: {err}", cwd.display()))?,
+    ];
+    let env_map = std::collections::HashMap::new();
+    let permissions =
+        codex_windows_sandbox::ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_workspace_roots(
+            &permission_profile,
+            workspace_roots.as_slice(),
+        )
+        .map_err(|err| err.to_string())?;
+
+    codex_windows_sandbox::run_elevated_setup(
+        codex_windows_sandbox::SandboxSetupRequest {
+            permissions: &permissions,
+            command_cwd: cwd,
+            env_map: &env_map,
+            codex_home: sandbox_home,
+            proxy_enforced: true,
+        },
+        codex_windows_sandbox::SetupRootOverrides {
+            write_roots: Some(vec![cwd.to_path_buf()]),
+            ..Default::default()
+        },
+    )
+    .map_err(|err| err.to_string())
 }
 
 #[cfg(windows)]
@@ -534,6 +569,10 @@ fn windows_sandbox_setup_status_for_cwd(cwd: &Path) -> Result<Value, String> {
 }
 
 fn windows_sandbox_setup_failed_error(cwd: &Path) -> RunSealError {
+    windows_sandbox_setup_failed_error_with_detail(cwd, "")
+}
+
+fn windows_sandbox_setup_failed_error_with_detail(cwd: &Path, detail: &str) -> RunSealError {
     let setup_status = windows_sandbox_setup_status_for_cwd(cwd).unwrap_or_else(|_| {
         windows_sandbox_setup_status_payload(cfg!(windows), false, false, None)
     });
@@ -542,7 +581,11 @@ fn windows_sandbox_setup_failed_error(cwd: &Path) -> RunSealError {
     } else {
         ("WINDOWS_SANDBOX_UNSUPPORTED", WINDOWS_SANDBOX_UNSUPPORTED)
     };
-    RunSealError::with_details(code, reason, json!({ "setup_status": setup_status }))
+    let mut details = json!({ "setup_status": setup_status });
+    if !detail.is_empty() {
+        details["detail"] = json!(detail);
+    }
+    RunSealError::with_details(code, reason, details)
 }
 
 fn windows_sandbox_setup_can_run_now(setup_status: &Value) -> bool {
