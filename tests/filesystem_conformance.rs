@@ -131,6 +131,9 @@ fn assert_backend_unavailable(response: &Value, root: &Path) -> Result<()> {
         .map(|line| serde_json::from_str(line).context("audit line must be JSON"))
         .collect::<Result<Vec<Value>>>()?;
     assert_no_private_windows_setup_terms(&json!(&audit_events));
+    for event in &audit_events {
+        assert_audit_event_envelope(event);
+    }
     assert!(audit_events.iter().any(|event| {
         event["type"] == "execution.failed"
             && event["reason"]
@@ -184,6 +187,47 @@ fn assert_no_private_windows_setup_terms(value: &Value) {
     }
 }
 
+fn assert_audit_event_envelope(event: &Value) {
+    assert!(event["type"].as_str().is_some());
+    assert!(event["time"].as_str().is_some());
+    assert!(
+        event["execution_id"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("exec_")
+    );
+    assert!(
+        event["session_id"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("sess_")
+    );
+    assert!(
+        event["seal_id"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("seal_")
+    );
+    assert!(event["policy_id"].as_str().is_some());
+    assert!(
+        event["policy_hash"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("sha256:")
+    );
+    assert_eq!(event["policy_epoch"], event["policy_hash"]);
+    assert!(event["runseal_version"].as_str().is_some());
+    assert!(
+        event["audit_path"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with(".runseal/audit/sess_")
+    );
+    assert!(event["backend"]["name"].as_str().is_some());
+    assert!(event["backend"]["status"].as_str().is_some());
+    assert!(event["backend"]["platform"].as_str().is_some());
+}
+
 fn assert_backend_missing_features(
     response: &Value,
     root: &Path,
@@ -216,6 +260,9 @@ fn assert_backend_missing_features(
         .map(|line| serde_json::from_str(line).context("audit line must be JSON"))
         .collect::<Result<Vec<Value>>>()?;
     assert_no_private_windows_setup_terms(&json!(&audit_events));
+    for event in &audit_events {
+        assert_audit_event_envelope(event);
+    }
     let backend_event = audit_events
         .iter()
         .find(|event| event["type"] == "sandbox.backend_capability")
