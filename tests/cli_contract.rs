@@ -676,11 +676,21 @@ fn sandboxed_exec_cli_uses_backend_or_reports_unavailable() -> Result<()> {
             let audit_jsonl = fs::read_to_string(tmp.path().join(audit_path))?;
             assert_no_private_windows_setup_terms(&audit_jsonl);
         } else {
-            assert!(output.stdout.is_empty());
+            assert!(stderr.is_empty(), "{stderr}");
+            let payload = stdout_json(&output)?;
+            assert_eq!(payload["error"]["data"]["code"], "BACKEND_UNAVAILABLE");
             assert!(
-                stderr.contains("windows sandbox setup unavailable"),
-                "{stderr}"
+                payload["error"]["data"]["reason"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("windows sandbox setup unavailable"),
+                "{payload}"
             );
+            assert_eq!(
+                payload["error"]["data"]["setup_status"]["setup"],
+                "windows-sandbox"
+            );
+            assert_no_private_windows_setup_terms(&payload.to_string());
             let audit_dir = tmp.path().join(".runseal").join("audit");
             let audit_files = fs::read_dir(&audit_dir)
                 .with_context(|| format!("audit dir must exist at {}", audit_dir.display()))?
@@ -698,13 +708,17 @@ fn sandboxed_exec_cli_uses_backend_or_reports_unavailable() -> Result<()> {
     }
 
     assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.is_empty(), "{stderr}");
+    let payload = stdout_json(&output)?;
     assert!(
-        stderr.contains("cannot enforce policy read-only"),
-        "{stderr}"
+        payload["error"]["data"]["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("cannot enforce policy read-only"),
+        "{payload}"
     );
-    assert_no_private_windows_setup_terms(&stderr);
+    assert_no_private_windows_setup_terms(&payload.to_string());
 
     let audit_dir = tmp.path().join(".runseal").join("audit");
     let audit_files = fs::read_dir(&audit_dir)
@@ -737,7 +751,15 @@ fn exec_cli_enforces_timeout_ms() -> Result<()> {
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("execution timed out"), "{stderr}");
+    assert!(stderr.is_empty(), "{stderr}");
+    let payload = stdout_json(&output)?;
+    assert!(
+        payload["error"]["data"]["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("execution timed out"),
+        "{payload}"
+    );
     Ok(())
 }
 

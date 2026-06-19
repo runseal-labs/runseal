@@ -80,7 +80,9 @@ Options:
 
 pub fn run_cli() {
     if let Err(err) = run() {
-        eprintln!("{err}");
+        if !err.is_empty() {
+            eprintln!("{err}");
+        }
         std::process::exit(1);
     }
 }
@@ -238,13 +240,19 @@ fn run_exec(args: &[String]) -> Result<(), String> {
         return Ok(());
     }
     let request = parse_exec_args(args)?;
-    let policy = normalize_policy(
+    let policy = match normalize_policy(
         &Value::String(request.policy.clone()),
         &request.cwd,
         request.network,
-    )
-    .map_err(|err| err.reason)?;
-    let (events, result) = execute_command(
+    ) {
+        Ok(policy) => policy,
+        Err(err) if request.json => {
+            println!("{}", cli_error_payload(err.into()));
+            return Err(String::new());
+        }
+        Err(err) => return Err(err.reason),
+    };
+    let (events, result) = match execute_command(
         &request.command,
         &request.cwd,
         &policy,
@@ -252,8 +260,14 @@ fn run_exec(args: &[String]) -> Result<(), String> {
         ExecutionEnv::default(),
         None,
         request.timeout,
-    )
-    .map_err(|err| err.message)?;
+    ) {
+        Ok(result) => result,
+        Err(err) if request.json => {
+            println!("{}", cli_error_payload(err));
+            return Err(String::new());
+        }
+        Err(err) => return Err(err.message),
+    };
 
     if request.events {
         for event in events {
@@ -271,6 +285,23 @@ fn run_exec(args: &[String]) -> Result<(), String> {
         print!("{text}");
     }
     Ok(())
+}
+
+fn cli_error_payload(err: RunSealError) -> Value {
+    let mut data = json!({
+        "code": err.code,
+        "reason": err.reason,
+    });
+    if let (Some(data), Some(details)) = (data.as_object_mut(), err.details) {
+        data.extend(details.as_object().cloned().unwrap_or_default());
+    }
+
+    json!({
+        "error": {
+            "message": err.message,
+            "data": data,
+        }
+    })
 }
 
 fn run_setup(args: &[String]) -> Result<(), String> {

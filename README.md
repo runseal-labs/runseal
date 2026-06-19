@@ -43,6 +43,9 @@ For the Phase 0 local execution baseline:
 runseal exec --policy danger-full-access -- python skill.py
 ```
 
+When `runseal exec --json` fails, stdout contains a structured `error` object
+and the process exits non-zero.
+
 ## Windows sandbox setup
 
 Build all Windows binaries, including the setup helper and command runner:
