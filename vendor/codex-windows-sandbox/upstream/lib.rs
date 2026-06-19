@@ -371,6 +371,7 @@ mod windows_impl {
     use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
     type PipeHandles = ((HANDLE, HANDLE), (HANDLE, HANDLE), (HANDLE, HANDLE));
+    const MAX_FINITE_WAIT_MS: u32 = INFINITE - 1;
 
     enum WaitOutcome {
         Exited,
@@ -380,7 +381,7 @@ mod windows_impl {
 
     fn wait_timeout_ms(timeout_ms: Option<u64>) -> u32 {
         timeout_ms
-            .map(|ms| ms.min(u32::MAX as u64) as u32)
+            .map(|ms| ms.min(MAX_FINITE_WAIT_MS as u64) as u32)
             .unwrap_or(INFINITE)
     }
 
@@ -795,6 +796,15 @@ mod windows_impl {
         #[test]
         fn huge_cancellable_timeout_does_not_panic() {
             let _ = super::wait_deadline(Some(u64::MAX));
+        }
+
+        #[test]
+        fn explicit_timeout_never_maps_to_infinite_wait() {
+            assert_eq!(super::wait_timeout_ms(None), super::INFINITE);
+            assert_eq!(
+                super::wait_timeout_ms(Some(u64::MAX)),
+                super::MAX_FINITE_WAIT_MS
+            );
         }
     }
 }
