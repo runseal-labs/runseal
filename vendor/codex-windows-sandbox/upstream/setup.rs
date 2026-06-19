@@ -1,5 +1,6 @@
 use serde::Deserialize;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -773,6 +774,7 @@ static SCHEDULED_SETUP_REQUEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 #[derive(Debug, Deserialize)]
 struct ScheduledSetupTaskResult {
     request_id: String,
+    payload_sha256: String,
     ok: bool,
     message: Option<String>,
 }
@@ -809,21 +811,26 @@ fn scheduled_setup_result_path(codex_home: &Path, request_id: &str) -> PathBuf {
     sandbox_dir(codex_home).join(format!("{SCHEDULED_SETUP_RESULT_PREFIX}{request_id}.json"))
 }
 
-fn validate_scheduled_setup_result_request_id(
+fn validate_scheduled_setup_result(
     result: &ScheduledSetupTaskResult,
     request_id: &str,
+    payload_sha256: &str,
     result_path: &Path,
 ) -> Result<()> {
-    if result.request_id == request_id {
+    if result.request_id == request_id && result.payload_sha256 == payload_sha256 {
         return Ok(());
     }
     Err(failure(
         SetupErrorCode::OrchestratorHelperLaunchFailed,
         format!(
-            "scheduled setup result {} did not match request id",
+            "scheduled setup result {} did not match request",
             result_path.display()
         ),
     ))
+}
+
+fn scheduled_setup_payload_sha256(payload_json: &[u8]) -> String {
+    format!("sha256:{:x}", Sha256::digest(payload_json))
 }
 
 fn remove_scheduled_setup_result_file(path: &Path) -> Result<()> {
@@ -989,6 +996,7 @@ fn try_run_setup_exe_via_scheduled_task(
 
     let result_path = scheduled_setup_result_path(&broker_home, &request_id);
     remove_scheduled_setup_result_file(&result_path)?;
+    let payload_sha256 = scheduled_setup_payload_sha256(payload_json);
     let payload_path = write_scheduled_setup_payload_file(&broker_home, &request_id, payload_json)?;
 
     let output = Command::new("schtasks.exe")
@@ -1033,9 +1041,12 @@ fn try_run_setup_exe_via_scheduled_task(
                             ),
                         )
                     })?;
-                if let Err(err) =
-                    validate_scheduled_setup_result_request_id(&result, &request_id, &result_path)
-                {
+                if let Err(err) = validate_scheduled_setup_result(
+                    &result,
+                    &request_id,
+                    &payload_sha256,
+                    &result_path,
+                ) {
                     let _ = remove_setup_payload_file(&payload_path);
                     let _ = remove_setup_payload_file(&result_path);
                     return Err(err);
@@ -1635,29 +1646,57 @@ mod tests {
     }
 
     #[test]
-    fn scheduled_setup_result_requires_request_id() {
-        let result: super::ScheduledSetupTaskResult =
-            serde_json::from_str(r#"{"request_id":"req-1","ok":true,"message":null}"#)
-                .expect("parse result");
-        let old_result = serde_json::from_str::<super::ScheduledSetupTaskResult>(
-            r#"{"ok":true,"message":null}"#,
+    fn scheduled_setup_result_requires_request_binding() {
+        let result: super::ScheduledSetupTaskResult = serde_json::from_str(
+            r#"{"request_id":"req-1","payload_sha256":"sha256:abc","ok":true,"message":null}"#,
+        )
+        .expect("parse result");
+        let missing_hash = serde_json::from_str::<super::ScheduledSetupTaskResult>(
+            r#"{"request_id":"req-1","ok":true,"message":null}"#,
+        );
+        let missing_request = serde_json::from_str::<super::ScheduledSetupTaskResult>(
+            r#"{"payload_sha256":"sha256:abc","ok":true,"message":null}"#,
         );
 
         assert_eq!(result.request_id, "req-1");
-        assert!(old_result.is_err());
+        assert_eq!(result.payload_sha256, "sha256:abc");
+        assert!(missing_hash.is_err());
+        assert!(missing_request.is_err());
     }
 
     #[test]
     fn scheduled_setup_result_rejects_mismatched_request_id() {
-        let result: super::ScheduledSetupTaskResult =
-            serde_json::from_str(r#"{"request_id":"other","ok":true,"message":null}"#)
-                .expect("parse result");
-        let err = super::validate_scheduled_setup_result_request_id(
+        let result: super::ScheduledSetupTaskResult = serde_json::from_str(
+            r#"{"request_id":"other","payload_sha256":"sha256:abc","ok":true,"message":null}"#,
+        )
+        .expect("parse result");
+        let err = super::validate_scheduled_setup_result(
             &result,
             "req-1",
+            "sha256:abc",
             Path::new("setup-task-result-req-1.json"),
         )
         .expect_err("mismatched result must fail closed");
+
+        assert_eq!(
+            extract_failure(&err).map(|failure| failure.code),
+            Some(SetupErrorCode::OrchestratorHelperLaunchFailed)
+        );
+    }
+
+    #[test]
+    fn scheduled_setup_result_rejects_mismatched_payload_hash() {
+        let result: super::ScheduledSetupTaskResult = serde_json::from_str(
+            r#"{"request_id":"req-1","payload_sha256":"sha256:other","ok":true,"message":null}"#,
+        )
+        .expect("parse result");
+        let err = super::validate_scheduled_setup_result(
+            &result,
+            "req-1",
+            &super::scheduled_setup_payload_sha256(b"payload"),
+            Path::new("setup-task-result-req-1.json"),
+        )
+        .expect_err("mismatched payload hash must fail closed");
 
         assert_eq!(
             extract_failure(&err).map(|failure| failure.code),

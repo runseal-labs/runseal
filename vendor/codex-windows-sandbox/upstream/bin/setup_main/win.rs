@@ -32,6 +32,7 @@ use codex_windows_sandbox::workspace_write_root_overlaps_path;
 use codex_windows_sandbox::write_setup_error_report;
 use serde::Deserialize;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::ffi::c_void;
@@ -128,6 +129,7 @@ enum SetupInvocation {
 #[derive(Debug, Serialize)]
 struct ScheduledSetupTaskResult {
     request_id: String,
+    payload_sha256: String,
     ok: bool,
     message: Option<String>,
 }
@@ -286,6 +288,10 @@ fn quote_task_arg(arg: &str) -> String {
 
 fn scheduled_setup_result_path(codex_home: &Path, request_id: &str) -> PathBuf {
     sandbox_dir(codex_home).join(format!("{SCHEDULED_SETUP_RESULT_PREFIX}{request_id}.json"))
+}
+
+fn scheduled_setup_payload_sha256(payload_json: &[u8]) -> String {
+    format!("sha256:{:x}", Sha256::digest(payload_json))
 }
 
 fn scheduled_setup_result_temp_path(codex_home: &Path, request_id: &str) -> PathBuf {
@@ -746,6 +752,7 @@ fn run_scheduled_setup_task(broker_home: &Path) -> Result<()> {
             Err(err) => {
                 let result = ScheduledSetupTaskResult {
                     request_id: request_id.clone(),
+                    payload_sha256: String::new(),
                     ok: false,
                     message: Some(format!("failed to read scheduled setup payload: {err}")),
                 };
@@ -753,9 +760,11 @@ fn run_scheduled_setup_task(broker_home: &Path) -> Result<()> {
                 continue;
             }
         };
+        let payload_sha256 = scheduled_setup_payload_sha256(&payload_json);
         if let Err(err) = remove_setup_payload_file(&path) {
             let result = ScheduledSetupTaskResult {
                 request_id: request_id.clone(),
+                payload_sha256,
                 ok: false,
                 message: Some(format!("failed to remove scheduled setup payload: {err}")),
             };
@@ -766,11 +775,13 @@ fn run_scheduled_setup_task(broker_home: &Path) -> Result<()> {
         let task_result = match result {
             Ok(()) => ScheduledSetupTaskResult {
                 request_id: request_id.clone(),
+                payload_sha256,
                 ok: true,
                 message: None,
             },
             Err(err) => ScheduledSetupTaskResult {
                 request_id: request_id.clone(),
+                payload_sha256,
                 ok: false,
                 message: Some(err.to_string()),
             },
@@ -1567,6 +1578,7 @@ mod tests {
         fs::write(&result_path, br#"{"ok":true,"message":null}"#).expect("write old result");
         let result = super::ScheduledSetupTaskResult {
             request_id: request_id.to_string(),
+            payload_sha256: super::scheduled_setup_payload_sha256(b"payload"),
             ok: false,
             message: Some("new".to_string()),
         };
@@ -1602,6 +1614,10 @@ mod tests {
             serde_json::from_slice(&fs::read(&result_path).expect("read result"))
                 .expect("parse result");
         assert_eq!(result["request_id"], "invalid");
+        assert_eq!(
+            result["payload_sha256"],
+            super::scheduled_setup_payload_sha256(b"{not-json")
+        );
         assert_eq!(result["ok"], false);
         assert!(
             result["message"]
