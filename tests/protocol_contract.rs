@@ -1295,6 +1295,38 @@ fn execute_with_timeout_drains_large_stdout_while_waiting() -> Result<()> {
 }
 
 #[test]
+fn execute_timeout_survives_unread_file_stdin() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let stdin_path = tmp.path().join("large-stdin.bin");
+    fs::write(&stdin_path, vec![b'x'; 2 * 1024 * 1024])?;
+    let output = run_rpc(&rpc_request(
+        "execute",
+        json!({
+            "command": [python_bin(), "-c", "import time; time.sleep(1)"],
+            "cwd": tmp.path(),
+            "policy": "danger-full-access",
+            "stdin": {
+                "mode": "file",
+                "path": stdin_path
+            },
+            "timeout_ms": 50
+        }),
+    ))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = &messages[0];
+
+    assert_eq!(response["error"]["data"]["code"], "EXECUTION_TIMEOUT");
+    assert_eq!(response["error"]["data"]["timeout_ms"], 50);
+    Ok(())
+}
+
+#[test]
 fn execute_timeout_returns_stable_error_and_audit_event() -> Result<()> {
     let tmp = TempDir::new()?;
     let output = run_rpc(&rpc_request(

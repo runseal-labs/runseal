@@ -8,7 +8,7 @@ use std::io::{self, Read, Write};
 #[cfg(windows)]
 use std::os::windows::io::AsRawHandle;
 use std::path::Path;
-use std::process::{Child, Command, ExitStatus, Output, Stdio};
+use std::process::{Child, ChildStdin, Command, ExitStatus, Output, Stdio};
 use std::thread;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -81,13 +81,19 @@ pub(super) fn spawn_local_command(
     };
     let stdout_reader = child.stdout.take().map(read_pipe_in_thread);
     let stderr_reader = child.stderr.take().map(read_pipe_in_thread);
-    if let ExecutionStdin::Bytes(bytes) | ExecutionStdin::File(bytes) = stdin
-        && let Err(err) = write_child_stdin(&mut child, bytes)
-    {
-        return Err(cleanup_child_after_setup_error(child, err));
-    }
+    let stdin_writer = match stdin {
+        ExecutionStdin::Empty => None,
+        ExecutionStdin::Bytes(bytes) | ExecutionStdin::File(bytes) => {
+            write_stdin_in_thread(child.stdin.take(), bytes)
+        }
+    };
 
     let (status, timed_out) = wait_child_with_timeout(&mut child, timeout)?;
+    if !timed_out {
+        join_stdin_writer(stdin_writer)?;
+    } else {
+        let _ = join_stdin_writer(stdin_writer);
+    }
     Ok(BackendExecutionOutput {
         output: Output {
             status,
@@ -96,6 +102,22 @@ pub(super) fn spawn_local_command(
         },
         timed_out,
     })
+}
+
+fn write_stdin_in_thread(
+    stdin: Option<ChildStdin>,
+    bytes: Vec<u8>,
+) -> Option<JoinHandle<io::Result<()>>> {
+    stdin.map(|mut stdin| thread::spawn(move || stdin.write_all(&bytes)))
+}
+
+fn join_stdin_writer(writer: Option<JoinHandle<io::Result<()>>>) -> io::Result<()> {
+    let Some(writer) = writer else {
+        return Ok(());
+    };
+    writer
+        .join()
+        .map_err(|_| io::Error::other("stdin writer thread panicked"))?
 }
 
 fn wait_child_with_timeout(child: &mut Child, timeout: Duration) -> io::Result<(ExitStatus, bool)> {
