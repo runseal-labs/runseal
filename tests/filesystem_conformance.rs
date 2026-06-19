@@ -513,11 +513,12 @@ fn runtime_environment_roots_are_per_execution_when_supported_or_fails_closed() 
     let writer_code = format!(
         "import os, pathlib\n\
          keys = {env_keys:?}\n\
-         for key in keys:\n\
-             root = os.environ[key]\n\
+         roots = [os.environ[key] for key in keys]\n\
+         roots.append(os.environ['HOMEDRIVE'] + os.environ['HOMEPATH'])\n\
+         for root in roots:\n\
              path = pathlib.Path(root) / {marker:?}\n\
              path.parent.mkdir(parents=True, exist_ok=True)\n\
-             path.write_text(key, encoding='utf-8')"
+             path.write_text(root, encoding='utf-8')"
     );
     let first = execute("workspace-write", &workspace, writer_code)?;
 
@@ -536,7 +537,9 @@ fn runtime_environment_roots_are_per_execution_when_supported_or_fails_closed() 
     let reader_code = format!(
         "import json, os, pathlib\n\
          keys = {env_keys:?}\n\
-         leaked = [key for key in keys if (pathlib.Path(os.environ[key]) / {marker:?}).exists()]\n\
+         roots = [(key, os.environ[key]) for key in keys]\n\
+         roots.append(('HOMEDRIVE+HOMEPATH', os.environ['HOMEDRIVE'] + os.environ['HOMEPATH']))\n\
+         leaked = [key for key, root in roots if (pathlib.Path(root) / {marker:?}).exists()]\n\
          print(json.dumps(leaked))"
     );
     let second = execute("workspace-write", &workspace, reader_code)?;

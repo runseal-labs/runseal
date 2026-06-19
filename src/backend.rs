@@ -564,7 +564,10 @@ impl PlatformSandboxPlan {
         {
             prepare_unique_runtime_root(&mut prepared, root)?;
         }
-        for (_, root) in &self.environment_runtime {
+        for (key, root) in &self.environment_runtime {
+            if !runtime_environment_value_is_path(key) {
+                continue;
+            }
             prepare_unique_runtime_root(&mut prepared, root)?;
         }
         if let Some(runtime_root) = &self.runtime_root {
@@ -702,7 +705,10 @@ impl PlatformSandboxPlan {
         {
             self.validate_runtime_root_path_for_setup(Path::new(root), &expected)?;
         }
-        for (_, root) in &self.environment_runtime {
+        for (key, root) in &self.environment_runtime {
+            if !runtime_environment_value_is_path(key) {
+                continue;
+            }
             self.validate_runtime_root_path_for_setup(Path::new(root), &expected)?;
         }
         Ok(())
@@ -1702,6 +1708,10 @@ fn host_platform() -> &'static str {
 
 fn path_string(path: &Path) -> String {
     PathBuf::from(path).to_string_lossy().to_string()
+}
+
+fn runtime_environment_value_is_path(key: &str) -> bool {
+    !matches!(key, "HOMEDRIVE" | "HOMEPATH")
 }
 
 fn compile_local_execution_or_unsupported(
@@ -3270,6 +3280,27 @@ mod tests {
 
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
         assert!(!outside.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_setup_allows_windows_home_drive_environment_components() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&cwd)?;
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+        let mut plan =
+            WindowsReferenceBackend.fail_closed_plan("exec_home_components", &cwd, &policy);
+        plan.environment_runtime
+            .push(("HOMEDRIVE".to_string(), "C:".to_string()));
+        plan.environment_runtime
+            .push(("HOMEPATH".to_string(), "\\sandbox\\profile".to_string()));
+
+        let prepared = plan.prepare_runtime_roots()?;
+
+        assert!(!prepared.iter().any(|root| root == "C:"));
+        assert!(!prepared.iter().any(|root| root == "\\sandbox\\profile"));
+        plan.cleanup_runtime_roots()?;
         Ok(())
     }
 

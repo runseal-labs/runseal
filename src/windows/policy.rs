@@ -621,7 +621,7 @@ impl WindowsRuntimeRoots {
     }
 
     fn environment(&self) -> Vec<(String, String)> {
-        vec![
+        let mut environment = vec![
             ("RUNSEAL_HOME".to_string(), self.synthetic_home.clone()),
             ("RUNSEAL_TMP".to_string(), self.temp_root.clone()),
             ("HOME".to_string(), self.synthetic_home.clone()),
@@ -636,7 +636,12 @@ impl WindowsRuntimeRoots {
             ),
             ("TEMP".to_string(), self.temp_root.clone()),
             ("TMP".to_string(), self.temp_root.clone()),
-        ]
+        ];
+        if let Some((drive, path)) = windows_home_drive_and_path(&self.profile_root) {
+            environment.push(("HOMEDRIVE".to_string(), drive));
+            environment.push(("HOMEPATH".to_string(), path));
+        }
+        environment
     }
 }
 
@@ -710,6 +715,18 @@ fn windows_root_key(root: &str) -> String {
 
 fn join_runtime_path(root: &str, child: &str) -> String {
     Path::new(root).join(child).to_string_lossy().to_string()
+}
+
+fn windows_home_drive_and_path(profile_root: &str) -> Option<(String, String)> {
+    let bytes = profile_root.as_bytes();
+    if bytes.len() < 3 || bytes[1] != b':' || !bytes[0].is_ascii_alphabetic() {
+        return None;
+    }
+    let mut path = profile_root[2..].replace('/', "\\");
+    if !path.starts_with('\\') {
+        path.insert(0, '\\');
+    }
+    Some((profile_root[..2].to_string(), path))
 }
 
 fn env_path(key: &str) -> Option<String> {
@@ -1092,6 +1109,30 @@ mod tests {
                 .any(|rule| rule.access == WindowsFilesystemAccess::ReadWrite
                     && rule.root == "/workspace/.runseal/runtime/exec_1/temp")
         );
+    }
+
+    #[test]
+    fn runtime_environment_redirects_windows_home_drive_and_path() {
+        let cwd = PathBuf::from("C:/workspace");
+        let policy = normalize_policy(&json!("read-only"), &cwd, None).unwrap();
+        let runtime_roots = WindowsRuntimeRoots::new(
+            "C:/workspace/.runseal/runtime/exec_1".to_string(),
+            "C:/workspace/.runseal/runtime/exec_1/profile".to_string(),
+            "C:/workspace/.runseal/runtime/exec_1/home".to_string(),
+            "C:/workspace/.runseal/runtime/exec_1/temp".to_string(),
+        );
+
+        let plan = WindowsPolicyPlan::from_policy_and_runtime_roots(&policy, Some(runtime_roots));
+
+        assert!(
+            plan.environment
+                .runtime
+                .contains(&("HOMEDRIVE".to_string(), "C:".to_string()))
+        );
+        assert!(plan.environment.runtime.contains(&(
+            "HOMEPATH".to_string(),
+            "\\workspace\\.runseal\\runtime\\exec_1\\profile".to_string()
+        )));
     }
 
     #[test]
