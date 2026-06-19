@@ -29,6 +29,7 @@ const VENDOR_SETUP_SOURCES: &[(&str, &str)] = &[
 
 const WINDOWS_SANDBOX_MANIFEST: &str =
     include_str!("../vendor/codex-windows-sandbox/upstream/Cargo.toml");
+const RUNSEAL_BACKEND_SOURCE: &str = include_str!("../src/backend.rs");
 
 const VENDOR_TIMEOUT_SOURCES: &[(&str, &str)] = &[
     (
@@ -361,4 +362,24 @@ fn vendored_windows_setup_launches_copied_setup_helper() {
     assert!(helper_materialization.contains("using unavailable sandbox-bin path"));
     assert!(!helper_materialization.contains("falling back to legacy path"));
     assert!(!helper_materialization.contains("fn legacy_lookup"));
+}
+
+#[test]
+fn runseal_windows_backend_uses_elevated_vendor_capture_only() {
+    assert!(
+        RUNSEAL_BACKEND_SOURCE
+            .contains("run_windows_sandbox_capture_for_permission_profile_elevated")
+    );
+    for forbidden in [
+        "run_windows_sandbox_capture(",
+        "run_windows_sandbox_capture_with_filesystem_overrides",
+        "run_windows_sandbox_legacy_preflight",
+        "spawn_windows_sandbox_session_for_level",
+        "spawn_windows_sandbox_session_legacy",
+    ] {
+        assert!(
+            !RUNSEAL_BACKEND_SOURCE.contains(forbidden),
+            "RunSeal Windows backend must not call legacy vendor API {forbidden}"
+        );
+    }
 }
