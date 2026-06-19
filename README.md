@@ -118,6 +118,12 @@ cargo clippy --tests -- -D warnings
 cargo test
 ```
 
+On Windows, run sandbox conformance serially to avoid overlapping global setup refreshes:
+
+```powershell
+cargo test --test filesystem_conformance -- --test-threads=1
+```
+
 To run the same tests against another candidate implementation:
 
 ```bash

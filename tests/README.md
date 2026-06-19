@@ -8,6 +8,8 @@ They are black-box protocol tests. `cargo test` builds and runs the local binary
 RUNSEAL_BIN=/path/to/runseal cargo test --test cli_contract --test protocol_contract --test filesystem_conformance
 ```
 
+On Windows, run `filesystem_conformance` with `-- --test-threads=1`; the sandbox backend uses shared OS setup state.
+
 CI runs the suite on Linux and Windows so platform selection, fail-closed behavior, and the Windows reference backend stay buildable as capabilities are promoted.
 
 The tests are black-box by design:

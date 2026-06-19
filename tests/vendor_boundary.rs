@@ -395,18 +395,18 @@ fn vendored_windows_provisioning_setup_reuses_scheduled_task_when_available() {
 }
 
 #[test]
-fn vendored_windows_setup_shell_elevates_copied_helper_by_payload_file() {
+fn vendored_windows_setup_uses_broker_without_direct_uac() {
     let setup = VENDOR_SETUP_SOURCES
         .iter()
         .find_map(|(name, source)| (*name == "setup.rs").then_some(*source))
         .expect("setup.rs must be included");
 
-    assert!(setup.contains("ShellExecuteExW"));
-    assert!(setup.contains("SEE_MASK_NOCLOSEPROCESS"));
-    assert!(setup.contains("\"runas\""));
+    assert!(!setup.contains("ShellExecuteExW"));
+    assert!(!setup.contains("SEE_MASK_NOCLOSEPROCESS"));
+    assert!(!setup.contains("\"runas\""));
     assert!(setup.contains("let exe = find_setup_exe(codex_home);"));
-    assert!(setup.contains("sei.lpFile = exe_w.as_ptr();"));
-    assert!(setup.contains("--payload-file {}"));
+    assert!(setup.contains(".arg(\"--payload-file\")"));
+    assert!(setup.contains("try_run_setup_exe_via_scheduled_task"));
     assert!(!setup.contains("RUNSEAL_WINDOWS_SANDBOX_NO_UAC"));
 }
 
