@@ -320,8 +320,13 @@ fn setup_rejects_invalid_cwd_before_windows_setup() -> Result<()> {
     fs::write(&file, "not a directory")?;
     let file = file.to_string_lossy().to_string();
 
-    for cwd in [missing, file] {
-        let output = run_cli(&["setup", "windows-sandbox", "--cwd", &cwd])?;
+    for args in [
+        vec!["setup", "windows-sandbox", "--cwd", &missing],
+        vec!["setup", "windows-sandbox", "--cwd", &file],
+        vec!["setup", "windows-sandbox", "--cwd", &missing, "--status"],
+        vec!["setup", "windows-sandbox", "--cwd", &file, "--status"],
+    ] {
+        let output = run_cli(&args)?;
 
         assert!(!output.status.success());
         assert!(output.stdout.is_empty());

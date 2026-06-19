@@ -351,7 +351,8 @@ fn run_windows_sandbox_setup_status(cwd: &Path) -> Result<(), String> {
 }
 
 #[cfg(not(windows))]
-fn run_windows_sandbox_setup_status(_cwd: &Path) -> Result<(), String> {
+fn run_windows_sandbox_setup_status(cwd: &Path) -> Result<(), String> {
+    validate_execution_cwd(cwd).map_err(|err| err.message)?;
     println!("{}", windows_sandbox_setup_status_payload(false, false));
     Ok(())
 }
