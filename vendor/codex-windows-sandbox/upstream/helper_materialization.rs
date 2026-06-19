@@ -85,9 +85,13 @@ pub(crate) fn resolve_helper_for_launch(
 pub fn resolve_current_exe_for_launch(codex_home: &Path, fallback_executable: &str) -> PathBuf {
     let source = match std::env::current_exe() {
         Ok(path) => path,
-        Err(_) => return PathBuf::from(fallback_executable),
+        Err(_) => return fallback_exe_for_launch(codex_home, fallback_executable),
     };
     resolve_exe_for_launch(&source, codex_home)
+}
+
+fn fallback_exe_for_launch(codex_home: &Path, fallback_executable: &str) -> PathBuf {
+    helper_bin_dir(codex_home).join(fallback_executable)
 }
 
 pub fn resolve_exe_for_launch(source: &Path, codex_home: &Path) -> PathBuf {
@@ -360,6 +364,7 @@ mod tests {
     use super::copy_from_source_if_needed;
     use super::destination_is_fresh;
     use super::dev_build_suffix;
+    use super::fallback_exe_for_launch;
     use super::helper_bin_dir;
     use super::helper_version_suffix;
     use super::materialized_file_name;
@@ -469,6 +474,16 @@ mod tests {
             helper_bin_dir(&codex_home).join("runseal-windows-sandbox-setup.exe")
         );
         assert_ne!(resolved, source);
+    }
+
+    #[test]
+    fn fallback_exe_for_launch_stays_under_sandbox_bin() {
+        let codex_home = Path::new(r"C:\Users\example\.codex");
+
+        assert_eq!(
+            helper_bin_dir(codex_home).join("runseal-windows-sandbox-setup.exe"),
+            fallback_exe_for_launch(codex_home, "runseal-windows-sandbox-setup.exe")
+        );
     }
 
     #[test]

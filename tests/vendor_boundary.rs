@@ -360,6 +360,10 @@ fn vendored_windows_setup_launches_copied_setup_helper() {
     assert!(setup.contains("return resolve_exe_for_launch(&setup_exe, codex_home);"));
     assert!(setup.contains("let exe = find_setup_exe(codex_home);"));
     assert!(helper_materialization.contains("using unavailable sandbox-bin path"));
+    assert!(
+        helper_materialization.contains("fallback_exe_for_launch(codex_home, fallback_executable)")
+    );
+    assert!(!helper_materialization.contains("PathBuf::from(fallback_executable)"));
     assert!(!helper_materialization.contains("falling back to legacy path"));
     assert!(!helper_materialization.contains("fn legacy_lookup"));
 }
