@@ -1,3 +1,8 @@
+use base64::{
+    Engine as _,
+    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+};
+use std::collections::HashSet;
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::{
@@ -6,6 +11,9 @@ use std::sync::{
 };
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
+use windows_sys::Win32::Security::Cryptography::{
+    BCRYPT_USE_SYSTEM_PREFERRED_RNG, BCryptGenRandom,
+};
 
 const MAX_HEADER_BYTES: usize = 64 * 1024;
 const NO_PROXY: &str = "";
@@ -24,11 +32,13 @@ const NO_PROXY_KEYS: &[&str] = &["NO_PROXY", "no_proxy"];
 
 pub(super) struct ManagedSandboxProxy {
     inner: Arc<ManagedSandboxProxyState>,
+    token: String,
 }
 
 struct ManagedSandboxProxyState {
     addr: SocketAddr,
     shutdown: Arc<AtomicBool>,
+    tokens: Arc<Mutex<HashSet<String>>>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -48,42 +58,51 @@ impl ManagedSandboxProxy {
             {
                 *shared = None;
             } else {
+                let token = new_proxy_token()?;
+                inner.add_token(token.clone())?;
                 return Ok(Self {
                     inner: Arc::clone(inner),
+                    token,
                 });
             }
         }
 
-        let proxy = Self::start_dedicated_on(SocketAddr::new(
-            IpAddr::V4(Ipv4Addr::LOCALHOST),
-            MANAGED_PROXY_PORT,
-        ))?;
+        let proxy = Self::start_dedicated_on_with_token(
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), MANAGED_PROXY_PORT),
+            new_proxy_token()?,
+        )?;
         *shared = Some(Arc::clone(&proxy.inner));
         Ok(proxy)
     }
 
-    fn start_dedicated_on(addr: SocketAddr) -> io::Result<Self> {
+    fn start_dedicated_on_with_token(addr: SocketAddr, token: String) -> io::Result<Self> {
         let listener = bind_proxy_listener(addr)?;
         listener.set_nonblocking(true)?;
         let addr = listener.local_addr()?;
         let shutdown = Arc::new(AtomicBool::new(false));
         let thread_shutdown = Arc::clone(&shutdown);
-        let thread = thread::spawn(move || accept_loop(listener, thread_shutdown));
+        let tokens = Arc::new(Mutex::new(HashSet::from([token.clone()])));
+        let thread_tokens = Arc::clone(&tokens);
+        let thread = thread::spawn(move || accept_loop(listener, thread_shutdown, thread_tokens));
         let inner = Arc::new(ManagedSandboxProxyState {
             addr,
             shutdown,
+            tokens,
             thread: Some(thread),
         });
-        Ok(Self { inner })
+        Ok(Self { inner, token })
     }
 
     #[cfg(test)]
     fn start_dedicated_ephemeral() -> io::Result<Self> {
-        Self::start_dedicated_on(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
+        Self::start_dedicated_on_with_token(
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+            new_proxy_token()?,
+        )
     }
 
     pub(super) fn environment(&self) -> Vec<(String, String)> {
-        let proxy_url = format!("http://{}", self.inner.addr);
+        let proxy_url = format!("http://runseal:{}@{}", self.token, self.inner.addr);
         let mut env = vec![
             ("RUNSEAL_NETWORK_PROXY_ACTIVE".to_string(), "1".to_string()),
             (
@@ -104,6 +123,28 @@ impl ManagedSandboxProxy {
                 .map(|key| ((*key).to_string(), NO_PROXY.to_string())),
         );
         env
+    }
+}
+
+impl Drop for ManagedSandboxProxy {
+    fn drop(&mut self) {
+        self.inner.remove_token(&self.token);
+    }
+}
+
+impl ManagedSandboxProxyState {
+    fn add_token(&self, token: String) -> io::Result<()> {
+        self.tokens
+            .lock()
+            .map_err(|_| io::Error::other("managed proxy token lock poisoned"))?
+            .insert(token);
+        Ok(())
+    }
+
+    fn remove_token(&self, token: &str) {
+        if let Ok(mut tokens) = self.tokens.lock() {
+            tokens.remove(token);
+        }
     }
 }
 
@@ -140,12 +181,17 @@ impl Drop for ManagedSandboxProxyState {
     }
 }
 
-fn accept_loop(listener: TcpListener, shutdown: Arc<AtomicBool>) {
+fn accept_loop(
+    listener: TcpListener,
+    shutdown: Arc<AtomicBool>,
+    tokens: Arc<Mutex<HashSet<String>>>,
+) {
     while !shutdown.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((client, _)) => {
+                let tokens = Arc::clone(&tokens);
                 thread::spawn(move || {
-                    let _ = handle_client(client);
+                    let _ = handle_client(client, tokens);
                 });
             }
             Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
@@ -155,7 +201,7 @@ fn accept_loop(listener: TcpListener, shutdown: Arc<AtomicBool>) {
         }
     }
 }
-fn handle_client(mut client: TcpStream) -> io::Result<()> {
+fn handle_client(mut client: TcpStream, tokens: Arc<Mutex<HashSet<String>>>) -> io::Result<()> {
     let mut buffer = Vec::with_capacity(4096);
     loop {
         let mut chunk = [0_u8; 4096];
@@ -170,9 +216,31 @@ fn handle_client(mut client: TcpStream) -> io::Result<()> {
         if let Some(header_end) = find_header_end(&buffer) {
             let body_prefix = buffer[header_end..].to_vec();
             let header = String::from_utf8_lossy(&buffer[..header_end]).into_owned();
+            if !authorized_proxy_request(&header, &tokens)? {
+                client.write_all(
+                    b"HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"runseal\"\r\nContent-Length: 0\r\n\r\n",
+                )?;
+                return Ok(());
+            }
             return forward_request(client, &header, &body_prefix);
         }
     }
+}
+
+fn authorized_proxy_request(header: &str, tokens: &Mutex<HashSet<String>>) -> io::Result<bool> {
+    let Some(actual) = header_value(header, "Proxy-Authorization") else {
+        return Ok(false);
+    };
+    let tokens = tokens
+        .lock()
+        .map_err(|_| io::Error::other("managed proxy token lock poisoned"))?;
+    Ok(tokens
+        .iter()
+        .any(|token| actual == proxy_basic_auth_value(token)))
+}
+
+fn proxy_basic_auth_value(token: &str) -> String {
+    format!("Basic {}", STANDARD.encode(format!("runseal:{token}")))
 }
 
 fn forward_request(mut client: TcpStream, header: &str, body_prefix: &[u8]) -> io::Result<()> {
@@ -240,7 +308,9 @@ fn rewrite_plain_http_request(
             break;
         }
         if line.split_once(':').is_some_and(|(name, _)| {
-            name.eq_ignore_ascii_case("Proxy-Connection") || name.eq_ignore_ascii_case("Connection")
+            name.eq_ignore_ascii_case("Proxy-Connection")
+                || name.eq_ignore_ascii_case("Proxy-Authorization")
+                || name.eq_ignore_ascii_case("Connection")
         }) {
             continue;
         }
@@ -298,15 +368,37 @@ fn find_header_end(buffer: &[u8]) -> Option<usize> {
 }
 
 fn find_host_header(header: &str) -> Option<String> {
+    header_value(header, "Host")
+}
+
+fn header_value(header: &str, header_name: &str) -> Option<String> {
     header.split("\r\n").skip(1).find_map(|line| {
         let (name, value) = line.split_once(':')?;
-        name.eq_ignore_ascii_case("Host")
+        name.eq_ignore_ascii_case(header_name)
             .then(|| value.trim().to_string())
     })
 }
 
 fn invalid_proxy_request(message: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message)
+}
+
+fn new_proxy_token() -> io::Result<String> {
+    let mut bytes = [0_u8; 32];
+    let status = unsafe {
+        BCryptGenRandom(
+            std::ptr::null_mut(),
+            bytes.as_mut_ptr(),
+            bytes.len() as u32,
+            BCRYPT_USE_SYSTEM_PREFERRED_RNG,
+        )
+    };
+    if status != 0 {
+        return Err(io::Error::other(format!(
+            "BCryptGenRandom failed: {status}"
+        )));
+    }
+    Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
 
 #[cfg(test)]
@@ -317,15 +409,20 @@ mod tests {
     fn environment_sets_loopback_proxy_for_vendor_guard() {
         let proxy = ManagedSandboxProxy::start().expect("start proxy");
         let env = proxy.environment();
-        assert!(
-            env.iter()
-                .any(|(key, value)| key == "HTTP_PROXY" && value.starts_with("http://127.0.0.1:"))
-        );
+        assert!(env.iter().any(|(key, value)| key == "HTTP_PROXY"
+            && value.starts_with("http://runseal:")
+            && value.ends_with(&format!("@127.0.0.1:{MANAGED_PROXY_PORT}"))));
         let proxy_url = env
             .iter()
             .find_map(|(key, value)| (key == "HTTP_PROXY").then_some(value.as_str()))
             .expect("HTTP_PROXY");
-        assert_eq!(proxy_url, format!("http://127.0.0.1:{MANAGED_PROXY_PORT}"));
+        assert_eq!(
+            proxy_url,
+            format!(
+                "http://runseal:{}@127.0.0.1:{MANAGED_PROXY_PORT}",
+                proxy.token
+            )
+        );
         for key in [
             "HTTPS_PROXY",
             "http_proxy",
@@ -370,7 +467,8 @@ mod tests {
             .find_map(|(key, value)| (key == "HTTP_PROXY").then_some(value))
             .expect("second HTTP_PROXY");
 
-        assert_eq!(first_url, second_url);
+        assert_eq!(first.inner.addr, second.inner.addr);
+        assert_ne!(first_url, second_url);
     }
 
     #[test]
@@ -460,22 +558,20 @@ mod tests {
             let read = stream.read(&mut request).expect("read upstream request");
             let request = String::from_utf8_lossy(&request[..read]);
             assert!(request.starts_with("GET /ok HTTP/1.1\r\n"));
+            assert!(!request.contains("Proxy-Authorization"));
             stream
                 .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
                 .expect("write upstream response");
         });
 
         let proxy = ManagedSandboxProxy::start().expect("start proxy");
-        let proxy_url = proxy
-            .environment()
-            .into_iter()
-            .find_map(|(key, value)| (key == "HTTP_PROXY").then_some(value))
-            .expect("HTTP_PROXY");
-        let proxy_addr = proxy_url.strip_prefix("http://").expect("proxy url");
-        let mut client = TcpStream::connect(proxy_addr).expect("connect proxy");
+        let mut client = TcpStream::connect(proxy.inner.addr).expect("connect proxy");
+        let auth = proxy_basic_auth_value(&proxy.token);
         client
             .write_all(
-                format!("GET http://{upstream_addr}/ok HTTP/1.1\r\nHost: {upstream_addr}\r\n\r\n")
+                format!(
+                    "GET http://{upstream_addr}/ok HTTP/1.1\r\nHost: {upstream_addr}\r\nProxy-Authorization: {auth}\r\n\r\n"
+                )
                     .as_bytes(),
             )
             .expect("write proxy request");
@@ -488,5 +584,21 @@ mod tests {
             .expect("read proxy response");
         assert!(response.ends_with("\r\n\r\nok"));
         upstream_thread.join().expect("upstream thread");
+    }
+
+    #[test]
+    fn rejects_proxy_requests_without_token() {
+        let proxy = ManagedSandboxProxy::start().expect("start proxy");
+        let mut client = TcpStream::connect(proxy.inner.addr).expect("connect proxy");
+        client
+            .write_all(b"GET http://example.test/ HTTP/1.1\r\nHost: example.test\r\n\r\n")
+            .expect("write proxy request");
+
+        let mut response = String::new();
+        client
+            .read_to_string(&mut response)
+            .expect("read proxy response");
+
+        assert!(response.starts_with("HTTP/1.1 407 Proxy Authentication Required\r\n"));
     }
 }

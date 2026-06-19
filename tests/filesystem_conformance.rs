@@ -891,9 +891,13 @@ fn network_proxy_allows_http_through_managed_proxy_when_supported_or_fails_close
 
     let (port, upstream) = start_loopback_http_server()?;
     let code = format!(
-        "import os, socket, time, urllib.parse\n\
+        "import base64, os, socket, time, urllib.parse\n\
          proxy = urllib.parse.urlparse(os.environ['HTTP_PROXY'])\n\
-         request = b'GET http://127.0.0.1:{port}/proxy-ok HTTP/1.1\\r\\nHost: 127.0.0.1:{port}\\r\\nConnection: close\\r\\n\\r\\n'\n\
+         proxy_auth = ''\n\
+         if proxy.username is not None and proxy.password is not None:\n\
+             token = (urllib.parse.unquote(proxy.username) + ':' + urllib.parse.unquote(proxy.password)).encode('utf-8')\n\
+             proxy_auth = 'Proxy-Authorization: Basic ' + base64.b64encode(token).decode('ascii') + '\\r\\n'\n\
+         request = f'GET http://127.0.0.1:{port}/proxy-ok HTTP/1.1\\r\\nHost: 127.0.0.1:{port}\\r\\n{{proxy_auth}}Connection: close\\r\\n\\r\\n'.encode('ascii')\n\
          deadline = time.monotonic() + 8\n\
          last = None\n\
          while time.monotonic() < deadline:\n\
@@ -925,6 +929,10 @@ fn network_proxy_allows_http_through_managed_proxy_when_supported_or_fails_close
 $ErrorActionPreference = 'Stop'
 $proxy = [Uri]$env:HTTP_PROXY
 $request = __REQUEST__
+if (-not [string]::IsNullOrEmpty($proxy.UserInfo)) {
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([Uri]::UnescapeDataString($proxy.UserInfo)))
+    $request = $request.Replace("Connection: close`r`n", "Proxy-Authorization: Basic $encoded`r`nConnection: close`r`n")
+}
 $deadline = [DateTime]::UtcNow.AddSeconds(8)
 $last = $null
 $successText = $null

@@ -1,7 +1,6 @@
 use serde::Deserialize;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::c_void;
@@ -575,19 +574,8 @@ impl SandboxNetworkGuard {
     }
 }
 
-const PROXY_ENV_KEYS: &[&str] = &[
-    "HTTP_PROXY",
-    "HTTPS_PROXY",
-    "ALL_PROXY",
-    "WS_PROXY",
-    "WSS_PROXY",
-    "http_proxy",
-    "https_proxy",
-    "all_proxy",
-    "ws_proxy",
-    "wss_proxy",
-];
 const ALLOW_LOCAL_BINDING_ENV_KEY: &str = "RUNSEAL_NETWORK_ALLOW_LOCAL_BINDING";
+const RUNSEAL_MANAGED_PROXY_PORT: u16 = 43129;
 
 pub(crate) fn sandbox_proxy_settings_from_env(
     env_map: &HashMap<String, String>,
@@ -599,45 +587,18 @@ pub(crate) fn sandbox_proxy_settings_from_env(
             allow_local_binding: false,
         };
     }
+    let allow_local_binding = env_map
+        .get(ALLOW_LOCAL_BINDING_ENV_KEY)
+        .is_some_and(|value| value == "1");
     SandboxProxySettings {
-        proxy_ports: proxy_ports_from_env(env_map),
-        allow_local_binding: env_map
-            .get(ALLOW_LOCAL_BINDING_ENV_KEY)
-            .is_some_and(|value| value == "1"),
+        // ponytail: RunSeal has one managed proxy listener; keep firewall state static.
+        proxy_ports: if allow_local_binding {
+            vec![]
+        } else {
+            vec![RUNSEAL_MANAGED_PROXY_PORT]
+        },
+        allow_local_binding,
     }
-}
-
-pub(crate) fn proxy_ports_from_env(env_map: &HashMap<String, String>) -> Vec<u16> {
-    let mut ports = BTreeSet::new();
-    for key in PROXY_ENV_KEYS {
-        if let Some(value) = env_map.get(*key)
-            && let Some(port) = loopback_proxy_port_from_url(value)
-        {
-            ports.insert(port);
-        }
-    }
-    ports.into_iter().collect()
-}
-
-fn loopback_proxy_port_from_url(url: &str) -> Option<u16> {
-    let authority = url.trim().split_once("://")?.1.split('/').next()?;
-    let host_port = authority.rsplit_once('@').map_or(authority, |(_, hp)| hp);
-
-    if let Some(host) = host_port.strip_prefix('[') {
-        let (host, rest) = host.split_once(']')?;
-        if host != "::1" {
-            return None;
-        }
-        let port = rest.strip_prefix(':')?.parse::<u16>().ok()?;
-        return (port != 0).then_some(port);
-    }
-
-    let (host, port) = host_port.rsplit_once(':')?;
-    if !(host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1") {
-        return None;
-    }
-    let port = port.parse::<u16>().ok()?;
-    (port != 0).then_some(port)
 }
 
 fn setup_payload_dir(codex_home: &Path) -> PathBuf {
@@ -1573,9 +1534,7 @@ mod tests {
     use super::find_setup_exe_for_current_exe;
     use super::gather_full_read_roots_for_permissions;
     use super::gather_read_roots;
-    use super::loopback_proxy_port_from_url;
     use super::profile_read_roots;
-    use super::proxy_ports_from_env;
     use super::remove_setup_payload_file;
     use super::sandbox_proxy_settings_from_env;
     use super::setup_exe_fallback;
@@ -1984,22 +1943,6 @@ mod tests {
     }
 
     #[test]
-    fn loopback_proxy_url_parsing_supports_common_forms() {
-        assert_eq!(
-            loopback_proxy_port_from_url("http://localhost:3128"),
-            Some(3128)
-        );
-        assert_eq!(
-            loopback_proxy_port_from_url("https://127.0.0.1:8080"),
-            Some(8080)
-        );
-        assert_eq!(
-            loopback_proxy_port_from_url("socks5h://user:pass@[::1]:1080"),
-            Some(1080)
-        );
-    }
-
-    #[test]
     fn setup_exe_lookup_checks_package_resource_dir_for_bin_exe() {
         let tmp = TempDir::new().expect("tempdir");
         let package_dir = tmp.path().join("package");
@@ -2040,36 +1983,6 @@ mod tests {
     }
 
     #[test]
-    fn loopback_proxy_url_parsing_rejects_non_loopback_and_zero_port() {
-        assert_eq!(
-            loopback_proxy_port_from_url("http://example.com:3128"),
-            None
-        );
-        assert_eq!(loopback_proxy_port_from_url("http://127.0.0.1:0"), None);
-        assert_eq!(loopback_proxy_port_from_url("localhost:8080"), None);
-    }
-
-    #[test]
-    fn proxy_ports_from_env_dedupes_and_sorts() {
-        let mut env = HashMap::new();
-        env.insert(
-            "HTTP_PROXY".to_string(),
-            "http://127.0.0.1:8080".to_string(),
-        );
-        env.insert(
-            "http_proxy".to_string(),
-            "http://localhost:8080".to_string(),
-        );
-        env.insert("ALL_PROXY".to_string(), "socks5h://[::1]:1081".to_string());
-        env.insert(
-            "HTTPS_PROXY".to_string(),
-            "https://example.com:9999".to_string(),
-        );
-
-        assert_eq!(proxy_ports_from_env(&env), vec![1081, 8080]);
-    }
-
-    #[test]
     fn sandbox_proxy_settings_ignore_proxy_env_without_network_guard() {
         let mut env = HashMap::new();
         env.insert(
@@ -2091,7 +2004,7 @@ mod tests {
     }
 
     #[test]
-    fn sandbox_proxy_settings_capture_proxy_ports_and_local_binding_for_network_guard() {
+    fn sandbox_proxy_settings_use_static_proxy_port_for_network_guard() {
         let mut env = HashMap::new();
         env.insert(
             "HTTP_PROXY".to_string(),
@@ -2109,8 +2022,21 @@ mod tests {
         assert_eq!(
             sandbox_proxy_settings_from_env(&env, super::SandboxNetworkGuard::Guarded),
             super::SandboxProxySettings {
-                proxy_ports: vec![1081, 8080],
+                proxy_ports: vec![],
                 allow_local_binding: true,
+            }
+        );
+
+        env.insert(
+            "RUNSEAL_NETWORK_ALLOW_LOCAL_BINDING".to_string(),
+            "0".to_string(),
+        );
+
+        assert_eq!(
+            sandbox_proxy_settings_from_env(&env, super::SandboxNetworkGuard::Guarded),
+            super::SandboxProxySettings {
+                proxy_ports: vec![super::RUNSEAL_MANAGED_PROXY_PORT],
+                allow_local_binding: false,
             }
         );
     }
@@ -2136,23 +2062,23 @@ mod tests {
     }
 
     #[test]
-    fn setup_marker_request_mismatch_reason_reports_network_guard_drift() {
+    fn setup_marker_request_mismatch_reason_reports_local_binding_drift() {
         let marker = super::SetupMarker {
             version: super::SETUP_VERSION,
             sandbox_username: "sandbox".to_string(),
             created_at: "2026-01-01T00:00:00Z".to_string(),
-            proxy_ports: vec![3128],
+            proxy_ports: vec![super::RUNSEAL_MANAGED_PROXY_PORT],
             allow_local_binding: false,
         };
         let desired = super::SandboxProxySettings {
-            proxy_ports: vec![1081, 8080],
+            proxy_ports: vec![],
             allow_local_binding: true,
         };
 
         assert_eq!(
             marker.request_mismatch_reason(super::SandboxNetworkGuard::Guarded, &desired),
             Some(
-                "sandbox network guard settings changed (stored_ports=[3128], desired_ports=[1081, 8080], stored_allow_local_binding=false, desired_allow_local_binding=true)"
+                "sandbox network guard settings changed (stored_ports=[43129], desired_ports=[], stored_allow_local_binding=false, desired_allow_local_binding=true)"
                     .to_string()
             )
         );
