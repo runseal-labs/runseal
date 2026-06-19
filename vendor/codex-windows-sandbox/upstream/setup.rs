@@ -1258,6 +1258,11 @@ pub fn run_elevated_provisioning_setup(codex_home: &Path, real_user: &str) -> Re
     run_setup_exe(&payload, needs_elevation, codex_home)
 }
 
+pub fn provisioning_setup_broker_is_available(codex_home: &Path) -> bool {
+    let broker_home = scheduled_setup_broker_home(codex_home);
+    scheduled_setup_task_is_usable(&broker_home)
+}
+
 fn build_payload_roots(
     request: &SandboxSetupRequest<'_>,
     overrides: &SetupRootOverrides,

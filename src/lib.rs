@@ -48,16 +48,17 @@ Commands:
   exec --policy <policy> [--network <mode>] [--cwd <path>] -- <command> [args...]
   explain-policy --policy <policy> [--network <mode>] [--cwd <path>]
   capabilities
-  setup windows-sandbox [--cwd <path>]
+  setup windows-sandbox [--cwd <path>] [--status]
   rpc --stdio
   version
 ";
 const SETUP_HELP_TEXT: &str = "\
-Usage: runseal setup windows-sandbox [--cwd <path>]
+Usage: runseal setup windows-sandbox [--cwd <path>] [--status]
 
 Windows sandbox setup:
   First install requires an elevated PowerShell; later repairs reuse the sandbox broker when available.
   Sandboxed exec fails closed when setup is missing or stale.
+  --status reports broker readiness without changing setup state.
 ";
 const EXEC_HELP_TEXT: &str = "\
 Usage: runseal exec [--json|--events] [--policy <policy>] [--network <mode>] [--cwd <path>] [--timeout-ms <ms>] -- <command> [args...]
@@ -278,16 +279,51 @@ fn run_setup(args: &[String]) -> Result<(), String> {
             print!("{SETUP_HELP_TEXT}");
             Ok(())
         }
-        [target] if target == "windows-sandbox" => run_windows_sandbox_setup(&current_dir()),
         [target, flag] if target == "windows-sandbox" && (flag == "--help" || flag == "-h") => {
             print!("{SETUP_HELP_TEXT}");
             Ok(())
         }
-        [target, flag, cwd] if target == "windows-sandbox" && flag == "--cwd" => {
-            run_windows_sandbox_setup(&PathBuf::from(cwd))
+        [target, rest @ ..] if target == "windows-sandbox" => {
+            let request = parse_windows_setup_args(rest)?;
+            if request.status {
+                return run_windows_sandbox_setup_status(&request.cwd);
+            }
+            run_windows_sandbox_setup(&request.cwd)
         }
-        _ => Err("usage: runseal setup windows-sandbox [--cwd <path>]".to_string()),
+        _ => Err("usage: runseal setup windows-sandbox [--cwd <path>] [--status]".to_string()),
     }
+}
+
+struct WindowsSetupArgs {
+    cwd: PathBuf,
+    status: bool,
+}
+
+fn parse_windows_setup_args(args: &[String]) -> Result<WindowsSetupArgs, String> {
+    let mut cwd = current_dir();
+    let mut status = false;
+    let mut index = 0;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--cwd" => {
+                index += 1;
+                let value = args.get(index).ok_or_else(|| {
+                    "usage: runseal setup windows-sandbox [--cwd <path>] [--status]".to_string()
+                })?;
+                cwd = PathBuf::from(value);
+            }
+            "--status" => status = true,
+            _ => {
+                return Err(
+                    "usage: runseal setup windows-sandbox [--cwd <path>] [--status]".to_string(),
+                );
+            }
+        }
+        index += 1;
+    }
+
+    Ok(WindowsSetupArgs { cwd, status })
 }
 
 #[cfg(windows)]
@@ -299,6 +335,34 @@ fn run_windows_sandbox_setup(cwd: &Path) -> Result<(), String> {
         .map_err(|_| WINDOWS_SANDBOX_SETUP_FAILED.to_string())?;
     println!("{}", windows_sandbox_setup_success_payload());
     Ok(())
+}
+
+#[cfg(windows)]
+fn run_windows_sandbox_setup_status(cwd: &Path) -> Result<(), String> {
+    validate_execution_cwd(cwd).map_err(|err| err.message)?;
+    let sandbox_home = backend::windows_sandbox_home(cwd);
+    let broker_available =
+        codex_windows_sandbox::provisioning_setup_broker_is_available(&sandbox_home);
+    println!(
+        "{}",
+        windows_sandbox_setup_status_payload(true, broker_available)
+    );
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn run_windows_sandbox_setup_status(_cwd: &Path) -> Result<(), String> {
+    println!("{}", windows_sandbox_setup_status_payload(false, false));
+    Ok(())
+}
+
+fn windows_sandbox_setup_status_payload(platform_supported: bool, broker_available: bool) -> Value {
+    json!({
+        "setup": "windows-sandbox",
+        "platform_supported": platform_supported,
+        "broker": if broker_available { "available" } else { "unavailable" },
+        "requires_setup": platform_supported && !broker_available,
+    })
 }
 
 fn windows_sandbox_setup_success_payload() -> Value {

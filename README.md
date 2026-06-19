@@ -57,6 +57,12 @@ Run sandbox bootstrap or repair explicitly from an elevated PowerShell session:
 .\target\debug\runseal.exe setup windows-sandbox --cwd C:\path\to\workspace
 ```
 
+Check broker readiness without changing setup state:
+
+```powershell
+.\target\debug\runseal.exe setup windows-sandbox --cwd C:\path\to\workspace --status
+```
+
 Sandboxed `runseal exec` does not invoke UAC directly. It uses the installed
 `\RunSeal\WindowsSandboxSetup` scheduled task broker; if the broker is missing
 or stale, execution fails closed with `windows sandbox setup unavailable` until

@@ -246,8 +246,39 @@ fn setup_help_describes_explicit_windows_setup() -> Result<()> {
         assert!(stdout.contains("First install requires an elevated PowerShell"));
         assert!(stdout.contains("later repairs reuse the sandbox broker"));
         assert!(stdout.contains("fails closed"));
+        assert!(stdout.contains("--status"));
         assert_no_private_windows_setup_terms(&stdout);
     }
+    Ok(())
+}
+
+#[test]
+fn setup_status_reports_broker_readiness_without_running_setup() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let cwd = tmp.path().to_string_lossy().to_string();
+    let output = run_cli(&["setup", "windows-sandbox", "--cwd", &cwd, "--status"])?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+    let payload = stdout_json(&output)?;
+    assert_eq!(payload["setup"], "windows-sandbox");
+    assert_eq!(payload["platform_supported"], cfg!(windows));
+    assert!(
+        matches!(
+            payload["broker"].as_str(),
+            Some("available" | "unavailable")
+        ),
+        "{payload}"
+    );
+    assert_eq!(
+        payload["requires_setup"],
+        cfg!(windows) && payload["broker"] == "unavailable"
+    );
+    assert_no_private_windows_setup_terms(&payload.to_string());
     Ok(())
 }
 

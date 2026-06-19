@@ -271,6 +271,8 @@ fn vendored_windows_provisioning_setup_reuses_scheduled_task_when_available() {
         .expect("setup.rs must be included");
 
     assert!(setup.contains("pub fn run_elevated_provisioning_setup"));
+    assert!(setup.contains("pub fn provisioning_setup_broker_is_available"));
+    assert!(setup.contains("scheduled_setup_task_is_usable(&broker_home)"));
     assert!(setup.contains("let needs_elevation = !is_elevated()"));
     assert!(setup.contains("run_setup_exe(&payload, needs_elevation, codex_home)"));
     assert!(!setup.contains("sandbox provisioning setup must be run from an elevated process"));
