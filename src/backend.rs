@@ -45,6 +45,12 @@ use {
     std::collections::{HashMap, HashSet},
     std::os::windows::process::ExitStatusExt,
     std::sync::{Mutex, OnceLock},
+    windows_sys::Win32::Foundation::{
+        CloseHandle, GetLastError, HANDLE, WAIT_ABANDONED, WAIT_FAILED, WAIT_OBJECT_0,
+    },
+    windows_sys::Win32::System::Threading::{
+        CreateMutexW, INFINITE, ReleaseMutex, WaitForSingleObject,
+    },
 };
 
 #[derive(Debug)]
@@ -124,6 +130,11 @@ struct WindowsSandboxPolicyCohortKey {
 struct WindowsSandboxExecutionGate;
 
 #[cfg(windows)]
+struct WindowsSandboxOsMutexGuard {
+    handle: HANDLE,
+}
+
+#[cfg(windows)]
 struct WindowsSandboxExecutionGateLock {
     state: Mutex<WindowsSandboxExecutionGateState>,
 }
@@ -133,6 +144,46 @@ struct WindowsSandboxExecutionGateLock {
 struct WindowsSandboxExecutionGateState {
     active_key: Option<WindowsSandboxPolicyCohortKey>,
     active_count: usize,
+}
+
+#[cfg(windows)]
+fn windows_sandbox_os_mutex() -> io::Result<WindowsSandboxOsMutexGuard> {
+    let name: Vec<u16> = "Local\\RunSealSandboxExecution"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let handle = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
+    if handle.is_null() {
+        return Err(io::Error::other(format!(
+            "CreateMutexW failed: {}",
+            unsafe { GetLastError() }
+        )));
+    }
+    // ponytail: global OS lock, per-policy locks if Windows sandbox throughput matters.
+    let wait = unsafe { WaitForSingleObject(handle, INFINITE) };
+    if wait != WAIT_OBJECT_0 && wait != WAIT_ABANDONED {
+        let err = unsafe { GetLastError() };
+        unsafe {
+            CloseHandle(handle);
+        }
+        let reason = if wait == WAIT_FAILED {
+            format!("WaitForSingleObject failed: {err}")
+        } else {
+            format!("WaitForSingleObject returned unexpected status: {wait}")
+        };
+        return Err(io::Error::other(reason));
+    }
+    Ok(WindowsSandboxOsMutexGuard { handle })
+}
+
+#[cfg(windows)]
+impl Drop for WindowsSandboxOsMutexGuard {
+    fn drop(&mut self) {
+        unsafe {
+            ReleaseMutex(self.handle);
+            CloseHandle(self.handle);
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -1238,6 +1289,7 @@ fn execute_windows_sandbox_plan(
     env: &ExecutionEnv,
     timeout: Option<Duration>,
 ) -> io::Result<BackendExecutionOutput> {
+    let _os_execution_guard = windows_sandbox_os_mutex()?;
     let _execution_guard = windows_sandbox_execution_gate(plan)?;
     let _runtime_root = required_plan_path(plan.runtime_root.as_deref(), "runtime_root")?;
     let stdin_bytes = match stdin {

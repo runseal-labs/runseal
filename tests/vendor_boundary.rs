@@ -511,3 +511,10 @@ fn runseal_windows_backend_uses_elevated_vendor_capture_only() {
         );
     }
 }
+
+#[test]
+fn runseal_windows_backend_serializes_os_sandbox_state() {
+    assert!(RUNSEAL_BACKEND_SOURCE.contains("Local\\\\RunSealSandboxExecution"));
+    assert!(RUNSEAL_BACKEND_SOURCE.contains("WaitForSingleObject(handle, INFINITE)"));
+    assert!(RUNSEAL_BACKEND_SOURCE.contains("ReleaseMutex(self.handle)"));
+}
