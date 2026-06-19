@@ -125,6 +125,11 @@ fn contains_legacy_split_identity_schema(contents: &str) -> bool {
     .any(|key| object.contains_key(*key))
 }
 
+fn reject_incompatible_setup_state(codex_home: &Path) -> Result<()> {
+    let _ = load_users(codex_home)?;
+    Ok(())
+}
+
 fn remove_sandbox_users_file(codex_home: &Path, reason: &str) -> Result<()> {
     let path = sandbox_users_path(codex_home);
     debug_log(
@@ -180,6 +185,7 @@ pub fn require_logon_sandbox_creds(
     deny_write_paths_override: &[PathBuf],
     proxy_enforced: bool,
 ) -> Result<SandboxCreds> {
+    reject_incompatible_setup_state(codex_home)?;
     let sandbox_dir = crate::setup::sandbox_dir(codex_home);
     let needed_read = read_roots_override
         .map(<[PathBuf]>::to_vec)
@@ -339,8 +345,11 @@ pub(crate) fn refresh_logon_sandbox_creds(
 #[cfg(test)]
 mod tests {
     use super::contains_legacy_split_identity_schema;
+    use super::reject_incompatible_setup_state;
     use super::remove_sandbox_users_file;
     use crate::setup::sandbox_users_path;
+    use crate::setup_error::SetupErrorCode;
+    use crate::setup_error::SetupFailure;
     use std::fs;
     use tempfile::TempDir;
 
@@ -377,5 +386,31 @@ mod tests {
         assert!(!contains_legacy_split_identity_schema(
             r#"{"version":1,"user":{"username":"RunSealSandbox","password":"secret"}}"#
         ));
+    }
+
+    #[test]
+    fn incompatible_setup_state_rejects_legacy_split_identity_file() {
+        let codex_home = TempDir::new().expect("tempdir");
+        let users_path = sandbox_users_path(codex_home.path());
+        fs::create_dir_all(users_path.parent().expect("sandbox secrets dir"))
+            .expect("create sandbox secrets dir");
+        let contents = format!(
+            r#"{{"version":1,"{}":{{}},"{}":{{}}}}"#,
+            concat!("off", "line_username"),
+            concat!("on", "line_username")
+        );
+        fs::write(&users_path, contents).expect("write users");
+
+        let err = reject_incompatible_setup_state(codex_home.path())
+            .expect_err("legacy split identity state must fail closed");
+        let failure = err
+            .downcast_ref::<SetupFailure>()
+            .expect("legacy split identity error must be structured");
+
+        assert_eq!(
+            failure.code,
+            SetupErrorCode::OrchestratorSetupStateIncompatible
+        );
+        assert!(users_path.exists());
     }
 }
