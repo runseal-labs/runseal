@@ -662,6 +662,11 @@ fn inline_environment(
     if let Some(proxy) = optional_bool_for(Some(environment), "environment", "proxy")? {
         policy.proxy = proxy;
     }
+    if network == NetworkMode::Proxy && !policy.proxy {
+        return Err(PolicyError::invalid(
+            "network.proxy requires environment.proxy=true",
+        ));
+    }
     policy.set = environment_set(environment.get("set"), &policy.scrub)?;
 
     Ok(policy)
@@ -1280,7 +1285,7 @@ mod tests {
                     },
                     "proxy": false
                 },
-                "network": {"mode": "proxy"}
+                "network": {"mode": "disabled"}
             }),
             &cwd,
             None,
@@ -1296,6 +1301,18 @@ mod tests {
         assert!(!policy.environment.proxy);
         assert_eq!(policy.canonical_json()["environment"]["set"]["CI"], "1");
         assert_eq!(policy.canonical_json()["environment"]["proxy"], false);
+    }
+
+    #[test]
+    fn inline_policy_rejects_proxy_network_without_proxy_environment() {
+        assert_policy_invalid(
+            json!({
+                "version": POLICY_VERSION,
+                "network": {"mode": "proxy"},
+                "environment": {"proxy": false}
+            }),
+            "network.proxy requires environment.proxy=true",
+        );
     }
 
     #[test]

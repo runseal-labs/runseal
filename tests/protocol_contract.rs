@@ -1636,8 +1636,7 @@ fn inline_policy_accepts_environment_controls() -> Result<()> {
                     "interactive": false
                 },
                 "network": {
-                    "mode": "proxy",
-                    "routes": ["github-api"],
+                    "mode": "disabled",
                     "direct_allow_hosts": []
                 },
                 "approval": {
@@ -1661,7 +1660,7 @@ fn inline_policy_accepts_environment_controls() -> Result<()> {
     assert_eq!(payload["environment"]["scrub"], json!(["RUNSEAL_SECRET_*"]));
     assert_eq!(payload["environment"]["set"]["CI"], "1");
     assert_eq!(payload["environment"]["proxy"], false);
-    assert_eq!(payload["network"]["routes"], json!(["github-api"]));
+    assert_eq!(payload["network"]["routes"], json!([]));
     assert_eq!(payload["network"]["direct_allow_hosts"], json!([]));
     assert_eq!(payload["resources"]["timeout_ms"], 1000);
     assert_eq!(payload["resources"]["memory_bytes"], 2147483648u64);
@@ -1679,10 +1678,7 @@ fn inline_policy_accepts_environment_controls() -> Result<()> {
         json!(["RUNSEAL_SECRET_*"])
     );
     assert_eq!(payload["canonical_policy"]["environment"]["set"]["CI"], "1");
-    assert_eq!(
-        payload["canonical_policy"]["network"]["routes"],
-        json!(["github-api"])
-    );
+    assert_eq!(payload["canonical_policy"]["network"]["routes"], json!([]));
     assert_eq!(payload["canonical_policy"]["resources"]["timeout_ms"], 1000);
     assert_eq!(
         payload["canonical_policy"]["resources"]["memory_bytes"],
@@ -1700,6 +1696,39 @@ fn inline_policy_accepts_environment_controls() -> Result<()> {
     assert_eq!(
         payload["canonical_policy"]["approval"]["on_broad_write"],
         "deny"
+    );
+    Ok(())
+}
+
+#[test]
+fn inline_policy_rejects_proxy_network_without_proxy_environment() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let output = run_rpc(&rpc_request(
+        "explainPolicy",
+        json!({
+            "cwd": tmp.path(),
+            "policy": {
+                "version": "runseal.policy/v1",
+                "network": {"mode": "proxy"},
+                "environment": {"proxy": false}
+            }
+        }),
+    ))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = &messages[0];
+
+    assert_eq!(response["error"]["data"]["code"], "POLICY_INVALID");
+    assert!(
+        response["error"]["data"]["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("network.proxy requires environment.proxy=true")
     );
     Ok(())
 }
