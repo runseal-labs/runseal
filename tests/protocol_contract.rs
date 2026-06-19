@@ -426,6 +426,14 @@ fn get_capabilities_rpc_contract() -> Result<()> {
         expected_windows_sandbox_supported()
     );
     assert_eq!(
+        payload["features"]["network_proxy"],
+        expected_windows_sandbox_supported()
+    );
+    assert_eq!(
+        payload["features"]["network_disabled"],
+        expected_windows_sandbox_supported()
+    );
+    assert_eq!(
         payload["features"]["resource_limits"],
         expected_resource_limits_supported()
     );

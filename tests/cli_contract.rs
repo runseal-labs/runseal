@@ -519,6 +519,14 @@ fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
         expected_windows_sandbox_supported()
     );
     assert_eq!(
+        payload["features"]["network_proxy"],
+        expected_windows_sandbox_supported()
+    );
+    assert_eq!(
+        payload["features"]["network_disabled"],
+        expected_windows_sandbox_supported()
+    );
+    assert_eq!(
         payload["features"]["resource_limits"],
         expected_resource_limits_supported()
     );
@@ -531,6 +539,10 @@ fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
     );
     assert_eq!(
         payload["network_modes"]["proxy"],
+        expected_status(expected_windows_sandbox_supported())
+    );
+    assert_eq!(
+        payload["network_modes"]["disabled"],
         expected_status(expected_windows_sandbox_supported())
     );
     assert_eq!(payload["setup_status"]["setup"], "windows-sandbox");
