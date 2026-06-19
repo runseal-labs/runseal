@@ -944,9 +944,7 @@ fn scheduled_setup_task_arguments(xml: &str) -> Option<String> {
 
 fn scheduled_setup_task_targets_broker_home(xml: &str, broker_home: &Path) -> bool {
     let Some(arguments) = scheduled_setup_task_arguments(xml) else {
-        let haystack = normalized_scheduled_task_text(xml);
-        let needle = normalized_scheduled_task_text(&broker_home.to_string_lossy());
-        return haystack.contains("--task-run") && haystack.contains(&needle);
+        return false;
     };
     let Some(rest) = arguments.trim().strip_prefix("--task-run") else {
         return false;
@@ -1789,6 +1787,7 @@ mod tests {
         let broker_home = PathBuf::from(r"C:\runseal\broker");
         let matching_xml = r#"<Task><Actions><Exec><Arguments>--task-run "C:\runseal\broker"</Arguments></Exec></Actions></Task>"#;
         let prefix_xml = r#"<Task><Actions><Exec><Arguments>--task-run "C:\runseal\broker-old"</Arguments></Exec></Actions></Task>"#;
+        let missing_arguments_xml = r#"<Task><Actions><Exec><Command>C:\runseal\broker\.sandbox-bin\runseal-windows-sandbox-setup.exe</Command></Exec></Actions><Description>--task-run C:\runseal\broker</Description></Task>"#;
 
         assert!(super::scheduled_setup_task_targets_broker_home(
             matching_xml,
@@ -1796,6 +1795,10 @@ mod tests {
         ));
         assert!(!super::scheduled_setup_task_targets_broker_home(
             prefix_xml,
+            &broker_home
+        ));
+        assert!(!super::scheduled_setup_task_targets_broker_home(
+            missing_arguments_xml,
             &broker_home
         ));
     }

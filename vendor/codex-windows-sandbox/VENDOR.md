@@ -32,6 +32,9 @@ Local vendor patches:
 - Treat scheduled setup tasks as usable only when their helper command resolves
   under the active broker sandbox bin directory; guarded by upstream setup
   helper tests.
+- Treat scheduled setup tasks as usable only when their XML explicitly carries
+  the exact broker home in `--task-run` arguments; guarded by upstream setup
+  helper tests.
 - Replace upstream workspace/git dependency inheritance with local trimmed
   vendor crates; guarded by `tests/vendor_boundary.rs`.
 
