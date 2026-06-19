@@ -248,6 +248,8 @@ pub use setup::SandboxSetupRequest;
 #[cfg(target_os = "windows")]
 pub use setup::SetupRootOverrides;
 #[cfg(target_os = "windows")]
+pub use setup::current_process_is_elevated;
+#[cfg(target_os = "windows")]
 pub use setup::provisioning_setup_broker_is_available;
 #[cfg(target_os = "windows")]
 pub use setup::run_elevated_provisioning_setup;

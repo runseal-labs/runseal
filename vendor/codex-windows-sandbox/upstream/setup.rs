@@ -366,6 +366,10 @@ fn is_elevated() -> Result<bool> {
     }
 }
 
+pub fn current_process_is_elevated() -> Result<bool> {
+    is_elevated()
+}
+
 fn canonical_existing(paths: &[PathBuf]) -> Vec<PathBuf> {
     paths
         .iter()

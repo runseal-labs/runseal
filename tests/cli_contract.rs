@@ -267,6 +267,11 @@ fn setup_status_reports_broker_readiness_without_running_setup() -> Result<()> {
     let payload = stdout_json(&output)?;
     assert_eq!(payload["setup"], "windows-sandbox");
     assert_eq!(payload["platform_supported"], cfg!(windows));
+    if cfg!(windows) {
+        assert!(payload["elevated"].is_boolean(), "{payload}");
+    } else {
+        assert!(payload["elevated"].is_null(), "{payload}");
+    }
     assert!(
         matches!(
             payload["broker"].as_str(),

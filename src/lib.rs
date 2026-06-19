@@ -343,9 +343,11 @@ fn run_windows_sandbox_setup_status(cwd: &Path) -> Result<(), String> {
     let sandbox_home = backend::windows_sandbox_home(cwd);
     let broker_available =
         codex_windows_sandbox::provisioning_setup_broker_is_available(&sandbox_home);
+    let elevated = codex_windows_sandbox::current_process_is_elevated()
+        .map_err(|err| format!("windows sandbox setup status failed: {err}"))?;
     println!(
         "{}",
-        windows_sandbox_setup_status_payload(true, broker_available)
+        windows_sandbox_setup_status_payload(true, broker_available, Some(elevated))
     );
     Ok(())
 }
@@ -353,15 +355,23 @@ fn run_windows_sandbox_setup_status(cwd: &Path) -> Result<(), String> {
 #[cfg(not(windows))]
 fn run_windows_sandbox_setup_status(cwd: &Path) -> Result<(), String> {
     validate_execution_cwd(cwd).map_err(|err| err.message)?;
-    println!("{}", windows_sandbox_setup_status_payload(false, false));
+    println!(
+        "{}",
+        windows_sandbox_setup_status_payload(false, false, None)
+    );
     Ok(())
 }
 
-fn windows_sandbox_setup_status_payload(platform_supported: bool, broker_available: bool) -> Value {
+fn windows_sandbox_setup_status_payload(
+    platform_supported: bool,
+    broker_available: bool,
+    elevated: Option<bool>,
+) -> Value {
     json!({
         "setup": "windows-sandbox",
         "platform_supported": platform_supported,
         "broker": if broker_available { "available" } else { "unavailable" },
+        "elevated": elevated,
         "requires_setup": platform_supported && !broker_available,
     })
 }
