@@ -386,7 +386,9 @@ mod windows_impl {
     }
 
     fn wait_deadline(timeout_ms: Option<u64>) -> Option<Instant> {
-        timeout_ms.and_then(|ms| Instant::now().checked_add(Duration::from_millis(ms)))
+        timeout_ms.and_then(|ms| {
+            Instant::now().checked_add(Duration::from_millis(ms.min(MAX_FINITE_WAIT_MS as u64)))
+        })
     }
 
     fn wait_for_process(
@@ -794,8 +796,9 @@ mod windows_impl {
         }
 
         #[test]
-        fn huge_cancellable_timeout_does_not_panic() {
-            let _ = super::wait_deadline(Some(u64::MAX));
+        fn explicit_cancellable_timeout_never_maps_to_infinite_wait() {
+            assert!(super::wait_deadline(None).is_none());
+            assert!(super::wait_deadline(Some(u64::MAX)).is_some());
         }
 
         #[test]
