@@ -741,6 +741,40 @@ mod tests {
         assert!(response.starts_with("HTTP/1.1 407 Proxy Authentication Required\r\n"));
     }
 
+    #[test]
+    fn records_proxy_error_events_without_query_or_credentials() {
+        let proxy = ManagedSandboxProxy::start_dedicated_ephemeral().expect("start proxy");
+        let unused_listener = TcpListener::bind("127.0.0.1:0").expect("bind unused port");
+        let unused_addr = unused_listener.local_addr().expect("unused addr");
+        drop(unused_listener);
+
+        let mut client = TcpStream::connect(proxy.inner.addr).expect("connect proxy");
+        let auth = proxy_basic_auth_value(&proxy.token);
+        client
+            .write_all(
+                format!(
+                    "GET http://{unused_addr}/secret?token=hidden HTTP/1.1\r\nHost: {unused_addr}\r\nProxy-Authorization: {auth}\r\n\r\n"
+                )
+                .as_bytes(),
+            )
+            .expect("write proxy request");
+        let mut response = String::new();
+        let _ = client.read_to_string(&mut response);
+
+        let events = wait_for_proxy_events(&proxy);
+        let event = events
+            .iter()
+            .find(|event| event["type"] == "execution.network.error")
+            .expect("proxy error audit event");
+        assert_eq!(event["decision"], "error");
+        assert_eq!(event["method"], "GET");
+        assert_eq!(event["scheme"], "http");
+        assert_eq!(event["host"], "127.0.0.1");
+        assert_eq!(event["path"], "/secret");
+        assert!(!event.to_string().contains("hidden"));
+        assert!(!event.to_string().contains(&auth));
+    }
+
     fn wait_for_proxy_events(proxy: &ManagedSandboxProxy) -> Vec<Value> {
         let deadline = Instant::now() + Duration::from_secs(1);
         loop {
