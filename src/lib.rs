@@ -453,6 +453,10 @@ fn run_windows_sandbox_setup(cwd: &Path, json_output: bool) -> Result<(), String
         }
         Err(err) => return Err(err),
     };
+    if !windows_sandbox_setup_requires_setup(&setup_status) {
+        println!("{}", windows_sandbox_setup_success_payload(cwd));
+        return Ok(());
+    }
     if !windows_sandbox_setup_can_run_now(&setup_status) {
         if json_output {
             println!(
@@ -590,6 +594,10 @@ fn windows_sandbox_setup_failed_error_with_detail(cwd: &Path, detail: &str) -> R
 
 fn windows_sandbox_setup_can_run_now(setup_status: &Value) -> bool {
     setup_status["can_run_setup_now"].as_bool().unwrap_or(false)
+}
+
+fn windows_sandbox_setup_requires_setup(setup_status: &Value) -> bool {
+    setup_status["requires_setup"].as_bool().unwrap_or(true)
 }
 
 fn windows_sandbox_setup_status_payload(
@@ -1886,12 +1894,14 @@ mod tests {
         assert_eq!(ready["can_repair"], false);
         assert_eq!(ready["can_run_setup_now"], false);
         assert!(!windows_sandbox_setup_can_run_now(&ready));
+        assert!(!windows_sandbox_setup_requires_setup(&ready));
         assert_eq!(ready["requires_setup"], false);
         assert_eq!(ready["next_action"], "none");
         assert!(ready["next_command"].is_null());
         assert_eq!(missing["can_repair"], false);
         assert_eq!(missing["can_run_setup_now"], false);
         assert!(!windows_sandbox_setup_can_run_now(&missing));
+        assert!(windows_sandbox_setup_requires_setup(&missing));
         assert_eq!(missing["requires_setup"], true);
         assert_eq!(missing["next_action"], "open_elevated_shell");
         assert_eq!(
@@ -1901,10 +1911,12 @@ mod tests {
         assert_eq!(unsupported["can_repair"], false);
         assert_eq!(unsupported["can_run_setup_now"], false);
         assert!(!windows_sandbox_setup_can_run_now(&unsupported));
+        assert!(!windows_sandbox_setup_requires_setup(&unsupported));
         assert_eq!(unsupported["requires_setup"], false);
         assert_eq!(unsupported["next_action"], "unsupported");
         assert!(unsupported["next_command"].is_null());
         assert!(!windows_sandbox_setup_can_run_now(&json!({})));
+        assert!(windows_sandbox_setup_requires_setup(&json!({})));
     }
 
     #[test]
