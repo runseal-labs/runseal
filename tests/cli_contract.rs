@@ -198,6 +198,8 @@ fn assert_no_private_windows_setup_terms(text: &str) {
         "WindowsApps",
         "offline",
         "online",
+        "dual",
+        "two users",
     ] {
         assert!(
             !text.contains(private_term),

@@ -229,6 +229,8 @@ fn assert_no_private_windows_setup_terms(value: &Value) {
         "WindowsApps",
         "offline",
         "online",
+        "dual",
+        "two users",
     ] {
         assert!(
             !public_payload.contains(private_term),
