@@ -305,6 +305,13 @@ fn setup_status_reports_broker_readiness_without_running_setup() -> Result<()> {
         payload["requires_setup"],
         cfg!(windows) && payload["broker"] == "unavailable"
     );
+    assert!(
+        matches!(
+            payload["next_action"].as_str(),
+            Some("none" | "run_setup" | "open_elevated_shell" | "unsupported")
+        ),
+        "{payload}"
+    );
     assert_no_private_windows_setup_terms(&payload.to_string());
     Ok(())
 }

@@ -140,6 +140,13 @@ fn assert_backend_unavailable(response: &Value, root: &Path) -> Result<()> {
             Some(elevated || broker_available),
             "{setup_status}"
         );
+        assert!(
+            matches!(
+                setup_status["next_action"].as_str(),
+                Some("none" | "run_setup" | "open_elevated_shell" | "unsupported")
+            ),
+            "{setup_status}"
+        );
     }
     assert_no_private_windows_setup_terms(response);
     let audit_path = response["error"]["data"]["audit_path"]
