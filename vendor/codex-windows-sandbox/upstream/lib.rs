@@ -384,6 +384,10 @@ mod windows_impl {
             .unwrap_or(INFINITE)
     }
 
+    fn wait_deadline(timeout_ms: Option<u64>) -> Option<Instant> {
+        timeout_ms.and_then(|ms| Instant::now().checked_add(Duration::from_millis(ms)))
+    }
+
     fn wait_for_process(
         process: HANDLE,
         timeout_ms: Option<u64>,
@@ -399,7 +403,7 @@ mod windows_impl {
             };
         };
 
-        let deadline = timeout_ms.map(|ms| Instant::now() + Duration::from_millis(ms));
+        let deadline = wait_deadline(timeout_ms);
         loop {
             if cancellation.is_cancelled() {
                 return WaitOutcome::Cancelled;
@@ -786,6 +790,11 @@ mod windows_impl {
                 )
                 .expect("unsupported profiles do not need ACL preflight");
             }
+        }
+
+        #[test]
+        fn huge_cancellable_timeout_does_not_panic() {
+            let _ = super::wait_deadline(Some(u64::MAX));
         }
     }
 }
