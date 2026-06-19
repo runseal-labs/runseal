@@ -26,6 +26,21 @@ const VENDOR_SETUP_SOURCES: &[(&str, &str)] = &[
 const WINDOWS_SANDBOX_MANIFEST: &str =
     include_str!("../vendor/codex-windows-sandbox/upstream/Cargo.toml");
 
+const VENDOR_TIMEOUT_SOURCES: &[(&str, &str)] = &[
+    (
+        "lib.rs",
+        include_str!("../vendor/codex-windows-sandbox/upstream/lib.rs"),
+    ),
+    (
+        "unified_exec/backends/legacy.rs",
+        include_str!("../vendor/codex-windows-sandbox/upstream/unified_exec/backends/legacy.rs"),
+    ),
+    (
+        "command_runner/win.rs",
+        include_str!("../vendor/codex-windows-sandbox/upstream/bin/command_runner/win.rs"),
+    ),
+];
+
 #[test]
 fn vendored_windows_setup_state_uses_single_user_schema() {
     for (name, source) in VENDOR_SETUP_SOURCES {
@@ -65,6 +80,24 @@ fn vendored_windows_setup_state_uses_single_user_schema() {
             .iter()
             .any(|(_, source)| source.contains("user: SandboxUserRecord"))
     );
+}
+
+#[test]
+fn vendored_windows_timeouts_keep_explicit_limits_finite() {
+    for (name, source) in VENDOR_TIMEOUT_SOURCES {
+        assert!(
+            source.contains("const MAX_FINITE_WAIT_MS: u32 = INFINITE - 1;"),
+            "{name} must reserve INFINITE for absent timeouts"
+        );
+        assert!(
+            source.contains("ms.min(MAX_FINITE_WAIT_MS as u64) as u32"),
+            "{name} must clamp explicit timeouts to a finite Win32 wait"
+        );
+        assert!(
+            !source.contains("ms.min(u32::MAX as u64) as u32"),
+            "{name} must not map explicit timeouts to Win32 INFINITE"
+        );
+    }
 }
 
 #[test]
