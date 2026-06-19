@@ -367,8 +367,8 @@ fn setup_task_request_id(path: &Path) -> Option<String> {
 }
 
 fn ensure_scheduled_setup_task(codex_home: &Path, log: &mut dyn Write) -> Result<()> {
-    let exe = resolve_current_exe_for_launch(codex_home, SETUP_EXE_FILENAME);
     let broker_home = scheduled_setup_broker_home(codex_home);
+    let exe = resolve_current_exe_for_launch(&broker_home, SETUP_EXE_FILENAME);
     let task_command = format!(
         "{} --task-run {}",
         quote_task_arg(&exe.to_string_lossy()),

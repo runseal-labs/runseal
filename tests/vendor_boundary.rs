@@ -217,8 +217,9 @@ fn vendored_windows_setup_reuses_elevation_via_scheduled_task() {
             .contains("const SETUP_EXE_FILENAME: &str = \"runseal-windows-sandbox-setup.exe\";")
     );
     assert!(
-        setup_main
-            .contains("let exe = resolve_current_exe_for_launch(codex_home, SETUP_EXE_FILENAME);")
+        setup_main.contains(
+            "let exe = resolve_current_exe_for_launch(&broker_home, SETUP_EXE_FILENAME);"
+        )
     );
     assert!(setup_main.contains("/RL"));
     assert!(setup_main.contains("HIGHEST"));
