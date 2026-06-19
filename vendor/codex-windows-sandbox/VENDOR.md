@@ -24,6 +24,9 @@ Local vendor patches:
   by `tests/vendor_boundary.rs`.
 - Lock both workspace and scheduled-broker sandbox bin directories when setup
   materializes helper binaries; guarded by upstream setup helper tests.
+- Treat scheduled setup tasks as usable only when their helper command resolves
+  under the active broker sandbox bin directory; guarded by upstream setup
+  helper tests.
 - Replace upstream workspace/git dependency inheritance with local trimmed
   vendor crates; guarded by `tests/vendor_boundary.rs`.
 

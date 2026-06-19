@@ -887,14 +887,22 @@ fn scheduled_setup_task_command_path(xml: &str) -> Option<PathBuf> {
     (!command.is_empty()).then(|| PathBuf::from(command))
 }
 
-fn scheduled_setup_task_command_is_setup_helper(xml: &str) -> bool {
+fn scheduled_setup_task_command_is_setup_helper(xml: &str, broker_home: &Path) -> bool {
     scheduled_setup_task_command_path(xml).is_some_and(|path| {
         path.is_file()
             && path
                 .file_name()
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| name.eq_ignore_ascii_case(SETUP_EXE_FILENAME))
+            && path_is_under_dir(&path, &sandbox_bin_dir(broker_home))
     })
+}
+
+fn path_is_under_dir(path: &Path, dir: &Path) -> bool {
+    let path_key = canonical_path_key(path);
+    let dir_key = canonical_path_key(dir);
+    let dir_prefix = format!("{}/", dir_key.trim_end_matches('/'));
+    path_key.starts_with(&dir_prefix)
 }
 
 fn scheduled_setup_task_arguments(xml: &str) -> Option<String> {
@@ -937,7 +945,7 @@ fn scheduled_setup_task_is_usable(broker_home: &Path) -> bool {
 
     let xml = decode_scheduled_task_xml_text(&String::from_utf8_lossy(&output.stdout));
     scheduled_setup_task_targets_broker_home(&xml, broker_home)
-        && scheduled_setup_task_command_is_setup_helper(&xml)
+        && scheduled_setup_task_command_is_setup_helper(&xml, broker_home)
 }
 
 fn try_run_setup_exe_via_scheduled_task(
@@ -1631,10 +1639,20 @@ mod tests {
     #[test]
     fn scheduled_setup_task_command_must_be_setup_helper() {
         let tmp = TempDir::new().expect("tempdir");
-        let helper = tmp.path().join("runseal-windows-sandbox-setup.exe");
-        let other = tmp.path().join("not-runseal.exe");
+        let broker_home = tmp.path().join("runseal-broker");
+        let broker_bin = helper_bin_dir(&broker_home);
+        fs::create_dir_all(&broker_bin).expect("create broker bin");
+        let helper = broker_bin.join("runseal-windows-sandbox-setup.exe");
+        let other = broker_bin.join("not-runseal.exe");
+        let stale_helper = tmp
+            .path()
+            .join("stale-workspace")
+            .join("runseal-windows-sandbox-setup.exe");
+        fs::create_dir_all(stale_helper.parent().expect("stale helper parent"))
+            .expect("create stale helper dir");
         fs::write(&helper, b"helper").expect("write helper");
         fs::write(&other, b"other").expect("write other");
+        fs::write(&stale_helper, b"stale").expect("write stale helper");
         let helper_xml = format!(
             "<Task><Actions><Exec><Command>{}</Command></Exec></Actions></Task>",
             helper.display()
@@ -1643,12 +1661,22 @@ mod tests {
             "<Task><Actions><Exec><Command>{}</Command></Exec></Actions></Task>",
             other.display()
         );
+        let stale_xml = format!(
+            "<Task><Actions><Exec><Command>{}</Command></Exec></Actions></Task>",
+            stale_helper.display()
+        );
 
         assert!(super::scheduled_setup_task_command_is_setup_helper(
-            &helper_xml
+            &helper_xml,
+            &broker_home
         ));
         assert!(!super::scheduled_setup_task_command_is_setup_helper(
-            &other_xml
+            &other_xml,
+            &broker_home
+        ));
+        assert!(!super::scheduled_setup_task_command_is_setup_helper(
+            &stale_xml,
+            &broker_home
         ));
     }
 
