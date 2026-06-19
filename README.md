@@ -56,11 +56,14 @@ Build all Windows binaries, including the setup helper and command runner:
 .\scripts\build-windows.ps1
 ```
 
-Run sandbox bootstrap or repair explicitly from an elevated PowerShell session:
+Run the first sandbox bootstrap explicitly from an elevated PowerShell session:
 
 ```powershell
 .\target\debug\runseal.exe setup windows-sandbox --cwd C:\path\to\workspace
 ```
+
+After the scheduled setup broker exists, the same command can repair workspace
+setup state without opening UAC again.
 
 Use `--json` when an agent needs structured setup failure details.
 Successful setup also includes `setup_status` so automation can verify readiness
