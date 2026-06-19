@@ -531,6 +531,15 @@ fn required_prefixed_string_param(
             format!("params.{field} must start with {prefix}"),
         ));
     }
+    if !value
+        .bytes()
+        .all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
+    {
+        return Err(RunSealError::new(
+            "INVALID_REQUEST",
+            format!("params.{field} must contain only ASCII letters, digits, or _"),
+        ));
+    }
     Ok(value)
 }
 

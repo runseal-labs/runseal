@@ -498,6 +498,43 @@ fn lookup_and_session_methods_reject_malformed_ids() -> Result<()> {
 }
 
 #[test]
+fn lookup_and_session_methods_reject_path_like_ids() -> Result<()> {
+    let cases = [
+        ("getExecution", json!({"execution_id": "exec_../escape"})),
+        (
+            "cancelExecution",
+            json!({"execution_id": "exec_escape/path", "reason": "user_requested"}),
+        ),
+        (
+            "subscribeEvents",
+            json!({"execution_id": "exec_escape\\path", "types": ["execution.*"]}),
+        ),
+        ("disposeSession", json!({"session_id": "sess_../escape"})),
+    ];
+
+    for (method, params) in cases {
+        let output = run_rpc(&rpc_request(method, params))?;
+
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let messages = stdout_json_lines(&output)?;
+        let response = &messages[0];
+
+        assert_eq!(response["error"]["data"]["code"], "INVALID_REQUEST");
+        assert!(
+            response["error"]["data"]["reason"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("must contain only ASCII letters, digits, or _")
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn dispose_session_is_noop_for_stdio_mvp() -> Result<()> {
     let output = run_rpc(&rpc_request(
         "disposeSession",
