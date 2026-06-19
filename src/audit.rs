@@ -5,6 +5,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 const MAX_AUDIT_SESSION_ID_BYTES: usize = 128;
+const REDACTED: &str = "[REDACTED]";
 
 pub struct AuditWriter {
     file: File,
@@ -95,9 +96,47 @@ pub(crate) fn write_audit_event_with_metadata(
 
     let mut audit_event = event.clone();
     if let Some(object) = audit_event.as_object_mut() {
-        object.insert("metadata".to_string(), metadata.clone());
+        object.insert("metadata".to_string(), redact_audit_value(metadata));
     }
     write_audit_event(audit, &audit_event)
+}
+
+fn redact_audit_value(value: &Value) -> Value {
+    match value {
+        Value::Object(object) => Value::Object(
+            object
+                .iter()
+                .map(|(key, value)| {
+                    let value = if is_sensitive_audit_key(key) {
+                        Value::String(REDACTED.to_string())
+                    } else {
+                        redact_audit_value(value)
+                    };
+                    (key.clone(), value)
+                })
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.iter().map(redact_audit_value).collect()),
+        _ => value.clone(),
+    }
+}
+
+fn is_sensitive_audit_key(key: &str) -> bool {
+    matches!(
+        key.to_ascii_lowercase().as_str(),
+        "authorization"
+            | "proxy-authorization"
+            | "cookie"
+            | "set-cookie"
+            | "x-api-key"
+            | "api-key"
+            | "api_key"
+            | "access_token"
+            | "refresh_token"
+            | "token"
+            | "password"
+            | "secret"
+    )
 }
 
 #[cfg(test)]
@@ -164,5 +203,35 @@ mod tests {
 
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
         Ok(())
+    }
+
+    #[test]
+    fn audit_metadata_redacts_sensitive_keys_recursively() {
+        let metadata = json!({
+            "Authorization": "Bearer secret",
+            "nested": {
+                "Cookie": "session=secret",
+                "safe": "visible"
+            },
+            "items": [
+                {"proxy-authorization": "Basic secret"},
+                {"token": "secret"}
+            ]
+        });
+
+        assert_eq!(
+            redact_audit_value(&metadata),
+            json!({
+                "Authorization": REDACTED,
+                "nested": {
+                    "Cookie": REDACTED,
+                    "safe": "visible"
+                },
+                "items": [
+                    {"proxy-authorization": REDACTED},
+                    {"token": REDACTED}
+                ]
+            })
+        );
     }
 }

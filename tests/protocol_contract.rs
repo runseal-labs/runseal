@@ -1047,6 +1047,63 @@ fn execute_copies_metadata_to_audit_events() -> Result<()> {
 }
 
 #[test]
+fn execute_redacts_sensitive_metadata_in_audit_events() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let output = run_rpc(&rpc_request(
+        "execute",
+        json!({
+            "command": [python_bin(), "-c", "print('metadata redaction ok')"],
+            "cwd": tmp.path(),
+            "policy": "danger-full-access",
+            "metadata": {
+                "Authorization": "Bearer audit-secret",
+                "nested": {
+                    "Cookie": "session=audit-secret",
+                    "safe": "visible"
+                },
+                "items": [
+                    {"proxy-authorization": "Basic audit-secret"},
+                    {"token": "audit-secret"}
+                ]
+            }
+        }),
+    ))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = messages
+        .iter()
+        .find(|message| message.get("id") == Some(&json!(1)))
+        .unwrap();
+
+    assert_eq!(response["result"]["status"], "finished");
+    let audit_path = response["result"]["audit_path"]
+        .as_str()
+        .expect("execution result must include audit_path");
+    let audit_jsonl = fs::read_to_string(tmp.path().join(audit_path))?;
+    assert!(!audit_jsonl.contains("audit-secret"));
+
+    let audit_events = read_audit_events(tmp.path(), audit_path)?;
+    let requested = audit_events
+        .iter()
+        .find(|event| event["type"] == "execution.requested")
+        .context("execution.requested audit event must exist")?;
+    assert_eq!(requested["metadata"]["Authorization"], "[REDACTED]");
+    assert_eq!(requested["metadata"]["nested"]["Cookie"], "[REDACTED]");
+    assert_eq!(requested["metadata"]["nested"]["safe"], "visible");
+    assert_eq!(
+        requested["metadata"]["items"][0]["proxy-authorization"],
+        "[REDACTED]"
+    );
+    assert_eq!(requested["metadata"]["items"][1]["token"], "[REDACTED]");
+    Ok(())
+}
+
+#[test]
 fn execute_rejects_invalid_metadata() -> Result<()> {
     let tmp = TempDir::new()?;
     let cases = vec![
