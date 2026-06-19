@@ -50,15 +50,6 @@ pub(crate) fn helper_bin_dir(codex_home: &Path) -> PathBuf {
     sandbox_bin_dir(codex_home)
 }
 
-pub(crate) fn legacy_lookup(kind: HelperExecutable) -> PathBuf {
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(candidate) = bundled_executable_path_for_exe(&exe, kind.file_name())
-    {
-        return candidate;
-    }
-    PathBuf::from(kind.file_name())
-}
-
 pub(crate) fn resolve_helper_for_launch(
     kind: HelperExecutable,
     codex_home: &Path,
@@ -77,10 +68,10 @@ pub(crate) fn resolve_helper_for_launch(
             path
         }
         Err(err) => {
-            let fallback = legacy_lookup(kind);
+            let fallback = helper_bin_dir(codex_home).join(kind.file_name());
             log_note(
                 &format!(
-                    "helper copy failed for {}: {err:#}; falling back to legacy path {}",
+                    "helper copy failed for {}: {err:#}; using unavailable sandbox-bin path {}",
                     kind.label(),
                     fallback.display()
                 ),
@@ -110,12 +101,12 @@ pub fn resolve_exe_for_launch(source: &Path, codex_home: &Path) -> PathBuf {
             let sandbox_log_dir = crate::sandbox_dir(codex_home);
             log_note(
                 &format!(
-                    "helper copy failed for executable: {err:#}; falling back to legacy path {}",
-                    source.display()
+                    "helper copy failed for executable: {err:#}; using unavailable sandbox-bin path {}",
+                    destination.display()
                 ),
                 Some(&sandbox_log_dir),
             );
-            source.to_path_buf()
+            destination
         }
     }
 }
@@ -372,6 +363,7 @@ mod tests {
     use super::helper_bin_dir;
     use super::helper_version_suffix;
     use super::materialized_file_name;
+    use super::resolve_exe_for_launch;
     use pretty_assertions::assert_eq;
     use std::fs;
     use std::path::Path;
@@ -460,6 +452,23 @@ mod tests {
             b"runner".as_slice(),
             fs::read(&runner_destination).expect("read runner")
         );
+    }
+
+    #[test]
+    fn resolve_exe_for_launch_does_not_fallback_to_source_when_copy_fails() {
+        let tmp = TempDir::new().expect("tempdir");
+        let source = tmp.path().join("runseal-windows-sandbox-setup.exe");
+        let codex_home = tmp.path().join("codex-home");
+        fs::write(&source, b"setup").expect("write setup");
+        fs::write(&codex_home, b"not a directory").expect("block codex home directory");
+
+        let resolved = resolve_exe_for_launch(&source, &codex_home);
+
+        assert_eq!(
+            resolved,
+            helper_bin_dir(&codex_home).join("runseal-windows-sandbox-setup.exe")
+        );
+        assert_ne!(resolved, source);
     }
 
     #[test]
