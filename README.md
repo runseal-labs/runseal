@@ -66,7 +66,7 @@ Check broker readiness without changing setup state:
 The status payload reports coarse readiness only: `broker`, `elevated`,
 `can_repair`, and `requires_setup`. The same `setup_status` object is included
 in sandboxed execution `BACKEND_UNAVAILABLE` errors when setup is missing or
-stale.
+stale, and in the matching `execution.failed` audit event.
 
 Sandboxed `runseal exec` does not invoke UAC directly. It uses the installed
 `\RunSeal\WindowsSandboxSetup` scheduled task broker; if the broker is missing

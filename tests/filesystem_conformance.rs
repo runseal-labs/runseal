@@ -151,13 +151,22 @@ fn assert_backend_unavailable(response: &Value, root: &Path) -> Result<()> {
     for event in &audit_events {
         assert_audit_event_envelope(event);
     }
-    assert!(audit_events.iter().any(|event| {
-        event["type"] == "execution.failed"
-            && event["reason"]
-                .as_str()
-                .unwrap_or_default()
-                .starts_with("windows sandbox setup unavailable")
-    }));
+    let failed_event = audit_events
+        .iter()
+        .find(|event| {
+            event["type"] == "execution.failed"
+                && event["reason"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .starts_with("windows sandbox setup unavailable")
+        })
+        .context("backend unavailable audit must include execution.failed")?;
+    if cfg!(windows) {
+        assert_eq!(
+            failed_event["setup_status"],
+            response["error"]["data"]["setup_status"]
+        );
+    }
     Ok(())
 }
 

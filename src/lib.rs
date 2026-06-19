@@ -1141,19 +1141,25 @@ fn execute_command(
                 .as_ref()
                 .map(|(_, reason, _)| reason.as_str())
                 .unwrap_or("execution failed to start");
-            let failed = execution_event_now(
-                json!({
-                    "type": "execution.failed",
-                    "execution_id": ids.execution_id,
-                    "policy_id": policy_id,
-                    "policy_hash": policy_hash,
-                    "audit_path": audit_path,
-                    "status": "failed",
-                    "reason": failure_reason,
-                    "error": err.to_string(),
-                }),
-                &event_context,
-            );
+            let setup_status = backend_error
+                .as_ref()
+                .and_then(|(_, _, setup_status)| setup_status.clone());
+            let mut failed_payload = json!({
+                "type": "execution.failed",
+                "execution_id": ids.execution_id,
+                "policy_id": policy_id,
+                "policy_hash": policy_hash,
+                "audit_path": audit_path,
+                "status": "failed",
+                "reason": failure_reason,
+                "error": err.to_string(),
+            });
+            if let (Some(failed_payload), Some(setup_status)) =
+                (failed_payload.as_object_mut(), setup_status)
+            {
+                failed_payload.insert("setup_status".to_string(), setup_status);
+            }
+            let failed = execution_event_now(failed_payload, &event_context);
             write_audit_event_with_metadata(&mut audit, &failed, &metadata)?;
 
             if let Some((code, reason, setup_status)) = backend_error {
