@@ -56,6 +56,16 @@ Build all Windows binaries, including the setup helper and command runner:
 .\scripts\build-windows.ps1
 ```
 
+For release artifacts:
+
+```powershell
+.\scripts\build-windows.ps1 -Release
+```
+
+The script places `runseal.exe`, `runseal-windows-sandbox-setup.exe`, and
+`runseal-command-runner.exe` in the selected `target\debug` or
+`target\release` directory.
+
 Run the first sandbox bootstrap explicitly from an elevated PowerShell session:
 
 ```powershell
