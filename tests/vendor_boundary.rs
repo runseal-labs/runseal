@@ -221,6 +221,19 @@ fn vendored_windows_setup_reuses_elevation_via_scheduled_task() {
 }
 
 #[test]
+fn vendored_windows_provisioning_setup_reuses_scheduled_task_when_available() {
+    let setup = VENDOR_SETUP_SOURCES
+        .iter()
+        .find_map(|(name, source)| (*name == "setup.rs").then_some(*source))
+        .expect("setup.rs must be included");
+
+    assert!(setup.contains("pub fn run_elevated_provisioning_setup"));
+    assert!(setup.contains("let needs_elevation = !is_elevated()"));
+    assert!(setup.contains("run_setup_exe(&payload, needs_elevation, codex_home)"));
+    assert!(!setup.contains("sandbox provisioning setup must be run from an elevated process"));
+}
+
+#[test]
 fn vendored_windows_setup_does_not_shell_elevate_from_exec_path() {
     let setup = VENDOR_SETUP_SOURCES
         .iter()

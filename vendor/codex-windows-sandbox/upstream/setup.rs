@@ -1225,17 +1225,12 @@ pub fn run_elevated_provisioning_setup(codex_home: &Path, real_user: &str) -> Re
             format!("failed to create sandbox dir {}: {err}", sbx_dir.display()),
         )
     })?;
-    if !is_elevated().map_err(|err| {
+    let needs_elevation = !is_elevated().map_err(|err| {
         failure(
             SetupErrorCode::OrchestratorElevationCheckFailed,
             format!("failed to determine elevation state: {err}"),
         )
-    })? {
-        return Err(failure(
-            SetupErrorCode::OrchestratorElevationRequired,
-            "sandbox provisioning setup must be run from an elevated process",
-        ));
-    }
+    })?;
     let payload = ElevationPayload {
         version: SETUP_VERSION,
         sandbox_username: SANDBOX_USERNAME.to_string(),
@@ -1252,7 +1247,7 @@ pub fn run_elevated_provisioning_setup(codex_home: &Path, real_user: &str) -> Re
         mode: SetupMode::ProvisionOnly,
         refresh_only: false,
     };
-    run_setup_exe(&payload, /*needs_elevation*/ false, codex_home)
+    run_setup_exe(&payload, needs_elevation, codex_home)
 }
 
 fn build_payload_roots(

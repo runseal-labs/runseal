@@ -39,7 +39,7 @@ const MAX_ENV_ENTRIES: usize = 64;
 const MAX_ENV_KEY_BYTES: usize = 128;
 const MAX_ENV_VALUE_BYTES: usize = 4096;
 const WINDOWS_SANDBOX_SETUP_FAILED: &str =
-    "windows sandbox setup failed; run from an elevated shell";
+    "windows sandbox setup failed; first install requires an elevated shell";
 const HELP_TEXT: &str = "\
 Usage: runseal <command> [options]
 
@@ -55,7 +55,7 @@ const SETUP_HELP_TEXT: &str = "\
 Usage: runseal setup windows-sandbox [--cwd <path>]
 
 Windows sandbox setup:
-  Run from an elevated PowerShell to install or repair the sandbox broker.
+  First install requires an elevated PowerShell; later repairs reuse the sandbox broker when available.
   Sandboxed exec fails closed when setup is missing or stale.
 ";
 const EXEC_HELP_TEXT: &str = "\

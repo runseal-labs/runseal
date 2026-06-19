@@ -243,7 +243,8 @@ fn setup_help_describes_explicit_windows_setup() -> Result<()> {
         assert!(output.stderr.is_empty());
         let stdout = String::from_utf8(output.stdout)?;
         assert!(stdout.contains("Usage: runseal setup windows-sandbox [--cwd <path>]"));
-        assert!(stdout.contains("elevated PowerShell"));
+        assert!(stdout.contains("First install requires an elevated PowerShell"));
+        assert!(stdout.contains("later repairs reuse the sandbox broker"));
         assert!(stdout.contains("fails closed"));
         assert_no_private_windows_setup_terms(&stdout);
     }
