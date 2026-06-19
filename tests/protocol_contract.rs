@@ -926,7 +926,18 @@ fn execute_output_limit_returns_stable_error_and_audit_event() -> Result<()> {
 #[test]
 fn execute_rejects_secret_env_keys() -> Result<()> {
     let tmp = TempDir::new()?;
-    for key in ["OPENAI_API_KEY", "RUNSEAL_TOKEN", "AWS_REGION"] {
+    for key in [
+        "OPENAI_API_KEY",
+        "RUNSEAL_TOKEN",
+        "RUNSEAL_SECRET",
+        "DATABASE_PASSWORD",
+        "HTTP_AUTHORIZATION",
+        "SESSION_COOKIE",
+        "AUTHORIZATION",
+        "COOKIE",
+        "PASSWORD",
+        "AWS_REGION",
+    ] {
         let output = run_rpc(&rpc_request(
             "execute",
             json!({
@@ -2620,12 +2631,11 @@ fn execute_uses_minimal_environment() -> Result<()> {
             .unwrap_or_default()
             .contains("sentinel=missing")
     );
-    assert!(
-        response["result"]["platform_plan"]["environment"]["scrub"]
-            .as_array()
-            .expect("environment.scrub must be an array")
-            .iter()
-            .any(|pattern| pattern == "*_TOKEN")
-    );
+    let scrub = response["result"]["platform_plan"]["environment"]["scrub"]
+        .as_array()
+        .expect("environment.scrub must be an array");
+    for expected in ["*_TOKEN", "*_SECRET", "*_PASSWORD", "*_AUTHORIZATION"] {
+        assert!(scrub.iter().any(|pattern| pattern == expected));
+    }
     Ok(())
 }
