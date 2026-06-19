@@ -385,6 +385,8 @@ fn get_capabilities_rpc_contract() -> Result<()> {
     );
     assert_eq!(payload["features"]["audit_jsonl"], true);
     assert_eq!(payload["features"]["otel_export"], false);
+    assert_eq!(payload["setup_status"]["setup"], "windows-sandbox");
+    assert!(payload["setup_status"]["next_action"].as_str().is_some());
     assert_no_private_windows_setup_terms(payload);
     Ok(())
 }

@@ -76,6 +76,8 @@ The status payload reports coarse readiness only: `broker`, `elevated`,
 `can_repair`, `requires_setup`, and `next_action`. The same `setup_status`
 object is included in sandboxed execution `BACKEND_UNAVAILABLE` errors when
 setup is missing or stale, and in the matching `execution.failed` audit event.
+`runseal capabilities` also includes this `setup_status` object so support
+claims and local readiness can be checked from one response.
 `can_repair` is true when the current process is elevated or when the scheduled
 setup broker is already available.
 

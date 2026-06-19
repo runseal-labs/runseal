@@ -475,6 +475,8 @@ fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
         payload["network_modes"]["proxy"],
         expected_status(expected_windows_sandbox_supported())
     );
+    assert_eq!(payload["setup_status"]["setup"], "windows-sandbox");
+    assert!(payload["setup_status"]["next_action"].as_str().is_some());
     assert_no_private_windows_setup_terms(&payload.to_string());
     Ok(())
 }

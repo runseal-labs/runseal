@@ -115,7 +115,7 @@ fn run() -> Result<(), String> {
             Ok(())
         }
         [command] if command == "capabilities" => {
-            println!("{}", active_backend().capabilities_json());
+            println!("{}", capabilities_payload());
             Ok(())
         }
         [command, flag] if command == "rpc" && flag == "--stdio" => run_rpc_stdio(),
@@ -133,6 +133,17 @@ fn version_payload() -> Value {
         "protocol_version": PROTOCOL_VERSION,
         "policy_versions": [POLICY_VERSION],
     })
+}
+
+fn capabilities_payload() -> Value {
+    let mut payload = active_backend().capabilities_json();
+    if let (Some(payload), Ok(setup_status)) = (
+        payload.as_object_mut(),
+        windows_sandbox_setup_status_for_cwd(&current_dir()),
+    ) {
+        payload.insert("setup_status".to_string(), setup_status);
+    }
+    payload
 }
 
 fn run_rpc_stdio() -> Result<(), String> {
@@ -168,7 +179,7 @@ fn handle_rpc_request(request: &Value) -> Vec<Value> {
             Err(err) => vec![rpc::error(id, err)],
         },
         "getCapabilities" => match validate_empty_params(&params, "getCapabilities") {
-            Ok(()) => vec![rpc::result(id, active_backend().capabilities_json())],
+            Ok(()) => vec![rpc::result(id, capabilities_payload())],
             Err(err) => vec![rpc::error(id, err)],
         },
         "explainPolicy" => match explain_policy_from_params(&params) {
