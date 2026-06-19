@@ -139,6 +139,8 @@ pub use acl::fetch_dacl_handle;
 #[cfg(target_os = "windows")]
 pub use acl::path_mask_allows;
 #[cfg(target_os = "windows")]
+pub use acl::remove_deny_write_aces;
+#[cfg(target_os = "windows")]
 pub use audit::apply_world_writable_scan_and_denies_for_permissions;
 #[cfg(target_os = "windows")]
 pub use cap::load_or_create_cap_sids;

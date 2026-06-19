@@ -7,6 +7,8 @@ use std::io::{ErrorKind, Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+#[cfg(windows)]
+use std::sync::{Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
@@ -64,6 +66,70 @@ fn python_bin() -> &'static str {
     if cfg!(windows) { "python" } else { "python3" }
 }
 
+fn platform_script_command(python_code: String, powershell_script: String) -> Vec<String> {
+    if cfg!(windows) {
+        vec![
+            "powershell".to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            powershell_script,
+        ]
+    } else {
+        vec![python_bin().to_string(), "-c".to_string(), python_code]
+    }
+}
+
+fn stdin_echo_command() -> Vec<String> {
+    if cfg!(windows) {
+        vec![
+            "powershell".to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            "$text = [Console]::In.ReadToEnd(); [Console]::Out.Write($text)".to_string(),
+        ]
+    } else {
+        vec![
+            python_bin().to_string(),
+            "-c".to_string(),
+            "import sys; print(sys.stdin.buffer.read().decode('utf-8'), end='')".to_string(),
+        ]
+    }
+}
+
+fn execute_platform_script(
+    policy: &str,
+    cwd: &Path,
+    network: Option<&str>,
+    python_code: String,
+    powershell_script: String,
+) -> Result<Value> {
+    let mut params = json!({
+        "command": platform_script_command(python_code, powershell_script),
+        "cwd": cwd,
+        "policy": policy
+    });
+    if let Some(network) = network {
+        params["network"] = json!({"mode": network});
+    }
+    execute_params(params)
+}
+
+fn ps_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+fn ps_path(path: &Path) -> String {
+    ps_literal(path.to_string_lossy().as_ref())
+}
+
+fn ps_write_text(path: &Path, text: &str) -> String {
+    format!(
+        "Set-Content -LiteralPath {} -Value {} -NoNewline",
+        ps_path(path),
+        ps_literal(text)
+    )
+}
+
 fn stdout_json_lines(output: &Output) -> Result<Vec<Value>> {
     String::from_utf8_lossy(&output.stdout)
         .lines()
@@ -72,34 +138,10 @@ fn stdout_json_lines(output: &Output) -> Result<Vec<Value>> {
         .collect()
 }
 
-fn execute(policy: &str, cwd: &Path, code: String) -> Result<Value> {
-    execute_with_network(policy, cwd, None, code)
-}
-
-fn execute_with_network(
-    policy: &str,
-    cwd: &Path,
-    network: Option<&str>,
-    code: String,
-) -> Result<Value> {
-    let params = if let Some(network) = network {
-        json!({
-            "command": [python_bin(), "-c", code],
-            "cwd": cwd,
-            "policy": policy,
-            "network": {"mode": network}
-        })
-    } else {
-        json!({
-            "command": [python_bin(), "-c", code],
-            "cwd": cwd,
-            "policy": policy
-        })
-    };
-    execute_params(params)
-}
-
 fn execute_params(params: Value) -> Result<Value> {
+    #[cfg(windows)]
+    let _guard = windows_conformance_lock()?;
+
     let output = run_rpc(&rpc_request("execute", params))?;
 
     assert!(
@@ -112,6 +154,13 @@ fn execute_params(params: Value) -> Result<Value> {
         .into_iter()
         .find(|message| message.get("id") == Some(&json!(1)))
         .context("execute response with id 1 must exist")
+}
+
+#[cfg(windows)]
+fn windows_conformance_lock() -> Result<MutexGuard<'static, ()>> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    LOCK.lock()
+        .map_err(|_| anyhow::anyhow!("windows conformance lock poisoned"))
 }
 
 fn assert_backend_missing(response: &Value, root: &Path) -> Result<()> {
@@ -345,7 +394,7 @@ fn start_loopback_http_server() -> Result<(u16, thread::JoinHandle<Result<bool>>
     listener.set_nonblocking(true)?;
     let port = listener.local_addr()?.port();
     let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(1);
+        let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             match listener.accept() {
                 Ok((mut stream, _)) => {
@@ -380,7 +429,13 @@ fn workspace_write_allows_workspace_write_when_supported_or_fails_closed() -> Re
     fs::create_dir_all(&workspace)?;
     let target = workspace.join("inside.txt");
     let code = format!("from pathlib import Path; Path({target:?}).write_text('inside')");
-    let response = execute("workspace-write", &workspace, code)?;
+    let response = execute_platform_script(
+        "workspace-write",
+        &workspace,
+        None,
+        code,
+        ps_write_text(&target, "inside"),
+    )?;
 
     if is_backend_missing(&response) {
         assert_backend_missing(&response, &workspace)?;
@@ -406,7 +461,13 @@ fn workspace_write_denies_external_write_when_supported_or_fails_closed() -> Res
     fs::create_dir_all(&workspace)?;
     let outside = tmp.path().join("outside.txt");
     let code = format!("from pathlib import Path; Path({outside:?}).write_text('outside')");
-    let response = execute("workspace-write", &workspace, code)?;
+    let response = execute_platform_script(
+        "workspace-write",
+        &workspace,
+        None,
+        code,
+        ps_write_text(&outside, "outside"),
+    )?;
 
     if is_backend_missing(&response) {
         assert_backend_missing(&response, &workspace)?;
@@ -432,7 +493,13 @@ fn read_only_denies_workspace_write_when_supported_or_fails_closed() -> Result<(
     fs::create_dir_all(&workspace)?;
     let target = workspace.join("read-only-write.txt");
     let code = format!("from pathlib import Path; Path({target:?}).write_text('blocked')");
-    let response = execute("read-only", &workspace, code)?;
+    let response = execute_platform_script(
+        "read-only",
+        &workspace,
+        None,
+        code,
+        ps_write_text(&target, "blocked"),
+    )?;
 
     if is_backend_missing(&response) {
         assert_backend_missing(&response, &workspace)?;
@@ -459,7 +526,13 @@ fn workspace_contained_denies_external_read_when_supported_or_fails_closed() -> 
     let outside = tmp.path().join("host-profile-secret.txt");
     fs::write(&outside, "outside-secret")?;
     let code = format!("from pathlib import Path; print(Path({outside:?}).read_text())");
-    let response = execute("workspace-contained", &workspace, code)?;
+    let response = execute_platform_script(
+        "workspace-contained",
+        &workspace,
+        None,
+        code,
+        format!("Get-Content -Raw -LiteralPath {}", ps_path(&outside)),
+    )?;
 
     if is_backend_missing(&response) {
         assert_backend_missing(&response, &workspace)?;
@@ -490,7 +563,13 @@ fn workspace_write_protects_workspace_metadata_when_supported_or_fails_closed() 
         fs::create_dir_all(&protected_root)?;
         let target = protected_root.join("blocked.txt");
         let code = format!("from pathlib import Path; Path({target:?}).write_text('blocked')");
-        let response = execute("workspace-write", &workspace, code)?;
+        let response = execute_platform_script(
+            "workspace-write",
+            &workspace,
+            None,
+            code,
+            ps_write_text(&target, "blocked"),
+        )?;
 
         if is_backend_missing(&response) {
             assert_backend_missing(&response, &workspace)?;
@@ -534,7 +613,25 @@ fn runtime_environment_roots_are_per_execution_when_supported_or_fails_closed() 
              path.parent.mkdir(parents=True, exist_ok=True)\n\
              path.write_text(root, encoding='utf-8')"
     );
-    let first = execute("workspace-write", &workspace, writer_code)?;
+    let ps_writer = format!(
+        "$keys = @({}); \
+         $roots = @(); \
+         foreach ($key in $keys) {{ $roots += [Environment]::GetEnvironmentVariable($key) }}; \
+         $roots += \"$env:HOMEDRIVE$env:HOMEPATH\"; \
+         foreach ($root in $roots) {{ \
+             $path = Join-Path $root {}; \
+             New-Item -ItemType Directory -Force -Path (Split-Path -Parent $path) | Out-Null; \
+             Set-Content -LiteralPath $path -Value $root -NoNewline \
+         }}",
+        env_keys
+            .iter()
+            .map(|key| ps_literal(key))
+            .collect::<Vec<_>>()
+            .join(","),
+        ps_literal(marker)
+    );
+    let first =
+        execute_platform_script("workspace-write", &workspace, None, writer_code, ps_writer)?;
 
     if is_backend_missing(&first) {
         assert_backend_missing(&first, &workspace)?;
@@ -556,7 +653,25 @@ fn runtime_environment_roots_are_per_execution_when_supported_or_fails_closed() 
          leaked = [key for key, root in roots if (pathlib.Path(root) / {marker:?}).exists()]\n\
          print(json.dumps(leaked))"
     );
-    let second = execute("workspace-write", &workspace, reader_code)?;
+    let ps_reader = format!(
+        "$keys = @({}); \
+         $roots = @(); \
+         foreach ($key in $keys) {{ $roots += @($key, [Environment]::GetEnvironmentVariable($key)) }}; \
+         $roots += @('HOMEDRIVE+HOMEPATH', \"$env:HOMEDRIVE$env:HOMEPATH\"); \
+         $leaked = @(); \
+         for ($i = 0; $i -lt $roots.Count; $i += 2) {{ \
+             if (Test-Path -LiteralPath (Join-Path $roots[$i + 1] {})) {{ $leaked += $roots[$i] }} \
+         }}; \
+         if ($leaked.Count -eq 0) {{ '[]' }} else {{ $leaked | ConvertTo-Json -Compress }}",
+        env_keys
+            .iter()
+            .map(|key| ps_literal(key))
+            .collect::<Vec<_>>()
+            .join(","),
+        ps_literal(marker)
+    );
+    let second =
+        execute_platform_script("workspace-write", &workspace, None, reader_code, ps_reader)?;
 
     assert_eq!(second["result"]["status"], "finished");
     assert_eq!(second["result"]["exit_code"], 0);
@@ -578,11 +693,7 @@ fn workspace_write_accepts_bytes_stdin_when_supported_or_fails_closed() -> Resul
     let stdin_text = "runseal sandbox stdin bytes";
     let encoded = STANDARD.encode(stdin_text.as_bytes());
     let response = execute_params(json!({
-        "command": [
-            python_bin(),
-            "-c",
-            "import sys; print(sys.stdin.buffer.read().decode('utf-8'), end='')"
-        ],
+        "command": stdin_echo_command(),
         "cwd": workspace,
         "policy": "workspace-write",
         "network": {"mode": "disabled"},
@@ -621,11 +732,7 @@ fn workspace_write_accepts_file_stdin_when_supported_or_fails_closed() -> Result
     let stdin_text = "runseal sandbox stdin file";
     fs::write(&stdin_path, stdin_text)?;
     let response = execute_params(json!({
-        "command": [
-            python_bin(),
-            "-c",
-            "import sys; print(sys.stdin.buffer.read().decode('utf-8'), end='')"
-        ],
+        "command": stdin_echo_command(),
         "cwd": workspace,
         "policy": "workspace-write",
         "network": {"mode": "disabled"},
@@ -660,7 +767,21 @@ fn network_disabled_blocks_direct_egress_when_supported_or_fails_closed() -> Res
     let workspace = tmp.path().join("workspace");
     fs::create_dir_all(&workspace)?;
     let code = "import socket; socket.create_connection(('1.1.1.1', 53), timeout=0.5); print('direct-network-ok')".to_string();
-    let response = execute_with_network("workspace-write", &workspace, Some("disabled"), code)?;
+    let ps_code = "$ErrorActionPreference = 'Stop'; \
+                   $client = [Net.Sockets.TcpClient]::new(); \
+                   $async = $client.BeginConnect('1.1.1.1', 53, $null, $null); \
+                   if ($async.AsyncWaitHandle.WaitOne(500)) { \
+                       $client.EndConnect($async); \
+                       'direct-network-ok' \
+                   } else { throw 'direct network timeout' }"
+        .to_string();
+    let response = execute_platform_script(
+        "workspace-write",
+        &workspace,
+        Some("disabled"),
+        code,
+        ps_code,
+    )?;
 
     if is_backend_missing(&response) {
         let expected_features = expected_missing_features(&["network_disabled"]);
@@ -689,7 +810,16 @@ fn network_proxy_blocks_direct_egress_when_supported_or_fails_closed() -> Result
     let workspace = tmp.path().join("workspace");
     fs::create_dir_all(&workspace)?;
     let code = "import socket; socket.create_connection(('1.1.1.1', 53), timeout=0.5); print('direct-network-ok')".to_string();
-    let response = execute_with_network("workspace-write", &workspace, Some("proxy"), code)?;
+    let ps_code = "$ErrorActionPreference = 'Stop'; \
+                   $client = [Net.Sockets.TcpClient]::new(); \
+                   $async = $client.BeginConnect('1.1.1.1', 53, $null, $null); \
+                   if ($async.AsyncWaitHandle.WaitOne(500)) { \
+                       $client.EndConnect($async); \
+                       'direct-network-ok' \
+                   } else { throw 'direct network timeout' }"
+        .to_string();
+    let response =
+        execute_platform_script("workspace-write", &workspace, Some("proxy"), code, ps_code)?;
 
     if is_backend_missing(&response) {
         let expected_features = expected_missing_features(&["network_proxy", "managed_proxy"]);
@@ -717,21 +847,101 @@ fn network_proxy_allows_http_through_managed_proxy_when_supported_or_fails_close
     let tmp = TempDir::new()?;
     let workspace = tmp.path().join("workspace");
     fs::create_dir_all(&workspace)?;
+    let warmup = execute_platform_script(
+        "workspace-write",
+        &workspace,
+        Some("proxy"),
+        "print('proxy-warmup')".to_string(),
+        "Write-Output proxy-warmup".to_string(),
+    )?;
+    if is_backend_missing(&warmup) {
+        let expected_features = expected_missing_features(&["network_proxy", "managed_proxy"]);
+        assert_backend_missing_features(&warmup, &workspace, &expected_features)?;
+        return Ok(());
+    }
+    if is_backend_unavailable(&warmup) {
+        assert_backend_unavailable(&warmup, &workspace)?;
+        return Ok(());
+    }
+    assert_eq!(warmup["result"]["status"], "finished");
+    assert_eq!(warmup["result"]["exit_code"], 0);
+
     let (port, upstream) = start_loopback_http_server()?;
     let code = format!(
-        "import os, socket, urllib.parse\n\
+        "import os, socket, time, urllib.parse\n\
          proxy = urllib.parse.urlparse(os.environ['HTTP_PROXY'])\n\
-         with socket.create_connection((proxy.hostname, proxy.port), timeout=2) as s:\n\
-             s.sendall(b'GET http://127.0.0.1:{port}/proxy-ok HTTP/1.1\\r\\nHost: 127.0.0.1:{port}\\r\\nConnection: close\\r\\n\\r\\n')\n\
-             data = b''\n\
-             while True:\n\
-                 chunk = s.recv(4096)\n\
-                 if not chunk:\n\
+         request = b'GET http://127.0.0.1:{port}/proxy-ok HTTP/1.1\\r\\nHost: 127.0.0.1:{port}\\r\\nConnection: close\\r\\n\\r\\n'\n\
+         deadline = time.monotonic() + 8\n\
+         last = None\n\
+         while time.monotonic() < deadline:\n\
+             try:\n\
+                 with socket.create_connection((proxy.hostname, proxy.port), timeout=2) as s:\n\
+                     s.settimeout(2)\n\
+                     s.sendall(request)\n\
+                     data = b''\n\
+                     while True:\n\
+                         chunk = s.recv(4096)\n\
+                         if not chunk:\n\
+                             break\n\
+                         data += chunk\n\
+                 text = data.decode('utf-8', 'replace')\n\
+                 if 'proxy-ok' in text:\n\
+                     print(text)\n\
                      break\n\
-                 data += chunk\n\
-         print(data.decode('utf-8', 'replace'))"
+                 last = 'unexpected proxy response: ' + text\n\
+             except Exception as exc:\n\
+                 last = str(exc)\n\
+             time.sleep(0.25)\n\
+         else:\n\
+             raise RuntimeError('proxy request did not reach upstream: ' + str(last))"
     );
-    let response = execute_with_network("workspace-write", &workspace, Some("proxy"), code)?;
+    let proxy_request = format!(
+        "\"GET http://127.0.0.1:{port}/proxy-ok HTTP/1.1`r`nHost: 127.0.0.1:{port}`r`nConnection: close`r`n`r`n\""
+    );
+    let ps_code = r#"
+$ErrorActionPreference = 'Stop'
+$proxy = [Uri]$env:HTTP_PROXY
+$request = __REQUEST__
+$deadline = [DateTime]::UtcNow.AddSeconds(8)
+$last = $null
+$successText = $null
+while ([DateTime]::UtcNow -lt $deadline) {
+    $client = $null
+    try {
+        $client = [Net.Sockets.TcpClient]::new()
+        $client.ReceiveTimeout = 2000
+        $client.SendTimeout = 2000
+        $client.Connect($proxy.Host, $proxy.Port)
+        $stream = $client.GetStream()
+        $bytes = [Text.Encoding]::ASCII.GetBytes($request)
+        $stream.Write($bytes, 0, $bytes.Length)
+        $buffer = New-Object byte[] 4096
+        $text = ''
+        while (($count = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+            $text += [Text.Encoding]::UTF8.GetString($buffer, 0, $count)
+        }
+        if ($text.Contains('proxy-ok')) {
+            $successText = $text
+            break
+        }
+        $last = "unexpected proxy response: $text"
+    } catch {
+        $last = $_.Exception.Message
+    } finally {
+        if ($null -ne $client) {
+            $client.Dispose()
+        }
+    }
+    Start-Sleep -Milliseconds 250
+}
+if ($null -eq $successText) {
+    throw "proxy request did not reach upstream: $last"
+}
+$successText
+"#
+    .replace("__REQUEST__", &proxy_request);
+    let response =
+        execute_platform_script("workspace-write", &workspace, Some("proxy"), code, ps_code)?;
 
     if is_backend_missing(&response) {
         let upstream_hit = upstream.join().expect("upstream server thread")?;

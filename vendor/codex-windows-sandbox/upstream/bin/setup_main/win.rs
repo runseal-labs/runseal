@@ -20,6 +20,7 @@ use codex_windows_sandbox::is_command_cwd_root;
 use codex_windows_sandbox::log_note;
 use codex_windows_sandbox::log_writer;
 use codex_windows_sandbox::path_mask_allows;
+use codex_windows_sandbox::remove_deny_write_aces;
 use codex_windows_sandbox::resolve_current_exe_for_launch;
 use codex_windows_sandbox::sandbox_bin_dir;
 use codex_windows_sandbox::sandbox_dir;
@@ -1016,7 +1017,7 @@ fn configure_sandbox_network_guard(
         |message| {
             let _ = log_line(log, message);
         },
-    );
+    )?;
     Ok(())
 }
 
@@ -1272,6 +1273,11 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
             convert_string_sid_to_sid(&root_cap_sid_str)
                 .ok_or_else(|| anyhow::anyhow!("convert write root capability SID failed"))?
         };
+        // A writable root must not keep stale deny ACEs for its own capability SID.
+        // Refresh can then repair polluted setup state without another UAC prompt.
+        unsafe {
+            remove_deny_write_aces(root, root_cap_psid)?;
+        }
         for (label, psid) in [
             ("sandbox_group", sandbox_group_psid),
             (cap_label, root_cap_psid),

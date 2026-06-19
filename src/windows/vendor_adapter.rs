@@ -11,7 +11,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use serde_json::{Value, json};
 use std::path::Path;
 
-const SETUP_PAYLOAD_VERSION: u32 = 5;
+const SETUP_PAYLOAD_VERSION: u32 = 6;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum WindowsVendorSandboxProfile {
@@ -238,19 +238,20 @@ fn path_string(path: &Path) -> String {
 
 fn filesystem_entries(policy: &SandboxPolicy) -> Vec<WindowsVendorFilesystemEntry> {
     let mut entries = Vec::new();
+    let write_roots = policy.filesystem.write.clone();
     extend_entries(
         &mut entries,
-        &policy.filesystem.read,
+        &read_entries_not_covered_by_write_roots(&policy.filesystem.read, &write_roots),
         WindowsVendorFilesystemAccess::Read,
     );
     extend_entries(
         &mut entries,
-        &policy.filesystem.read_only,
+        &read_entries_not_covered_by_write_roots(&policy.filesystem.read_only, &write_roots),
         WindowsVendorFilesystemAccess::Read,
     );
     extend_entries(
         &mut entries,
-        &policy.filesystem.write,
+        &write_roots,
         WindowsVendorFilesystemAccess::Write,
     );
     extend_entries(
@@ -259,6 +260,27 @@ fn filesystem_entries(policy: &SandboxPolicy) -> Vec<WindowsVendorFilesystemEntr
         WindowsVendorFilesystemAccess::Deny,
     );
     entries
+}
+
+fn read_entries_not_covered_by_write_roots(
+    read_roots: &[String],
+    write_roots: &[String],
+) -> Vec<String> {
+    read_roots
+        .iter()
+        .filter(|read_root| {
+            !write_roots
+                .iter()
+                .any(|write_root| same_windows_path(read_root, write_root))
+        })
+        .cloned()
+        .collect()
+}
+
+fn same_windows_path(left: &str, right: &str) -> bool {
+    left.replace('/', "\\")
+        .trim_end_matches('\\')
+        .eq_ignore_ascii_case(right.replace('/', "\\").trim_end_matches('\\'))
 }
 
 fn extend_entries(
@@ -294,10 +316,6 @@ mod tests {
                     entries: vec![
                         WindowsVendorFilesystemEntry {
                             path: cwd.to_string_lossy().to_string(),
-                            access: WindowsVendorFilesystemAccess::Read,
-                        },
-                        WindowsVendorFilesystemEntry {
-                            path: cwd.to_string_lossy().to_string(),
                             access: WindowsVendorFilesystemAccess::Write,
                         },
                         WindowsVendorFilesystemEntry {
@@ -330,10 +348,7 @@ mod tests {
             profile.network_policy(),
             Some(WindowsVendorNetworkPolicy::Proxy)
         );
-        assert_eq!(
-            profile.read_roots(),
-            vec![cwd.to_string_lossy().to_string()]
-        );
+        assert_eq!(profile.read_roots(), Vec::<String>::new());
         assert_eq!(
             profile.write_roots(),
             vec![cwd.to_string_lossy().to_string()]
@@ -391,7 +406,7 @@ mod tests {
         let (file_system, network) = permission_profile.to_runtime_permissions();
 
         assert_eq!(network, NetworkSandboxPolicy::Restricted);
-        assert_eq!(file_system.entries.len(), 5);
+        assert_eq!(file_system.entries.len(), 4);
         assert_eq!(
             file_system
                 .entries

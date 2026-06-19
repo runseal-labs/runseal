@@ -75,7 +75,8 @@ const SUBLAYER_KEY: GUID = GUID::from_u128(0xc61d437f_9249_4e8c_8251_58f1564251a
 /// Installs the persistent RunSeal WFP filters for `account`.
 ///
 /// This is intended to run from the already-elevated setup helper. Callers
-/// should treat any returned error as non-fatal to the rest of setup.
+/// should treat any returned error as a fail-closed setup failure for enforced
+/// network policies.
 pub fn install_wfp_filters_for_account(account: &str) -> Result<usize> {
     let engine = Engine::open()?;
     let mut transaction = engine.begin_transaction()?;

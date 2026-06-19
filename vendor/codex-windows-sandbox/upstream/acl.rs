@@ -24,6 +24,7 @@ use windows_sys::Win32::Security::Authorization::TRUSTEE_IS_SID;
 use windows_sys::Win32::Security::Authorization::TRUSTEE_IS_UNKNOWN;
 use windows_sys::Win32::Security::Authorization::TRUSTEE_W;
 use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
+use windows_sys::Win32::Security::DeleteAce;
 use windows_sys::Win32::Security::EqualSid;
 use windows_sys::Win32::Security::GENERIC_MAPPING;
 use windows_sys::Win32::Security::GetAce;
@@ -49,6 +50,7 @@ use windows_sys::Win32::Storage::FileSystem::OPEN_EXISTING;
 use windows_sys::Win32::Storage::FileSystem::READ_CONTROL;
 const SE_KERNEL_OBJECT: u32 = 6;
 const INHERIT_ONLY_ACE: u8 = 0x08;
+const INHERITED_ACE: u8 = 0x10;
 const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
 const ACCESS_DENIED_ACE_TYPE: u8 = 1;
 const GENERIC_READ_MASK: u32 = 0x8000_0000;
@@ -488,6 +490,90 @@ pub unsafe fn add_allow_ace(path: &Path, psid: *mut c_void) -> Result<bool> {
 /// Caller must ensure `psid` points to a valid SID and `path` refers to an existing file or directory.
 pub unsafe fn add_deny_write_ace(path: &Path, psid: *mut c_void) -> Result<bool> {
     add_deny_ace(path, psid, DenyAceKind::Write)
+}
+
+/// Removes explicit write-deny ACEs for the given SID on the target path.
+///
+/// # Safety
+/// Caller must ensure `psid` points to a valid SID and `path` refers to an existing file or directory.
+pub unsafe fn remove_deny_write_aces(path: &Path, psid: *mut c_void) -> Result<bool> {
+    let mut p_sd: *mut c_void = std::ptr::null_mut();
+    let mut p_dacl: *mut ACL = std::ptr::null_mut();
+    let code = GetNamedSecurityInfoW(
+        to_wide(path).as_ptr(),
+        1,
+        DACL_SECURITY_INFORMATION,
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+        &mut p_dacl,
+        std::ptr::null_mut(),
+        &mut p_sd,
+    );
+    if code != ERROR_SUCCESS {
+        return Err(anyhow!("GetNamedSecurityInfoW failed: {code}"));
+    }
+
+    let mut removed = false;
+    if !p_dacl.is_null() {
+        let mut info: ACL_SIZE_INFORMATION = std::mem::zeroed();
+        let ok = GetAclInformation(
+            p_dacl as *const ACL,
+            &mut info as *mut _ as *mut c_void,
+            std::mem::size_of::<ACL_SIZE_INFORMATION>() as u32,
+            AclSizeInformation,
+        );
+        if ok == 0 {
+            if !p_sd.is_null() {
+                LocalFree(p_sd as HLOCAL);
+            }
+            return Err(anyhow!("GetAclInformation failed"));
+        }
+
+        let deny_write_mask = DenyAceKind::Write.mask();
+        for i in (0..info.AceCount).rev() {
+            let mut p_ace: *mut c_void = std::ptr::null_mut();
+            if GetAce(p_dacl as *const ACL, i, &mut p_ace) == 0 {
+                continue;
+            }
+            let hdr = &*(p_ace as *const ACE_HEADER);
+            if hdr.AceType != ACCESS_DENIED_ACE_TYPE || (hdr.AceFlags & INHERITED_ACE) != 0 {
+                continue;
+            }
+            let ace = &*(p_ace as *const ACCESS_DENIED_ACE);
+            if (ace.Mask & deny_write_mask) == 0 {
+                continue;
+            }
+            let base = p_ace as usize;
+            let sid_ptr = (base + std::mem::size_of::<ACE_HEADER>() + std::mem::size_of::<u32>())
+                as *mut c_void;
+            if EqualSid(sid_ptr, psid) != 0 && DeleteAce(p_dacl, i) != 0 {
+                removed = true;
+            }
+        }
+
+        if removed {
+            let code = SetNamedSecurityInfoW(
+                to_wide(path).as_ptr() as *mut u16,
+                1,
+                DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                p_dacl,
+                std::ptr::null_mut(),
+            );
+            if code != ERROR_SUCCESS {
+                if !p_sd.is_null() {
+                    LocalFree(p_sd as HLOCAL);
+                }
+                return Err(anyhow!("SetNamedSecurityInfoW failed: {code}"));
+            }
+        }
+    }
+
+    if !p_sd.is_null() {
+        LocalFree(p_sd as HLOCAL);
+    }
+    Ok(removed)
 }
 
 #[derive(Clone, Copy)]

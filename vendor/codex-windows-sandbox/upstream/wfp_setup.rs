@@ -1,4 +1,6 @@
 use crate::install_wfp_filters_for_account;
+use crate::setup_error::SetupErrorCode;
+use crate::setup_error::SetupFailure;
 use crate::setup_error::sanitize_setup_metric_tag_value;
 use anyhow::Result;
 use codex_otel::OtelExporter;
@@ -128,48 +130,63 @@ pub fn install_wfp_filters<F>(
     sandbox_username: &str,
     otel: Option<&StatsigMetricsSettings>,
     mut log: F,
-) where
+) -> Result<()>
+where
     F: FnMut(&str),
 {
-    let metric = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        install_wfp_filters_for_account(sandbox_username)
-    })) {
+    let (metric, install_result) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+        || install_wfp_filters_for_account(sandbox_username),
+    )) {
         Ok(Ok(installed_filter_count)) => {
             log(&format!(
                 "WFP setup succeeded for {sandbox_username} with {installed_filter_count} installed filters"
             ));
-            WfpSetupMetric {
-                outcome: WfpSetupMetricOutcome::Success,
-                target_account: sandbox_username.to_string(),
-                installed_filter_count,
-                error: None,
-            }
+            (
+                WfpSetupMetric {
+                    outcome: WfpSetupMetricOutcome::Success,
+                    target_account: sandbox_username.to_string(),
+                    installed_filter_count,
+                    error: None,
+                },
+                Ok(()),
+            )
         }
         Ok(Err(err)) => {
             let error = err.to_string();
-            log(&format!(
-                "WFP setup failed for {sandbox_username}: {error}; continuing elevated setup"
-            ));
-            WfpSetupMetric {
-                outcome: WfpSetupMetricOutcome::Failure,
-                target_account: sandbox_username.to_string(),
-                installed_filter_count: 0,
-                error: Some(error),
-            }
+            log(&format!("WFP setup failed for {sandbox_username}: {error}"));
+            (
+                WfpSetupMetric {
+                    outcome: WfpSetupMetricOutcome::Failure,
+                    target_account: sandbox_username.to_string(),
+                    installed_filter_count: 0,
+                    error: Some(error.clone()),
+                },
+                Err(anyhow::Error::new(SetupFailure::new(
+                    SetupErrorCode::HelperWfpInstallFailed,
+                    format!("WFP setup failed for {sandbox_username}: {error}"),
+                ))),
+            )
         }
         Err(panic_payload) => {
             let error = panic_payload_to_string(panic_payload);
             log(&format!(
-                "WFP setup panicked for {sandbox_username}: {error}; continuing elevated setup"
+                "WFP setup panicked for {sandbox_username}: {error}"
             ));
-            WfpSetupMetric {
-                outcome: WfpSetupMetricOutcome::Failure,
-                target_account: sandbox_username.to_string(),
-                installed_filter_count: 0,
-                error: Some(format!("panic: {error}")),
-            }
+            (
+                WfpSetupMetric {
+                    outcome: WfpSetupMetricOutcome::Failure,
+                    target_account: sandbox_username.to_string(),
+                    installed_filter_count: 0,
+                    error: Some(format!("panic: {error}")),
+                },
+                Err(anyhow::Error::new(SetupFailure::new(
+                    SetupErrorCode::HelperWfpInstallFailed,
+                    format!("WFP setup panicked for {sandbox_username}: {error}"),
+                ))),
+            )
         }
     };
 
     emit_wfp_setup_metric_safely(codex_home, otel, sandbox_username, &metric, &mut log);
+    install_result
 }

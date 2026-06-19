@@ -469,7 +469,7 @@ mod tests {
         fs::create_dir_all(users_path.parent().expect("sandbox secrets dir"))
             .expect("create sandbox secrets dir");
         let contents = format!(
-            r#"{{"version":5,"user":{{"username":"RunSealSandbox","password":"secret"}},"{}":{{}}}}"#,
+            r#"{{"version":6,"user":{{"username":"RunSealSandbox","password":"secret"}},"{}":{{}}}}"#,
             concat!("off", "line_username")
         );
         fs::write(&users_path, contents).expect("write users");
@@ -517,7 +517,7 @@ mod tests {
         let marker_path = setup_marker_path(codex_home.path());
         fs::create_dir_all(marker_path.parent().expect("sandbox dir")).expect("create sandbox dir");
         let contents = format!(
-            r#"{{"version":5,"sandbox_username":"RunSealSandbox","created_at":"2026-01-01T00:00:00Z","proxy_ports":[],"allow_local_binding":false,"{}":{{}}}}"#,
+            r#"{{"version":6,"sandbox_username":"RunSealSandbox","created_at":"2026-01-01T00:00:00Z","proxy_ports":[],"allow_local_binding":false,"{}":{{}}}}"#,
             concat!("on", "line_username")
         );
         fs::write(&marker_path, contents).expect("write marker");

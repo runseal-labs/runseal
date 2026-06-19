@@ -258,13 +258,11 @@ mod windows_impl {
                 Err(err) => return Err(err),
             };
             let (mut pipe_write, mut pipe_read) = transport.into_files();
-            let mut stdin_bytes = stdin_bytes;
             let mut cancellation = cancellation;
-            let mut cancel_writer = if stdin_bytes.is_none() {
-                spawn_cancel_writer(&pipe_write, cancellation.take())?
-            } else {
-                None
-            };
+            if let Some(bytes) = stdin_bytes {
+                write_stdin_and_close(&mut pipe_write, &bytes)?;
+            }
+            let cancel_writer = spawn_cancel_writer(&pipe_write, cancellation.take())?;
 
             let mut stdout = Vec::new();
             let mut stderr = Vec::new();
@@ -276,12 +274,8 @@ mod windows_impl {
                 };
                 match msg.message {
                     Message::SpawnReady { .. } => {
-                        if let Some(bytes) = stdin_bytes.take() {
-                            write_stdin_and_close(&mut pipe_write, &bytes)?;
-                        }
-                        if cancel_writer.is_none() {
-                            cancel_writer = spawn_cancel_writer(&pipe_write, cancellation.take())?;
-                        }
+                        // `spawn_runner_transport` consumes the initial SpawnReady during
+                        // startup. Treat any later duplicate as benign protocol noise.
                     }
                     Message::Output { payload } => match decode_bytes(&payload.data_b64) {
                         Ok(bytes) => match payload.stream {

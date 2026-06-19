@@ -6,6 +6,7 @@ use windows::Win32::Foundation::VARIANT_TRUE;
 use windows::Win32::NetworkManagement::WindowsFirewall::INetFwPolicy2;
 use windows::Win32::NetworkManagement::WindowsFirewall::INetFwRule3;
 use windows::Win32::NetworkManagement::WindowsFirewall::INetFwRules;
+use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_ACTION_ALLOW;
 use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_ACTION_BLOCK;
 use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_IP_PROTOCOL_ANY;
 use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_IP_PROTOCOL_TCP;
@@ -13,6 +14,7 @@ use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_IP_PROTOCOL_UDP;
 use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_MODIFY_STATE;
 use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_MODIFY_STATE_OK;
 use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_PROFILE2_ALL;
+use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_RULE_DIR_IN;
 use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_RULE_DIR_OUT;
 use windows::Win32::NetworkManagement::WindowsFirewall::NetFwPolicy2;
 use windows::Win32::NetworkManagement::WindowsFirewall::NetFwRule;
@@ -32,12 +34,15 @@ use codex_windows_sandbox::SetupFailure;
 const SANDBOX_BLOCK_RULE_NAME: &str = "runseal_sandbox_block_outbound";
 const SANDBOX_BLOCK_LOOPBACK_TCP_RULE_NAME: &str = "runseal_sandbox_block_loopback_tcp";
 const SANDBOX_BLOCK_LOOPBACK_UDP_RULE_NAME: &str = "runseal_sandbox_block_loopback_udp";
+const SANDBOX_PROXY_INBOUND_ALLOW_RULE_NAME: &str = "runseal_sandbox_allow_loopback_proxy_inbound";
 
 // Friendly text shown in the firewall UI.
 const SANDBOX_BLOCK_RULE_FRIENDLY: &str = "RunSeal Sandbox - Block Non-Loopback Outbound";
 const SANDBOX_BLOCK_LOOPBACK_TCP_RULE_FRIENDLY: &str =
     "RunSeal Sandbox - Block Loopback TCP (Except Proxy)";
 const SANDBOX_BLOCK_LOOPBACK_UDP_RULE_FRIENDLY: &str = "RunSeal Sandbox - Block Loopback UDP";
+const SANDBOX_PROXY_INBOUND_ALLOW_RULE_FRIENDLY: &str =
+    "RunSeal Sandbox - Allow Loopback Proxy Inbound";
 const SANDBOX_PROXY_ALLOW_RULE_NAME: &str = "runseal_sandbox_allow_loopback_proxy";
 const LOOPBACK_REMOTE_ADDRESSES: &str = "127.0.0.0/8,::/127";
 const NON_LOOPBACK_REMOTE_ADDRESSES: &str = "0.0.0.0-126.255.255.255,128.0.0.0-255.255.255.255,::,::2-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff";
@@ -50,6 +55,17 @@ struct BlockRuleSpec<'a> {
     sandbox_sid: &'a str,
     remote_addresses: Option<&'a str>,
     remote_ports: Option<&'a str>,
+}
+
+struct AllowRuleSpec<'a> {
+    internal_name: &'a str,
+    friendly_desc: &'a str,
+    protocol: i32,
+    inbound: bool,
+    local_user_spec: Option<&'a str>,
+    authorized_sid: Option<&'a str>,
+    remote_addresses: Option<&'a str>,
+    local_ports: Option<&'a str>,
 }
 
 pub fn ensure_sandbox_proxy_allowlist(
@@ -89,6 +105,7 @@ pub fn ensure_sandbox_proxy_allowlist(
                 // Remove the legacy overlapping allow rule before returning to the local-binding
                 // mode so stale proxy exceptions do not linger.
                 remove_rule_if_present(&rules, SANDBOX_PROXY_ALLOW_RULE_NAME, log)?;
+                remove_rule_if_present(&rules, SANDBOX_PROXY_INBOUND_ALLOW_RULE_NAME, log)?;
                 remove_rule_if_present(&rules, SANDBOX_BLOCK_LOOPBACK_UDP_RULE_NAME, log)?;
                 remove_rule_if_present(&rules, SANDBOX_BLOCK_LOOPBACK_TCP_RULE_NAME, log)?;
                 return Ok(());
@@ -127,6 +144,25 @@ pub fn ensure_sandbox_proxy_allowlist(
             // Remove the legacy overlapping allow rule only after the explicit block rules are in
             // place so transitions back to proxy-only mode do not fail open.
             remove_rule_if_present(&rules, SANDBOX_PROXY_ALLOW_RULE_NAME, log)?;
+
+            if let Some(proxy_local_ports) = firewall_port_list(proxy_ports) {
+                ensure_allow_rule(
+                    &rules,
+                    &AllowRuleSpec {
+                        internal_name: SANDBOX_PROXY_INBOUND_ALLOW_RULE_NAME,
+                        friendly_desc: SANDBOX_PROXY_INBOUND_ALLOW_RULE_FRIENDLY,
+                        protocol: NET_FW_IP_PROTOCOL_TCP.0,
+                        inbound: true,
+                        local_user_spec: None,
+                        authorized_sid: None,
+                        remote_addresses: Some(LOOPBACK_REMOTE_ADDRESSES),
+                        local_ports: Some(&proxy_local_ports),
+                    },
+                    log,
+                )?;
+            } else {
+                remove_rule_if_present(&rules, SANDBOX_PROXY_INBOUND_ALLOW_RULE_NAME, log)?;
+            }
 
             if let Some(blocked_remote_ports) = blocked_loopback_tcp_remote_ports(proxy_ports) {
                 ensure_block_rule(
@@ -326,6 +362,62 @@ fn ensure_block_rule(
     Ok(())
 }
 
+fn ensure_allow_rule(
+    rules: &INetFwRules,
+    spec: &AllowRuleSpec<'_>,
+    log: &mut dyn Write,
+) -> Result<()> {
+    let name = BSTR::from(spec.internal_name);
+    let rule: INetFwRule3 = match unsafe { rules.Item(&name) } {
+        Ok(existing) => existing.cast().map_err(|err| {
+            anyhow::Error::new(SetupFailure::new(
+                SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
+                format!("cast existing firewall rule to INetFwRule3 failed: {err:?}"),
+            ))
+        })?,
+        Err(_) => {
+            let new_rule: INetFwRule3 =
+                unsafe { CoCreateInstance(&NetFwRule, None, CLSCTX_INPROC_SERVER) }.map_err(
+                    |err| {
+                        anyhow::Error::new(SetupFailure::new(
+                            SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
+                            format!("CoCreateInstance NetFwRule failed: {err:?}"),
+                        ))
+                    },
+                )?;
+            unsafe { new_rule.SetName(&name) }.map_err(|err| {
+                anyhow::Error::new(SetupFailure::new(
+                    SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
+                    format!("SetName failed: {err:?}"),
+                ))
+            })?;
+            configure_allow_rule(&new_rule, spec)?;
+            unsafe { rules.Add(&new_rule) }.map_err(|err| {
+                anyhow::Error::new(SetupFailure::new(
+                    SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
+                    format!("Rules::Add failed: {err:?}"),
+                ))
+            })?;
+            new_rule
+        }
+    };
+
+    configure_allow_rule(&rule, spec)?;
+
+    let remote_addresses_log = spec.remote_addresses.unwrap_or("*");
+    let local_ports_log = spec.local_ports.unwrap_or("*");
+    let local_user_log = spec.local_user_spec.unwrap_or("*");
+    let direction_log = if spec.inbound { "in" } else { "out" };
+    log_line(
+        log,
+        &format!(
+            "firewall rule configured name={} action=allow direction={direction_log} protocol={} RemoteAddresses={remote_addresses_log} LocalPorts={local_ports_log} LocalUserAuthorizedList={local_user_log}",
+            spec.internal_name, spec.protocol
+        ),
+    )?;
+    Ok(())
+}
+
 fn configure_rule(rule: &INetFwRule3, spec: &BlockRuleSpec<'_>) -> Result<()> {
     unsafe {
         rule.SetDescription(&BSTR::from(spec.friendly_desc))
@@ -385,6 +477,98 @@ fn configure_rule(rule: &INetFwRule3, spec: &BlockRuleSpec<'_>) -> Result<()> {
                 spec.sandbox_sid
             ),
         )));
+    }
+    Ok(())
+}
+
+fn configure_allow_rule(rule: &INetFwRule3, spec: &AllowRuleSpec<'_>) -> Result<()> {
+    unsafe {
+        rule.SetDescription(&BSTR::from(spec.friendly_desc))
+            .map_err(|err| {
+                anyhow::Error::new(SetupFailure::new(
+                    SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
+                    format!("SetDescription failed: {err:?}"),
+                ))
+            })?;
+        rule.SetDirection(if spec.inbound {
+            NET_FW_RULE_DIR_IN
+        } else {
+            NET_FW_RULE_DIR_OUT
+        })
+        .map_err(|err| {
+            anyhow::Error::new(SetupFailure::new(
+                SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
+                format!("SetDirection failed: {err:?}"),
+            ))
+        })?;
+        rule.SetAction(NET_FW_ACTION_ALLOW).map_err(|err| {
+            anyhow::Error::new(SetupFailure::new(
+                SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
+                format!("SetAction failed: {err:?}"),
+            ))
+        })?;
+        rule.SetEnabled(VARIANT_TRUE).map_err(|err| {
+            anyhow::Error::new(SetupFailure::new(
+                SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
+                format!("SetEnabled failed: {err:?}"),
+            ))
+        })?;
+        rule.SetProfiles(NET_FW_PROFILE2_ALL.0).map_err(|err| {
+            anyhow::Error::new(SetupFailure::new(
+                SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
+                format!("SetProfiles failed: {err:?}"),
+            ))
+        })?;
+        rule.SetProtocol(spec.protocol).map_err(|err| {
+            anyhow::Error::new(SetupFailure::new(
+                SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
+                format!("SetProtocol failed: {err:?}"),
+            ))
+        })?;
+        rule.SetRemoteAddresses(&BSTR::from(spec.remote_addresses.unwrap_or("*")))
+            .map_err(|err| {
+                anyhow::Error::new(SetupFailure::new(
+                    SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
+                    format!("SetRemoteAddresses failed: {err:?}"),
+                ))
+            })?;
+        if let Some(local_ports) = spec.local_ports {
+            rule.SetLocalPorts(&BSTR::from(local_ports))
+                .map_err(|err| {
+                    anyhow::Error::new(SetupFailure::new(
+                        SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
+                        format!("SetLocalPorts failed: {err:?}"),
+                    ))
+                })?;
+        }
+        if let Some(local_user_spec) = spec.local_user_spec {
+            rule.SetLocalUserAuthorizedList(&BSTR::from(local_user_spec))
+                .map_err(|err| {
+                    anyhow::Error::new(SetupFailure::new(
+                        SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
+                        format!("SetLocalUserAuthorizedList failed: {err:?}"),
+                    ))
+                })?;
+        }
+    }
+
+    if let Some(authorized_sid) = spec.authorized_sid {
+        let actual = unsafe { rule.LocalUserAuthorizedList() }.map_err(|err| {
+            anyhow::Error::new(SetupFailure::new(
+                SetupErrorCode::HelperFirewallRuleVerifyFailed,
+                format!("LocalUserAuthorizedList (read-back) failed: {err:?}"),
+            ))
+        })?;
+        let actual_str = actual.to_string();
+        if !actual_str.contains(authorized_sid) {
+            return Err(anyhow::Error::new(SetupFailure::new(
+                SetupErrorCode::HelperFirewallRuleVerifyFailed,
+                format!(
+                    "firewall allow rule user scope mismatch: expected SID {}, got {actual_str}",
+                    authorized_sid
+                ),
+            )));
+        }
     }
     Ok(())
 }
@@ -449,6 +633,28 @@ fn blocked_loopback_tcp_remote_ports(proxy_ports: &[u16]) -> Option<String> {
         None
     } else {
         Some(blocked_ranges.join(","))
+    }
+}
+
+fn firewall_port_list(ports: &[u16]) -> Option<String> {
+    let mut ports = ports
+        .iter()
+        .copied()
+        .filter(|port| *port != 0)
+        .collect::<Vec<_>>();
+    ports.sort_unstable();
+    ports.dedup();
+
+    if ports.is_empty() {
+        None
+    } else {
+        Some(
+            ports
+                .into_iter()
+                .map(|port| port.to_string())
+                .collect::<Vec<_>>()
+                .join(","),
+        )
     }
 }
 

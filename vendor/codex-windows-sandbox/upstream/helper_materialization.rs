@@ -95,13 +95,13 @@ fn fallback_exe_for_launch(codex_home: &Path, fallback_executable: &str) -> Path
 }
 
 pub fn resolve_exe_for_launch(source: &Path, codex_home: &Path) -> PathBuf {
-    let Some(file_name) = source.file_name() else {
-        return source.to_path_buf();
-    };
-    let destination = helper_bin_dir(codex_home).join(file_name);
-    match copy_from_source_if_needed(source, &destination) {
-        Ok(_) => destination,
+    match try_resolve_exe_for_launch(source, codex_home) {
+        Ok(path) => path,
         Err(err) => {
+            let Some(file_name) = source.file_name() else {
+                return source.to_path_buf();
+            };
+            let destination = helper_bin_dir(codex_home).join(file_name);
             let sandbox_log_dir = crate::sandbox_dir(codex_home);
             log_note(
                 &format!(
@@ -113,6 +113,28 @@ pub fn resolve_exe_for_launch(source: &Path, codex_home: &Path) -> PathBuf {
             destination
         }
     }
+}
+
+pub(crate) fn try_resolve_exe_for_launch(source: &Path, codex_home: &Path) -> Result<PathBuf> {
+    let Some(file_name) = source.file_name() else {
+        return Ok(source.to_path_buf());
+    };
+    let destination = helper_bin_dir(codex_home).join(file_name);
+    let outcome = copy_from_source_if_needed(source, &destination)?;
+    let action = match outcome {
+        CopyOutcome::Reused => "reused",
+        CopyOutcome::ReCopied => "recopied",
+    };
+    let sandbox_log_dir = crate::sandbox_dir(codex_home);
+    log_note(
+        &format!(
+            "helper copy: {action} executable source={} destination={}",
+            source.display(),
+            destination.display()
+        ),
+        Some(&sandbox_log_dir),
+    );
+    Ok(destination)
 }
 
 pub(crate) fn copy_helper_if_needed(

@@ -788,7 +788,7 @@ fn exec_json_returns_execution_result() -> Result<()> {
 fn sandboxed_exec_cli_uses_backend_or_reports_unavailable() -> Result<()> {
     let tmp = TempDir::new()?;
     let cwd = tmp.path().to_string_lossy().to_string();
-    let output = run_cli(&[
+    let mut args = vec![
         "exec",
         "--json",
         "--policy",
@@ -796,10 +796,13 @@ fn sandboxed_exec_cli_uses_backend_or_reports_unavailable() -> Result<()> {
         "--cwd",
         &cwd,
         "--",
-        python_bin(),
-        "-c",
-        "print('must not run')",
-    ])?;
+    ];
+    if cfg!(windows) {
+        args.extend(["cmd", "/d", "/c", "echo sandbox-ok"]);
+    } else {
+        args.extend([python_bin(), "-c", "print('must not run')"]);
+    }
+    let output = run_cli(&args)?;
 
     if cfg!(windows) {
         let stderr = String::from_utf8_lossy(&output.stderr);
