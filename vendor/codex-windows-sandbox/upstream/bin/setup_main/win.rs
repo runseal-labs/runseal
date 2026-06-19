@@ -127,6 +127,7 @@ enum SetupInvocation {
 
 #[derive(Debug, Serialize)]
 struct ScheduledSetupTaskResult {
+    request_id: String,
     ok: bool,
     message: Option<String>,
 }
@@ -744,6 +745,7 @@ fn run_scheduled_setup_task(broker_home: &Path) -> Result<()> {
             Ok(contents) => contents,
             Err(err) => {
                 let result = ScheduledSetupTaskResult {
+                    request_id: request_id.clone(),
                     ok: false,
                     message: Some(format!("failed to read scheduled setup payload: {err}")),
                 };
@@ -753,6 +755,7 @@ fn run_scheduled_setup_task(broker_home: &Path) -> Result<()> {
         };
         if let Err(err) = remove_setup_payload_file(&path) {
             let result = ScheduledSetupTaskResult {
+                request_id: request_id.clone(),
                 ok: false,
                 message: Some(format!("failed to remove scheduled setup payload: {err}")),
             };
@@ -762,10 +765,12 @@ fn run_scheduled_setup_task(broker_home: &Path) -> Result<()> {
         let result = run_payload_json(payload_json.as_slice());
         let task_result = match result {
             Ok(()) => ScheduledSetupTaskResult {
+                request_id: request_id.clone(),
                 ok: true,
                 message: None,
             },
             Err(err) => ScheduledSetupTaskResult {
+                request_id: request_id.clone(),
                 ok: false,
                 message: Some(err.to_string()),
             },
@@ -1561,6 +1566,7 @@ mod tests {
         let temp_path = super::scheduled_setup_result_temp_path(&broker_home, request_id);
         fs::write(&result_path, br#"{"ok":true,"message":null}"#).expect("write old result");
         let result = super::ScheduledSetupTaskResult {
+            request_id: request_id.to_string(),
             ok: false,
             message: Some("new".to_string()),
         };
@@ -1595,6 +1601,7 @@ mod tests {
         let result: serde_json::Value =
             serde_json::from_slice(&fs::read(&result_path).expect("read result"))
                 .expect("parse result");
+        assert_eq!(result["request_id"], "invalid");
         assert_eq!(result["ok"], false);
         assert!(
             result["message"]

@@ -772,6 +772,7 @@ static SCHEDULED_SETUP_REQUEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Deserialize)]
 struct ScheduledSetupTaskResult {
+    request_id: String,
     ok: bool,
     message: Option<String>,
 }
@@ -806,6 +807,23 @@ fn scheduled_setup_payload_path(codex_home: &Path, request_id: &str) -> PathBuf 
 
 fn scheduled_setup_result_path(codex_home: &Path, request_id: &str) -> PathBuf {
     sandbox_dir(codex_home).join(format!("{SCHEDULED_SETUP_RESULT_PREFIX}{request_id}.json"))
+}
+
+fn validate_scheduled_setup_result_request_id(
+    result: &ScheduledSetupTaskResult,
+    request_id: &str,
+    result_path: &Path,
+) -> Result<()> {
+    if result.request_id == request_id {
+        return Ok(());
+    }
+    Err(failure(
+        SetupErrorCode::OrchestratorHelperLaunchFailed,
+        format!(
+            "scheduled setup result {} did not match request id",
+            result_path.display()
+        ),
+    ))
 }
 
 fn remove_scheduled_setup_result_file(path: &Path) -> Result<()> {
@@ -1015,6 +1033,13 @@ fn try_run_setup_exe_via_scheduled_task(
                             ),
                         )
                     })?;
+                if let Err(err) =
+                    validate_scheduled_setup_result_request_id(&result, &request_id, &result_path)
+                {
+                    let _ = remove_setup_payload_file(&payload_path);
+                    let _ = remove_setup_payload_file(&result_path);
+                    return Err(err);
+                }
                 let _ = std::fs::remove_file(&payload_path);
                 let _ = std::fs::remove_file(&result_path);
                 if result.ok {
@@ -1607,6 +1632,37 @@ mod tests {
         assert_eq!(parts[0], std::process::id().to_string());
         assert!(parts[1].parse::<u128>().is_ok());
         assert!(parts[2].parse::<u64>().is_ok());
+    }
+
+    #[test]
+    fn scheduled_setup_result_requires_request_id() {
+        let result: super::ScheduledSetupTaskResult =
+            serde_json::from_str(r#"{"request_id":"req-1","ok":true,"message":null}"#)
+                .expect("parse result");
+        let old_result = serde_json::from_str::<super::ScheduledSetupTaskResult>(
+            r#"{"ok":true,"message":null}"#,
+        );
+
+        assert_eq!(result.request_id, "req-1");
+        assert!(old_result.is_err());
+    }
+
+    #[test]
+    fn scheduled_setup_result_rejects_mismatched_request_id() {
+        let result: super::ScheduledSetupTaskResult =
+            serde_json::from_str(r#"{"request_id":"other","ok":true,"message":null}"#)
+                .expect("parse result");
+        let err = super::validate_scheduled_setup_result_request_id(
+            &result,
+            "req-1",
+            Path::new("setup-task-result-req-1.json"),
+        )
+        .expect_err("mismatched result must fail closed");
+
+        assert_eq!(
+            extract_failure(&err).map(|failure| failure.code),
+            Some(SetupErrorCode::OrchestratorHelperLaunchFailed)
+        );
     }
 
     #[test]
