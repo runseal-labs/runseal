@@ -121,6 +121,12 @@ cargo clippy --tests -- -D warnings
 cargo test
 ```
 
+On Windows, run the local dogfood smoke after rebuilding helper binaries:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows-smoke.ps1
+```
+
 To run the same tests against another candidate implementation:
 
 ```bash

@@ -191,6 +191,10 @@ pub unsafe fn get_current_token_for_restriction() -> Result<HANDLE> {
     Ok(h)
 }
 
+/// Returns the logon SID bytes for a Windows access token.
+///
+/// # Safety
+/// `h_token` must be a valid token handle readable with `GetTokenInformation`.
 pub unsafe fn get_logon_sid_bytes(h_token: HANDLE) -> Result<Vec<u8>> {
     unsafe fn scan_token_groups_for_logon(h: HANDLE) -> Option<Vec<u8>> {
         let mut needed: u32 = 0;

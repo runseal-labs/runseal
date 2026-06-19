@@ -9,6 +9,7 @@ use codex_windows_sandbox::SetupErrorCode;
 use codex_windows_sandbox::SetupErrorReport;
 use codex_windows_sandbox::SetupFailure;
 use codex_windows_sandbox::add_deny_write_ace;
+use codex_windows_sandbox::allow_null_device;
 use codex_windows_sandbox::canonicalize_path;
 use codex_windows_sandbox::convert_string_sid_to_sid;
 use codex_windows_sandbox::ensure_allow_mask_aces_with_inheritance;
@@ -1199,6 +1200,9 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
     })?;
     let sandbox_group_sid_str =
         string_from_sid_bytes(&sandbox_group_sid).map_err(anyhow::Error::msg)?;
+    unsafe {
+        allow_null_device(sandbox_group_psid);
+    }
 
     let mut refresh_errors: Vec<String> = Vec::new();
     if !refresh_only {
@@ -1292,6 +1296,7 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
         // Refresh can then repair polluted setup state without another UAC prompt.
         unsafe {
             remove_deny_write_aces(root, root_cap_psid)?;
+            allow_null_device(root_cap_psid);
         }
         for (label, psid) in [
             ("sandbox_group", sandbox_group_psid),
