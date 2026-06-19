@@ -53,19 +53,21 @@ pub fn sandbox_setup_is_complete(codex_home: &Path) -> bool {
 fn load_marker(codex_home: &Path) -> Result<Option<SetupMarker>> {
     let path = setup_marker_path(codex_home);
     let marker = match fs::read_to_string(&path) {
-        Ok(contents) => match serde_json::from_str::<SetupMarker>(&contents) {
-            Ok(m) => Some(m),
-            Err(err) => {
-                if contains_legacy_split_identity_schema(&contents) {
-                    return Err(legacy_split_identity_error());
-                }
-                debug_log(
-                    &format!("sandbox setup marker parse failed: {err}"),
-                    Some(codex_home),
-                );
-                None
+        Ok(contents) => {
+            if contains_legacy_split_identity_schema(&contents) {
+                return Err(legacy_split_identity_error());
             }
-        },
+            match serde_json::from_str::<SetupMarker>(&contents) {
+                Ok(m) => Some(m),
+                Err(err) => {
+                    debug_log(
+                        &format!("sandbox setup marker parse failed: {err}"),
+                        Some(codex_home),
+                    );
+                    None
+                }
+            }
+        }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
         Err(err) => {
             debug_log(
@@ -91,12 +93,12 @@ fn load_users(codex_home: &Path) -> Result<Option<SandboxUsersFile>> {
             return Ok(None);
         }
     };
+    if contains_legacy_split_identity_schema(&file) {
+        return Err(legacy_split_identity_error());
+    }
     match serde_json::from_str::<SandboxUsersFile>(&file) {
         Ok(users) => Ok(Some(users)),
         Err(err) => {
-            if contains_legacy_split_identity_schema(&file) {
-                return Err(legacy_split_identity_error());
-            }
             debug_log(
                 &format!("sandbox users parse failed: {err}"),
                 Some(codex_home),
@@ -461,6 +463,30 @@ mod tests {
     }
 
     #[test]
+    fn incompatible_setup_state_rejects_valid_users_file_with_legacy_fields() {
+        let codex_home = TempDir::new().expect("tempdir");
+        let users_path = sandbox_users_path(codex_home.path());
+        fs::create_dir_all(users_path.parent().expect("sandbox secrets dir"))
+            .expect("create sandbox secrets dir");
+        let contents = format!(
+            r#"{{"version":5,"user":{{"username":"RunSealSandbox","password":"secret"}},"{}":{{}}}}"#,
+            concat!("off", "line_username")
+        );
+        fs::write(&users_path, contents).expect("write users");
+
+        let err = reject_incompatible_setup_state(codex_home.path())
+            .expect_err("valid users file with legacy fields must fail closed");
+        let failure = err
+            .downcast_ref::<SetupFailure>()
+            .expect("valid users file with legacy fields error must be structured");
+
+        assert_eq!(
+            failure.code,
+            SetupErrorCode::OrchestratorSetupStateIncompatible
+        );
+    }
+
+    #[test]
     fn incompatible_setup_state_rejects_legacy_split_identity_marker() {
         let codex_home = TempDir::new().expect("tempdir");
         let marker_path = setup_marker_path(codex_home.path());
@@ -483,6 +509,29 @@ mod tests {
             SetupErrorCode::OrchestratorSetupStateIncompatible
         );
         assert!(marker_path.exists());
+    }
+
+    #[test]
+    fn incompatible_setup_state_rejects_valid_marker_with_legacy_fields() {
+        let codex_home = TempDir::new().expect("tempdir");
+        let marker_path = setup_marker_path(codex_home.path());
+        fs::create_dir_all(marker_path.parent().expect("sandbox dir")).expect("create sandbox dir");
+        let contents = format!(
+            r#"{{"version":5,"sandbox_username":"RunSealSandbox","created_at":"2026-01-01T00:00:00Z","proxy_ports":[],"allow_local_binding":false,"{}":{{}}}}"#,
+            concat!("on", "line_username")
+        );
+        fs::write(&marker_path, contents).expect("write marker");
+
+        let err = reject_incompatible_setup_state(codex_home.path())
+            .expect_err("valid marker with legacy fields must fail closed");
+        let failure = err
+            .downcast_ref::<SetupFailure>()
+            .expect("valid marker with legacy fields error must be structured");
+
+        assert_eq!(
+            failure.code,
+            SetupErrorCode::OrchestratorSetupStateIncompatible
+        );
     }
 
     #[test]
