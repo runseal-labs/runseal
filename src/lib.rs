@@ -1696,6 +1696,7 @@ fn network_audit_json(policy: &SandboxPolicy) -> Value {
     json!({
         "mode": policy.network.mode.as_str(),
         "routes": policy.network.routes,
+        "direct_allow_hosts": policy.network.direct_allow_hosts,
     })
 }
 

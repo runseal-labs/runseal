@@ -1091,6 +1091,10 @@ fn execute_audits_effective_network_routes() -> Result<()> {
     assert_eq!(response["result"]["status"], "finished");
     assert_eq!(response["result"]["network"]["mode"], "proxy");
     assert_eq!(response["result"]["network"]["routes"], routes);
+    assert_eq!(
+        response["result"]["network"]["direct_allow_hosts"],
+        json!([])
+    );
 
     let audit_path = response["result"]["audit_path"]
         .as_str()
@@ -1103,6 +1107,7 @@ fn execute_audits_effective_network_routes() -> Result<()> {
             .with_context(|| format!("audit event {event_type} must exist"))?;
         assert_eq!(event["network"]["mode"], "proxy");
         assert_eq!(event["network"]["routes"], routes);
+        assert_eq!(event["network"]["direct_allow_hosts"], json!([]));
     }
     Ok(())
 }
