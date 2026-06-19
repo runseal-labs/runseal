@@ -340,15 +340,7 @@ fn run_windows_sandbox_setup(cwd: &Path) -> Result<(), String> {
 #[cfg(windows)]
 fn run_windows_sandbox_setup_status(cwd: &Path) -> Result<(), String> {
     validate_execution_cwd(cwd).map_err(|err| err.message)?;
-    let sandbox_home = backend::windows_sandbox_home(cwd);
-    let broker_available =
-        codex_windows_sandbox::provisioning_setup_broker_is_available(&sandbox_home);
-    let elevated = codex_windows_sandbox::current_process_is_elevated()
-        .map_err(|err| format!("windows sandbox setup status failed: {err}"))?;
-    println!(
-        "{}",
-        windows_sandbox_setup_status_payload(true, broker_available, Some(elevated))
-    );
+    println!("{}", windows_sandbox_setup_status_for_cwd(cwd)?);
     Ok(())
 }
 
@@ -360,6 +352,20 @@ fn run_windows_sandbox_setup_status(cwd: &Path) -> Result<(), String> {
         windows_sandbox_setup_status_payload(false, false, None)
     );
     Ok(())
+}
+
+#[cfg(windows)]
+fn windows_sandbox_setup_status_for_cwd(cwd: &Path) -> Result<Value, String> {
+    let sandbox_home = backend::windows_sandbox_home(cwd);
+    let broker_available =
+        codex_windows_sandbox::provisioning_setup_broker_is_available(&sandbox_home);
+    let elevated = codex_windows_sandbox::current_process_is_elevated()
+        .map_err(|err| format!("windows sandbox setup status failed: {err}"))?;
+    Ok(windows_sandbox_setup_status_payload(
+        true,
+        broker_available,
+        Some(elevated),
+    ))
 }
 
 fn windows_sandbox_setup_status_payload(
@@ -1130,10 +1136,10 @@ fn execute_command(
     let execution_output = match backend.execute_plan(&plan, command, cwd, stdin, &env, timeout) {
         Ok(output) => output,
         Err(err) => {
-            let backend_error = backend_execution_error(&err, sandbox_enforced);
+            let backend_error = backend_execution_error(&err, sandbox_enforced, cwd);
             let failure_reason = backend_error
                 .as_ref()
-                .map(|(_, reason)| reason.as_str())
+                .map(|(_, reason, _)| reason.as_str())
                 .unwrap_or("execution failed to start");
             let failed = execution_event_now(
                 json!({
@@ -1150,23 +1156,24 @@ fn execute_command(
             );
             write_audit_event_with_metadata(&mut audit, &failed, &metadata)?;
 
-            if let Some((code, reason)) = backend_error {
-                return Err(RunSealError::with_details(
-                    code,
-                    reason,
-                    json!({
-                        "execution_id": ids.execution_id,
-                        "session_id": ids.session_id,
-                        "seal_id": ids.seal_id,
-                        "audit_path": audit_path,
-                        "backend": {
-                            "name": plan.backend,
-                            "status": plan.backend_status,
-                            "platform": plan.platform,
-                        },
-                        "platform_plan": plan.json(),
-                    }),
-                ));
+            if let Some((code, reason, setup_status)) = backend_error {
+                let mut details = json!({
+                    "execution_id": ids.execution_id,
+                    "session_id": ids.session_id,
+                    "seal_id": ids.seal_id,
+                    "audit_path": audit_path,
+                    "backend": {
+                        "name": plan.backend,
+                        "status": plan.backend_status,
+                        "platform": plan.platform,
+                    },
+                    "platform_plan": plan.json(),
+                });
+                if let (Some(details), Some(setup_status)) = (details.as_object_mut(), setup_status)
+                {
+                    details.insert("setup_status".to_string(), setup_status);
+                }
+                return Err(RunSealError::with_details(code, reason, details));
             }
 
             return Err(RunSealError::with_details(
@@ -1382,14 +1389,36 @@ fn execute_command(
 fn backend_execution_error(
     err: &io::Error,
     sandbox_enforced: bool,
-) -> Option<(&'static str, String)> {
+    cwd: &Path,
+) -> Option<(&'static str, String, Option<Value>)> {
     if let Some(reason) = policy_transition_busy_reason(err) {
-        return Some(("POLICY_TRANSITION_BUSY", reason.to_string()));
+        return Some(("POLICY_TRANSITION_BUSY", reason.to_string(), None));
     }
     if sandbox_enforced {
-        return backend_unavailable_reason(err)
-            .map(|reason| ("BACKEND_UNAVAILABLE", reason.to_string()));
+        return backend_unavailable_reason(err).map(|reason| {
+            (
+                "BACKEND_UNAVAILABLE",
+                reason.to_string(),
+                backend_unavailable_setup_status(reason, cwd),
+            )
+        });
     }
+    None
+}
+
+fn backend_unavailable_setup_status(reason: &str, cwd: &Path) -> Option<Value> {
+    #[cfg(windows)]
+    {
+        if reason.starts_with("windows sandbox setup unavailable") {
+            return windows_sandbox_setup_status_for_cwd(cwd).ok();
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = (reason, cwd);
+    }
+
     None
 }
 
@@ -1444,11 +1473,12 @@ mod tests {
     #[test]
     fn policy_transition_busy_maps_to_public_error_code() {
         let err = backend::policy_transition_busy_error_for_test();
-        let (code, reason) =
-            backend_execution_error(&err, true).expect("busy error must map to public code");
+        let (code, reason, setup_status) = backend_execution_error(&err, true, Path::new("."))
+            .expect("busy error must map to public code");
 
         assert_eq!(code, "POLICY_TRANSITION_BUSY");
         assert!(reason.contains("policy transition busy"));
+        assert_eq!(setup_status, None);
     }
 
     #[test]

@@ -250,6 +250,23 @@ fn assert_backend_unavailable(response: &Value, root: &std::path::Path) -> Resul
         response["error"]["data"]["backend"]["name"],
         expected_backend_name()
     );
+    if cfg!(windows) {
+        let setup_status = &response["error"]["data"]["setup_status"];
+        assert_eq!(setup_status["setup"], "windows-sandbox");
+        assert_eq!(setup_status["platform_supported"], true);
+        assert!(
+            matches!(
+                setup_status["broker"].as_str(),
+                Some("available" | "unavailable")
+            ),
+            "{setup_status}"
+        );
+        assert!(setup_status["elevated"].is_boolean(), "{setup_status}");
+        assert_eq!(
+            setup_status["can_repair"], setup_status["elevated"],
+            "{setup_status}"
+        );
+    }
     assert_no_private_windows_setup_terms(response);
     let audit_path = response["error"]["data"]["audit_path"]
         .as_str()
