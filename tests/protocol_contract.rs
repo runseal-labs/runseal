@@ -3,9 +3,10 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use std::env;
 use std::fs;
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
+use std::time::Duration;
 use tempfile::TempDir;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
@@ -336,6 +337,44 @@ fn get_version_rpc_contract() -> Result<()> {
             .iter()
             .any(|version| version == "runseal.policy/v1")
     );
+    Ok(())
+}
+
+#[test]
+fn rpc_stdio_replies_before_stdin_eof() -> Result<()> {
+    let bin = require_runseal_bin()?;
+    let mut child = Command::new(bin)
+        .args(["rpc", "--stdio"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to spawn runseal rpc")?;
+    let mut stdin = child.stdin.take().context("stdin unavailable")?;
+    let stdout = child.stdout.take().context("stdout unavailable")?;
+
+    stdin.write_all(rpc_request("getVersion", json!({})).as_bytes())?;
+    stdin.flush()?;
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        let result = BufReader::new(stdout).read_line(&mut line).map(|_| line);
+        let _ = tx.send(result);
+    });
+    let line = rx
+        .recv_timeout(Duration::from_secs(2))
+        .context("rpc response timed out before stdin eof")??;
+    let response: Value = serde_json::from_str(&line)?;
+    assert_eq!(response["id"], 1);
+    assert_eq!(
+        response["result"]["protocol_version"],
+        "runseal.protocol/v1"
+    );
+
+    drop(stdin);
+    let status = child.wait().context("failed to wait for runseal rpc")?;
+    assert!(status.success());
     Ok(())
 }
 

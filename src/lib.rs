@@ -27,7 +27,7 @@ use process_output::decode_process_output;
 use serde_json::{Map, Value, json};
 use std::env;
 use std::fs;
-use std::io::{self, Read};
+use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::Output;
 use std::time::{Duration, Instant};
@@ -148,16 +148,21 @@ fn capabilities_payload() -> Value {
 }
 
 fn run_rpc_stdio() -> Result<(), String> {
-    let mut input = String::new();
-    io::stdin()
-        .read_to_string(&mut input)
-        .map_err(|err| format!("failed to read stdin: {err}"))?;
-
-    for line in input.lines().filter(|line| !line.trim().is_empty()) {
-        let request: Value =
-            serde_json::from_str(line).map_err(|err| format!("invalid JSON-RPC request: {err}"))?;
+    let stdin = io::stdin();
+    let mut stdout = io::stdout().lock();
+    for line in stdin.lock().lines() {
+        let line = line.map_err(|err| format!("failed to read stdin: {err}"))?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let request: Value = serde_json::from_str(&line)
+            .map_err(|err| format!("invalid JSON-RPC request: {err}"))?;
         for message in handle_rpc_request(&request) {
-            println!("{message}");
+            writeln!(stdout, "{message}")
+                .map_err(|err| format!("failed to write stdout: {err}"))?;
+            stdout
+                .flush()
+                .map_err(|err| format!("failed to flush stdout: {err}"))?;
         }
     }
     Ok(())
