@@ -372,6 +372,7 @@ fn windows_sandbox_setup_status_payload(
         "platform_supported": platform_supported,
         "broker": if broker_available { "available" } else { "unavailable" },
         "elevated": elevated,
+        "can_repair": platform_supported && elevated.unwrap_or(false),
         "requires_setup": platform_supported && !broker_available,
     })
 }
