@@ -40,6 +40,12 @@ impl ManagedSandboxProxy {
             return Ok(Self { inner });
         }
 
+        let proxy = Self::start_dedicated()?;
+        *shared = Arc::downgrade(&proxy.inner);
+        Ok(proxy)
+    }
+
+    fn start_dedicated() -> io::Result<Self> {
         let listener = TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))?;
         listener.set_nonblocking(true)?;
         let addr = listener.local_addr()?;
@@ -51,7 +57,6 @@ impl ManagedSandboxProxy {
             shutdown,
             thread: Some(thread),
         });
-        *shared = Arc::downgrade(&inner);
         Ok(Self { inner })
     }
 
@@ -321,6 +326,22 @@ mod tests {
             .expect("second HTTP_PROXY");
 
         assert_eq!(first_url, second_url);
+    }
+
+    #[test]
+    fn drops_listener_when_last_proxy_handle_drops() {
+        let proxy = ManagedSandboxProxy::start_dedicated().expect("start proxy");
+        let addr = proxy.inner.addr;
+        let stream = TcpStream::connect_timeout(&addr, Duration::from_secs(1))
+            .expect("proxy listener should accept while proxy is alive");
+        drop(stream);
+
+        drop(proxy);
+
+        assert!(
+            TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_err(),
+            "managed proxy listener must stop after the last proxy handle drops"
+        );
     }
 
     #[test]
