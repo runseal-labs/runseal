@@ -1,7 +1,7 @@
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::{
-    Arc, Mutex, OnceLock, Weak,
+    Arc, Mutex, OnceLock,
     atomic::{AtomicBool, Ordering},
 };
 use std::thread::{self, JoinHandle};
@@ -34,20 +34,23 @@ struct ManagedSandboxProxyState {
 
 impl ManagedSandboxProxy {
     pub(super) fn start() -> io::Result<Self> {
-        static SHARED_PROXY: OnceLock<Mutex<Weak<ManagedSandboxProxyState>>> = OnceLock::new();
+        static SHARED_PROXY: OnceLock<Mutex<Option<Arc<ManagedSandboxProxyState>>>> =
+            OnceLock::new();
         let mut shared = SHARED_PROXY
-            .get_or_init(|| Mutex::new(Weak::new()))
+            .get_or_init(|| Mutex::new(None))
             .lock()
             .map_err(|_| io::Error::other("managed proxy cache lock poisoned"))?;
-        if let Some(inner) = shared.upgrade() {
+        if let Some(inner) = shared.as_ref() {
             if inner
                 .thread
                 .as_ref()
                 .is_some_and(std::thread::JoinHandle::is_finished)
             {
-                *shared = Weak::new();
+                *shared = None;
             } else {
-                return Ok(Self { inner });
+                return Ok(Self {
+                    inner: Arc::clone(inner),
+                });
             }
         }
 
@@ -55,7 +58,7 @@ impl ManagedSandboxProxy {
             IpAddr::V4(Ipv4Addr::LOCALHOST),
             MANAGED_PROXY_PORT,
         ))?;
-        *shared = Arc::downgrade(&proxy.inner);
+        *shared = Some(Arc::clone(&proxy.inner));
         Ok(proxy)
     }
 
@@ -368,6 +371,20 @@ mod tests {
             .expect("second HTTP_PROXY");
 
         assert_eq!(first_url, second_url);
+    }
+
+    #[test]
+    fn shared_proxy_listener_survives_handle_drop() {
+        let first = ManagedSandboxProxy::start().expect("start first proxy");
+        let addr = first.inner.addr;
+        drop(first);
+
+        let stream = TcpStream::connect_timeout(&addr, Duration::from_secs(1))
+            .expect("shared proxy listener should stay alive for process reuse");
+        drop(stream);
+
+        let second = ManagedSandboxProxy::start().expect("start second proxy");
+        assert_eq!(second.inner.addr, addr);
     }
 
     #[test]
