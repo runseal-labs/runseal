@@ -239,7 +239,21 @@ fn run_exec(args: &[String]) -> Result<(), String> {
         print!("{EXEC_HELP_TEXT}");
         return Ok(());
     }
-    let request = parse_exec_args(args)?;
+    let machine_readable = args
+        .iter()
+        .take_while(|arg| arg.as_str() != "--")
+        .any(|arg| arg == "--json" || arg == "--events");
+    let request = match parse_exec_args(args) {
+        Ok(request) => request,
+        Err(err) if machine_readable => {
+            println!(
+                "{}",
+                cli_error_payload(RunSealError::new("INVALID_REQUEST", err))
+            );
+            return Err(String::new());
+        }
+        Err(err) => return Err(err),
+    };
     let policy = match normalize_policy(
         &Value::String(request.policy.clone()),
         &request.cwd,

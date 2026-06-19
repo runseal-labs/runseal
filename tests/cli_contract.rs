@@ -814,3 +814,37 @@ fn exec_cli_rejects_invalid_timeout_ms() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn exec_machine_readable_modes_report_parse_errors_as_json() -> Result<()> {
+    for mode in ["--json", "--events"] {
+        let output = run_cli(&[
+            "exec",
+            mode,
+            "--policy",
+            "danger-full-access",
+            "--timeout-ms",
+            "soon",
+            "--",
+            python_bin(),
+            "-c",
+            "print('must not run')",
+        ])?;
+
+        assert!(!output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.is_empty(), "{stderr}");
+        let messages = stdout_json_lines(&output)?;
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["error"]["data"]["code"], "INVALID_REQUEST");
+        assert!(
+            messages[0]["error"]["data"]["reason"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("timeout must be an integer in milliseconds"),
+            "{}",
+            messages[0]
+        );
+    }
+    Ok(())
+}
