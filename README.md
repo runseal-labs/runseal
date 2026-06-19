@@ -62,6 +62,8 @@ Run sandbox bootstrap or repair explicitly from an elevated PowerShell session:
 .\target\debug\runseal.exe setup windows-sandbox --cwd C:\path\to\workspace
 ```
 
+Use `--json` when an agent needs structured setup failure details.
+
 Check broker readiness without changing setup state:
 
 ```powershell

@@ -47,17 +47,18 @@ Commands:
   exec --policy <policy> [--network <mode>] [--cwd <path>] -- <command> [args...]
   explain-policy --policy <policy> [--network <mode>] [--cwd <path>]
   capabilities
-  setup windows-sandbox [--cwd <path>] [--status]
+  setup windows-sandbox [--cwd <path>] [--status] [--json]
   rpc --stdio
   version
 ";
 const SETUP_HELP_TEXT: &str = "\
-Usage: runseal setup windows-sandbox [--cwd <path>] [--status]
+Usage: runseal setup windows-sandbox [--cwd <path>] [--status] [--json]
 
 Windows sandbox setup:
   First install requires an elevated PowerShell; later repairs reuse the sandbox broker when available.
   Sandboxed exec fails closed when setup is missing or stale.
   --status reports broker readiness without changing setup state.
+  --json reports setup failures as structured JSON.
 ";
 const EXEC_HELP_TEXT: &str = "\
 Usage: runseal exec [--json|--events] [--policy <policy>] [--network <mode>] [--cwd <path>] [--timeout-ms <ms>] -- <command> [args...]
@@ -332,20 +333,24 @@ fn run_setup(args: &[String]) -> Result<(), String> {
             if request.status {
                 return run_windows_sandbox_setup_status(&request.cwd);
             }
-            run_windows_sandbox_setup(&request.cwd)
+            run_windows_sandbox_setup(&request.cwd, request.json)
         }
-        _ => Err("usage: runseal setup windows-sandbox [--cwd <path>] [--status]".to_string()),
+        _ => Err(
+            "usage: runseal setup windows-sandbox [--cwd <path>] [--status] [--json]".to_string(),
+        ),
     }
 }
 
 struct WindowsSetupArgs {
     cwd: PathBuf,
     status: bool,
+    json: bool,
 }
 
 fn parse_windows_setup_args(args: &[String]) -> Result<WindowsSetupArgs, String> {
     let mut cwd = current_dir();
     let mut status = false;
+    let mut json = false;
     let mut index = 0;
 
     while index < args.len() {
@@ -353,30 +358,47 @@ fn parse_windows_setup_args(args: &[String]) -> Result<WindowsSetupArgs, String>
             "--cwd" => {
                 index += 1;
                 let value = args.get(index).ok_or_else(|| {
-                    "usage: runseal setup windows-sandbox [--cwd <path>] [--status]".to_string()
+                    "usage: runseal setup windows-sandbox [--cwd <path>] [--status] [--json]"
+                        .to_string()
                 })?;
                 cwd = PathBuf::from(value);
             }
             "--status" => status = true,
+            "--json" => json = true,
             _ => {
                 return Err(
-                    "usage: runseal setup windows-sandbox [--cwd <path>] [--status]".to_string(),
+                    "usage: runseal setup windows-sandbox [--cwd <path>] [--status] [--json]"
+                        .to_string(),
                 );
             }
         }
         index += 1;
     }
 
-    Ok(WindowsSetupArgs { cwd, status })
+    Ok(WindowsSetupArgs { cwd, status, json })
 }
 
 #[cfg(windows)]
-fn run_windows_sandbox_setup(cwd: &Path) -> Result<(), String> {
-    validate_execution_cwd(cwd).map_err(|err| err.message)?;
+fn run_windows_sandbox_setup(cwd: &Path, json_output: bool) -> Result<(), String> {
+    if let Err(err) = validate_execution_cwd(cwd) {
+        if json_output {
+            println!("{}", cli_error_payload(err));
+            return Err(String::new());
+        }
+        return Err(err.message);
+    }
     let sandbox_home = backend::windows_sandbox_home(cwd);
     let real_user = env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string());
-    codex_windows_sandbox::run_elevated_provisioning_setup(&sandbox_home, &real_user)
-        .map_err(|_| WINDOWS_SANDBOX_SETUP_FAILED.to_string())?;
+    if codex_windows_sandbox::run_elevated_provisioning_setup(&sandbox_home, &real_user).is_err() {
+        if json_output {
+            println!(
+                "{}",
+                cli_error_payload(windows_sandbox_setup_failed_error(cwd))
+            );
+            return Err(String::new());
+        }
+        return Err(WINDOWS_SANDBOX_SETUP_FAILED.to_string());
+    }
     println!("{}", windows_sandbox_setup_success_payload());
     Ok(())
 }
@@ -391,10 +413,7 @@ fn run_windows_sandbox_setup_status(cwd: &Path) -> Result<(), String> {
 #[cfg(not(windows))]
 fn run_windows_sandbox_setup_status(cwd: &Path) -> Result<(), String> {
     validate_execution_cwd(cwd).map_err(|err| err.message)?;
-    println!(
-        "{}",
-        windows_sandbox_setup_status_payload(false, false, None)
-    );
+    println!("{}", windows_sandbox_setup_status_for_cwd(cwd)?);
     Ok(())
 }
 
@@ -410,6 +429,22 @@ fn windows_sandbox_setup_status_for_cwd(cwd: &Path) -> Result<Value, String> {
         broker_available,
         Some(elevated),
     ))
+}
+
+#[cfg(not(windows))]
+fn windows_sandbox_setup_status_for_cwd(cwd: &Path) -> Result<Value, String> {
+    validate_execution_cwd(cwd).map_err(|err| err.message)?;
+    Ok(windows_sandbox_setup_status_payload(false, false, None))
+}
+
+fn windows_sandbox_setup_failed_error(cwd: &Path) -> RunSealError {
+    let setup_status = windows_sandbox_setup_status_for_cwd(cwd)
+        .unwrap_or_else(|_| windows_sandbox_setup_status_payload(cfg!(windows), false, None));
+    RunSealError::with_details(
+        "WINDOWS_SANDBOX_SETUP_FAILED",
+        WINDOWS_SANDBOX_SETUP_FAILED,
+        json!({ "setup_status": setup_status }),
+    )
 }
 
 fn windows_sandbox_setup_status_payload(
@@ -445,7 +480,21 @@ fn windows_sandbox_setup_success_payload() -> Value {
 }
 
 #[cfg(not(windows))]
-fn run_windows_sandbox_setup(_cwd: &Path) -> Result<(), String> {
+fn run_windows_sandbox_setup(cwd: &Path, json_output: bool) -> Result<(), String> {
+    if let Err(err) = validate_execution_cwd(cwd) {
+        if json_output {
+            println!("{}", cli_error_payload(err));
+            return Err(String::new());
+        }
+        return Err(err.message);
+    }
+    if json_output {
+        println!(
+            "{}",
+            cli_error_payload(windows_sandbox_setup_failed_error(cwd))
+        );
+        return Err(String::new());
+    }
     Err("windows sandbox setup is only supported on Windows".to_string())
 }
 
@@ -1562,6 +1611,18 @@ mod tests {
         assert!(WINDOWS_SANDBOX_SETUP_FAILED.contains("first install requires an elevated shell"));
         assert!(WINDOWS_SANDBOX_SETUP_FAILED.contains("repairs can reuse the setup broker"));
         assert!(!WINDOWS_SANDBOX_SETUP_FAILED.contains("install or repair requires"));
+    }
+
+    #[test]
+    fn windows_setup_failed_json_includes_setup_status() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let err = windows_sandbox_setup_failed_error(tmp.path());
+
+        assert_eq!(err.code, "WINDOWS_SANDBOX_SETUP_FAILED");
+        assert_eq!(err.reason, WINDOWS_SANDBOX_SETUP_FAILED);
+        let details = err.details.expect("details");
+        assert_eq!(details["setup_status"]["setup"], "windows-sandbox");
+        assert!(details["setup_status"]["next_action"].as_str().is_some());
     }
 
     #[test]

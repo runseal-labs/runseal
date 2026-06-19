@@ -256,6 +256,7 @@ fn setup_help_describes_explicit_windows_setup() -> Result<()> {
         assert!(stdout.contains("later repairs reuse the sandbox broker"));
         assert!(stdout.contains("fails closed"));
         assert!(stdout.contains("--status"));
+        assert!(stdout.contains("--json"));
         assert_no_private_windows_setup_terms(&stdout);
     }
     Ok(())
@@ -372,6 +373,26 @@ fn setup_rejects_invalid_cwd_before_windows_setup() -> Result<()> {
         assert!(!stderr.contains("windows sandbox setup failed"), "{stderr}");
         assert_no_private_windows_setup_terms(&stderr);
     }
+    Ok(())
+}
+
+#[test]
+fn setup_json_reports_invalid_cwd_as_json_error() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let missing = tmp.path().join("missing").to_string_lossy().to_string();
+    let output = run_cli(&["setup", "windows-sandbox", "--json", "--cwd", &missing])?;
+
+    assert!(!output.status.success());
+    assert!(output.stderr.is_empty());
+    let payload = stdout_json(&output)?;
+    assert_eq!(payload["error"]["data"]["code"], "INVALID_REQUEST");
+    assert!(
+        payload["error"]["data"]["reason"]
+            .as_str()
+            .expect("reason")
+            .contains("params.cwd must be an existing directory")
+    );
+    assert_no_private_windows_setup_terms(&payload.to_string());
     Ok(())
 }
 
