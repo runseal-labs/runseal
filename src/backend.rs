@@ -110,7 +110,7 @@ pub(crate) fn policy_transition_busy_error_for_test() -> io::Error {
 
 #[cfg(windows)]
 fn public_windows_setup_unavailable_reason(_code: &str) -> String {
-    "windows sandbox setup unavailable; run `runseal setup windows-sandbox` from an elevated shell"
+    "windows sandbox setup unavailable; run `runseal setup windows-sandbox` to install or repair"
         .to_string()
 }
 
@@ -1866,7 +1866,7 @@ mod tests {
                 "orchestrator_",
                 "helper_launch_failed"
             )),
-            "windows sandbox setup unavailable; run `runseal setup windows-sandbox` from an elevated shell"
+            "windows sandbox setup unavailable; run `runseal setup windows-sandbox` to install or repair"
         );
     }
 
