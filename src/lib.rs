@@ -35,6 +35,7 @@ use stdin::{stdin_audit_json, stdin_from_params};
 
 const PROTOCOL_VERSION: &str = "runseal.protocol/v1";
 const MAX_METADATA_BYTES: usize = 4096;
+const MAX_PROTOCOL_ID_BYTES: usize = 128;
 const MAX_ENV_ENTRIES: usize = 64;
 const MAX_ENV_KEY_BYTES: usize = 128;
 const MAX_ENV_VALUE_BYTES: usize = 4096;
@@ -529,6 +530,12 @@ fn required_prefixed_string_param(
         return Err(RunSealError::new(
             "INVALID_REQUEST",
             format!("params.{field} must start with {prefix}"),
+        ));
+    }
+    if value.len() > MAX_PROTOCOL_ID_BYTES {
+        return Err(RunSealError::new(
+            "INVALID_REQUEST",
+            format!("params.{field} must be at most {MAX_PROTOCOL_ID_BYTES} bytes"),
         ));
     }
     if !value
