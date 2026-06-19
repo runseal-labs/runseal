@@ -41,6 +41,18 @@ try {
             throw "workspace-write smoke failed"
         }
 
+        $timeoutOut = & $bin @(
+            "exec", "--json", "--policy", "workspace-write", "--network", "disabled", "--cwd", $workspace, "--timeout-ms", "100", "--",
+            "cmd", "/C", "ping 127.0.0.1 -n 6 >NUL"
+        )
+        if ($LASTEXITCODE -eq 0) {
+            throw "timeout smoke unexpectedly succeeded"
+        }
+        $timeout = $timeoutOut | ConvertFrom-Json
+        if ($timeout.error.data.code -ne "EXECUTION_TIMEOUT") {
+            throw "timeout smoke returned wrong error: $($timeoutOut -join '')"
+        }
+
         if (Get-Command git -ErrorAction SilentlyContinue) {
             $git = Invoke-RunSealJson -RunArgs @(
                 "exec", "--json", "--policy", "workspace-write", "--network", "disabled", "--cwd", $workspace, "--timeout-ms", "5000", "--",
