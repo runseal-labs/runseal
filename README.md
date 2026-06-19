@@ -127,6 +127,15 @@ On Windows, run the local dogfood smoke after rebuilding helper binaries:
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows-smoke.ps1
 ```
 
+For the managed proxy path specifically:
+
+```powershell
+cargo test --test filesystem_conformance network_proxy_allows_http_through_managed_proxy_when_supported_or_fails_closed
+```
+
+Add `-IncludeGit` to the Windows smoke command when validating a local Git for
+Windows installation inside the sandbox.
+
 To run the same tests against another candidate implementation:
 
 ```bash

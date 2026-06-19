@@ -1,3 +1,4 @@
+$IncludeGit = $args -contains "-IncludeGit"
 $ErrorActionPreference = "Stop"
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $bin = Join-Path $repoRoot "target\debug\runseal.exe"
@@ -33,12 +34,12 @@ try {
     $workspace = Join-Path ([System.IO.Path]::GetTempPath()) ("runseal-smoke-" + [guid]::NewGuid())
     New-Item -ItemType Directory -Path $workspace | Out-Null
     try {
-        $write = Invoke-RunSealJson -RunArgs @(
+        $identity = Invoke-RunSealJson -RunArgs @(
             "exec", "--json", "--policy", "workspace-write", "--network", "disabled", "--cwd", $workspace, "--timeout-ms", "5000", "--",
-            "cmd", "/C", "echo ok>inside.txt & type inside.txt"
+            "whoami.exe"
         )
-        if ($write.exit_code -ne 0 -or $write.stdout -notmatch "ok") {
-            throw "workspace-write smoke failed"
+        if ($identity.exit_code -ne 0 -or $identity.stdout -notmatch "runsealsandbox") {
+            throw "sandbox identity smoke failed: $($identity.stderr)"
         }
 
         $timeoutOut = & $bin @(
@@ -53,7 +54,7 @@ try {
             throw "timeout smoke returned wrong error: $($timeoutOut -join '')"
         }
 
-        if (Get-Command git -ErrorAction SilentlyContinue) {
+        if ($IncludeGit -and (Get-Command git -ErrorAction SilentlyContinue)) {
             $git = Invoke-RunSealJson -RunArgs @(
                 "exec", "--json", "--policy", "workspace-write", "--network", "disabled", "--cwd", $workspace, "--timeout-ms", "5000", "--",
                 "git", "--version"
