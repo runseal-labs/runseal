@@ -20,6 +20,7 @@ use codex_windows_sandbox::is_command_cwd_root;
 use codex_windows_sandbox::log_note;
 use codex_windows_sandbox::log_writer;
 use codex_windows_sandbox::path_mask_allows;
+use codex_windows_sandbox::remove_deny_read_aces;
 use codex_windows_sandbox::remove_deny_write_aces;
 use codex_windows_sandbox::resolve_current_exe_for_launch;
 use codex_windows_sandbox::sandbox_bin_dir;
@@ -144,6 +145,37 @@ fn log_line(log: &mut dyn Write, msg: &str) -> Result<()> {
         ))
     })?;
     Ok(())
+}
+
+unsafe fn remove_stale_read_denies_for_read_roots(
+    read_roots: &[PathBuf],
+    psid: *mut c_void,
+) -> usize {
+    let user_profile_parent = std::env::var_os("USERPROFILE")
+        .map(PathBuf::from)
+        .and_then(|path| canonicalize_path(&path).parent().map(Path::to_path_buf));
+    let mut seen = HashSet::new();
+    let mut removed = 0;
+    for root in read_roots {
+        let mut current = Some(canonicalize_path(root));
+        while let Some(path) = current {
+            if user_profile_parent
+                .as_ref()
+                .is_some_and(|stop| canonicalize_path(&path) == *stop)
+                || path.parent().is_none()
+            {
+                break;
+            }
+            if path.exists()
+                && seen.insert(path.clone())
+                && unsafe { remove_deny_read_aces(&path, psid) }.unwrap_or(false)
+            {
+                removed += 1;
+            }
+            current = path.parent().map(Path::to_path_buf);
+        }
+    }
+    removed
 }
 
 fn workspace_write_cap_sids_for_path(
@@ -1206,6 +1238,15 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
         log_line(
             log,
             &format!("applied {} deny-read ACLs", applied_deny_read_paths.len()),
+        )?;
+    }
+
+    let removed_stale_read_denies =
+        unsafe { remove_stale_read_denies_for_read_roots(&payload.read_roots, sandbox_group_psid) };
+    if removed_stale_read_denies > 0 {
+        log_line(
+            log,
+            &format!("removed {removed_stale_read_denies} stale read-deny ACLs"),
         )?;
     }
 

@@ -38,19 +38,11 @@ use anyhow::anyhow;
 use codex_protocol::models::PermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
-use windows_sys::Win32::Foundation::CloseHandle;
-use windows_sys::Win32::Foundation::ERROR_CANCELLED;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Security::AllocateAndInitializeSid;
 use windows_sys::Win32::Security::CheckTokenMembership;
 use windows_sys::Win32::Security::FreeSid;
 use windows_sys::Win32::Security::SECURITY_NT_AUTHORITY;
-use windows_sys::Win32::System::Threading::GetExitCodeProcess;
-use windows_sys::Win32::System::Threading::INFINITE;
-use windows_sys::Win32::System::Threading::WaitForSingleObject;
-use windows_sys::Win32::UI::Shell::SEE_MASK_NOCLOSEPROCESS;
-use windows_sys::Win32::UI::Shell::SHELLEXECUTEINFOW;
-use windows_sys::Win32::UI::Shell::ShellExecuteExW;
 
 pub const SETUP_VERSION: u32 = 6;
 pub const SANDBOX_USERNAME: &str = "RunSealSandbox";
@@ -200,7 +192,8 @@ fn run_setup_refresh_inner(
     }
     let (read_roots, write_roots) = build_payload_roots(&request, &overrides);
     let deny_read_paths = build_payload_deny_read_paths(overrides.deny_read_paths);
-    let deny_write_paths = build_payload_deny_write_paths(&request, overrides.deny_write_paths);
+    let deny_write_paths =
+        build_payload_deny_write_paths(&request, &write_roots, overrides.deny_write_paths);
     let network_guard =
         SandboxNetworkGuard::from_permissions(request.permissions, request.proxy_enforced);
     let sandbox_proxy_settings = sandbox_proxy_settings_from_env(request.env_map, network_guard);
@@ -643,42 +636,6 @@ fn loopback_proxy_port_from_url(url: &str) -> Option<u16> {
     }
     let port = port.parse::<u16>().ok()?;
     (port != 0).then_some(port)
-}
-
-fn quote_arg(arg: &str) -> String {
-    let needs = arg.is_empty()
-        || arg
-            .chars()
-            .any(|c| matches!(c, ' ' | '\t' | '\n' | '\r' | '"'));
-    if !needs {
-        return arg.to_string();
-    }
-    let mut out = String::from("\"");
-    let mut bs = 0;
-    for ch in arg.chars() {
-        match ch {
-            '\\' => {
-                bs += 1;
-            }
-            '"' => {
-                out.push_str(&"\\".repeat(bs * 2 + 1));
-                out.push('"');
-                bs = 0;
-            }
-            _ => {
-                if bs > 0 {
-                    out.push_str(&"\\".repeat(bs));
-                    bs = 0;
-                }
-                out.push(ch);
-            }
-        }
-    }
-    if bs > 0 {
-        out.push_str(&"\\".repeat(bs * 2));
-    }
-    out.push('"');
-    out
 }
 
 fn setup_payload_dir(codex_home: &Path) -> PathBuf {
@@ -1235,70 +1192,16 @@ fn run_setup_exe(
         return Ok(());
     }
 
-    match try_run_setup_exe_via_scheduled_task(payload_json.as_bytes(), codex_home, cleared_report)
-    {
-        Ok(()) => return Ok(()),
-        Err(err) => {
+    try_run_setup_exe_via_scheduled_task(payload_json.as_bytes(), codex_home, cleared_report)
+        .map_err(|err| {
             log_note(
                 &format!(
-                    "setup orchestrator: scheduled setup task unavailable; falling back to interactive elevation: {err}"
+                    "setup orchestrator: scheduled setup task unavailable; interactive elevation is disabled: {err}"
                 ),
                 Some(&sandbox_dir(codex_home)),
             );
-        }
-    }
-
-    let payload_path = write_setup_payload_file(codex_home, payload_json.as_bytes())?;
-    let exe_w = crate::winutil::to_wide(&exe);
-    let params = format!(
-        "--payload-file {}",
-        quote_arg(&payload_path.to_string_lossy())
-    );
-    let params_w = crate::winutil::to_wide(params);
-    let verb_w = crate::winutil::to_wide("runas");
-    let mut sei: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
-    sei.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
-    sei.fMask = SEE_MASK_NOCLOSEPROCESS;
-    sei.lpVerb = verb_w.as_ptr();
-    sei.lpFile = exe_w.as_ptr();
-    sei.lpParameters = params_w.as_ptr();
-    sei.nShow = 0; // SW_HIDE
-    let ok = unsafe { ShellExecuteExW(&mut sei) };
-    if ok == 0 || sei.hProcess == 0 {
-        let _ = remove_setup_payload_file(&payload_path);
-        let last_error = unsafe { GetLastError() };
-        let code = if last_error == ERROR_CANCELLED {
-            SetupErrorCode::OrchestratorHelperLaunchCanceled
-        } else {
-            SetupErrorCode::OrchestratorHelperLaunchFailed
-        };
-        return Err(failure(
-            code,
-            format!("ShellExecuteExW failed to launch setup helper: {last_error}"),
-        ));
-    }
-    unsafe {
-        WaitForSingleObject(sei.hProcess, INFINITE);
-        let mut code: u32 = 1;
-        GetExitCodeProcess(sei.hProcess, &mut code);
-        CloseHandle(sei.hProcess);
-        let _ = remove_setup_payload_file(&payload_path);
-        if code != 0 {
-            return Err(report_helper_failure(
-                codex_home,
-                cleared_report,
-                Some(code as i32),
-            ));
-        }
-    }
-    verify_setup_completed(codex_home)?;
-    if let Err(err) = clear_setup_error_report(codex_home) {
-        log_note(
-            &format!("setup orchestrator: failed to clear setup_error.json after success: {err}"),
-            Some(&sandbox_dir(codex_home)),
-        );
-    }
-    Ok(())
+            err
+        })
 }
 
 pub fn run_elevated_setup(
@@ -1318,7 +1221,8 @@ pub fn run_elevated_setup(
     })?;
     let (read_roots, write_roots) = build_payload_roots(&request, &overrides);
     let deny_read_paths = build_payload_deny_read_paths(overrides.deny_read_paths);
-    let deny_write_paths = build_payload_deny_write_paths(&request, overrides.deny_write_paths);
+    let deny_write_paths =
+        build_payload_deny_write_paths(&request, &write_roots, overrides.deny_write_paths);
     let network_guard =
         SandboxNetworkGuard::from_permissions(request.permissions, request.proxy_enforced);
     let sandbox_proxy_settings = sandbox_proxy_settings_from_env(request.env_map, network_guard);
@@ -1363,7 +1267,8 @@ pub fn run_elevated_network_setup(
     })?;
     let (read_roots, write_roots) = build_payload_roots(&request, &overrides);
     let deny_read_paths = build_payload_deny_read_paths(overrides.deny_read_paths);
-    let deny_write_paths = build_payload_deny_write_paths(&request, overrides.deny_write_paths);
+    let deny_write_paths =
+        build_payload_deny_write_paths(&request, &write_roots, overrides.deny_write_paths);
     let network_guard =
         SandboxNetworkGuard::from_permissions(request.permissions, request.proxy_enforced);
     let sandbox_proxy_settings = sandbox_proxy_settings_from_env(request.env_map, network_guard);
@@ -1466,13 +1371,12 @@ fn build_payload_roots(
     read_roots = filter_user_profile_root(read_roots);
     read_roots = filter_user_profile_root_exclusions(read_roots);
     read_roots = filter_ssh_config_dependency_roots(read_roots);
-    let write_root_set: HashSet<PathBuf> = write_roots.iter().cloned().collect();
-    read_roots.retain(|root| !write_root_set.contains(root));
     (read_roots, write_roots)
 }
 
 fn build_payload_deny_write_paths(
     request: &SandboxSetupRequest<'_>,
+    write_roots: &[PathBuf],
     explicit_deny_write_paths: Option<Vec<PathBuf>>,
 ) -> Vec<PathBuf> {
     let allow_deny_paths: AllowDenyPaths = compute_allow_paths_for_permissions(
@@ -1489,6 +1393,11 @@ fn build_payload_deny_write_paths(
     deny_write_paths.extend(existing_protected_children_for_roots(
         &allow_deny_paths.allow,
     ));
+    let write_root_keys = write_roots
+        .iter()
+        .map(|root| canonical_path_key(root))
+        .collect::<HashSet<_>>();
+    deny_write_paths.retain(|path| !write_root_keys.contains(&canonical_path_key(path)));
     deny_write_paths
 }
 
@@ -2582,13 +2491,14 @@ mod tests {
             &codex_home,
             Some(&override_roots),
         );
-        let (_read_roots, payload_write_roots) = build_payload_roots(&request, &overrides);
+        let (payload_read_roots, payload_write_roots) = build_payload_roots(&request, &overrides);
 
         let expected_workspace = dunce::canonicalize(&command_cwd).expect("canonical workspace");
         let expected_extra = dunce::canonicalize(&extra_root).expect("canonical extra root");
         let forbidden_codex_home = dunce::canonicalize(&codex_home).expect("canonical codex home");
         let forbidden_sandbox = dunce::canonicalize(&sandbox_root).expect("canonical sandbox root");
         assert_eq!(effective_write_roots, payload_write_roots);
+        assert!(payload_read_roots.contains(&expected_workspace));
         assert!(effective_write_roots.contains(&expected_workspace));
         assert!(effective_write_roots.contains(&expected_extra));
         assert!(!effective_write_roots.contains(&forbidden_codex_home));
@@ -2635,6 +2545,7 @@ mod tests {
         let command_git = command_cwd.join(".git");
         let extra_codex = extra_write_root.join(".codex");
         let explicit_deny = tmp.path().join("explicit-deny");
+        let mistaken_root_deny = command_cwd.clone();
         fs::create_dir_all(&command_git).expect("create command .git");
         fs::create_dir_all(&extra_codex).expect("create extra .codex");
         let writable_roots = vec![
@@ -2655,8 +2566,15 @@ mod tests {
             proxy_enforced: false,
         };
 
-        let deny_write_paths =
-            super::build_payload_deny_write_paths(&request, Some(vec![explicit_deny.clone()]));
+        let write_roots = vec![
+            dunce::canonicalize(&command_cwd).expect("canonical command cwd"),
+            dunce::canonicalize(&extra_write_root).expect("canonical extra write root"),
+        ];
+        let deny_write_paths = super::build_payload_deny_write_paths(
+            &request,
+            &write_roots,
+            Some(vec![explicit_deny.clone(), mistaken_root_deny]),
+        );
 
         assert_eq!(
             [
