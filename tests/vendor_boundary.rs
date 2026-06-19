@@ -175,7 +175,9 @@ fn vendored_windows_sandbox_child_processes_do_not_open_console_windows() {
 
     assert!(process.contains("CREATE_NO_WINDOW"));
     assert!(process.contains("STARTF_USESHOWWINDOW"));
+    assert!(process.contains("STARTF_FORCEOFFFEEDBACK"));
     assert!(process.contains("SW_HIDE"));
+    assert!(process.contains("STARTF_USESTDHANDLES | STARTF_FORCEOFFFEEDBACK"));
     assert!(process.contains("CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW"));
     assert!(
         process.contains(

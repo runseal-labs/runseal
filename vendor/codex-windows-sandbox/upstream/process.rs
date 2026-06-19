@@ -27,6 +27,7 @@ use windows_sys::Win32::System::Threading::CREATE_UNICODE_ENVIRONMENT;
 use windows_sys::Win32::System::Threading::CreateProcessAsUserW;
 use windows_sys::Win32::System::Threading::EXTENDED_STARTUPINFO_PRESENT;
 use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
+use windows_sys::Win32::System::Threading::STARTF_FORCEOFFFEEDBACK;
 use windows_sys::Win32::System::Threading::STARTF_USESHOWWINDOW;
 use windows_sys::Win32::System::Threading::STARTF_USESTDHANDLES;
 use windows_sys::Win32::System::Threading::STARTUPINFOEXW;
@@ -68,7 +69,7 @@ unsafe fn ensure_inheritable_stdio(si: &mut STARTUPINFOW) -> Result<()> {
             return Err(anyhow!("SetHandleInformation failed: {}", GetLastError()));
         }
     }
-    si.dwFlags |= STARTF_USESTDHANDLES;
+    si.dwFlags |= STARTF_USESTDHANDLES | STARTF_FORCEOFFFEEDBACK;
     si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
     si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
     si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
@@ -102,7 +103,8 @@ pub unsafe fn create_process_as_user(
             // if lpDesktop is not set when launching with a restricted token.
             // Point explicitly at the interactive desktop or a private desktop.
             si.StartupInfo.lpDesktop = desktop.startup_info_desktop();
-            si.StartupInfo.dwFlags |= STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+            si.StartupInfo.dwFlags |=
+                STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW | STARTF_FORCEOFFFEEDBACK;
             si.StartupInfo.wShowWindow = SW_HIDE as u16;
             si.StartupInfo.hStdInput = stdin_h;
             si.StartupInfo.hStdOutput = stdout_h;
