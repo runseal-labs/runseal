@@ -131,6 +131,17 @@ fn vendored_windows_runner_uses_runseal_binary_name() {
 }
 
 #[test]
+fn vendored_windows_runner_requires_kill_on_close_job() {
+    let runner = include_str!("../vendor/codex-windows-sandbox/upstream/bin/command_runner/win.rs");
+
+    assert!(runner.contains("assign_child_to_kill_on_close_job"));
+    assert!(runner.contains("cleanup_unmanaged_spawned_process"));
+    assert!(runner.contains("send_error(&pipe_write, \"spawn_failed\""));
+    assert!(runner.contains("TerminateJobObject(h_job, 1)"));
+    assert!(!runner.contains("runner failed to create kill-on-close job object"));
+}
+
+#[test]
 fn vendored_windows_setup_has_no_host_app_runtime_bin_special_case() {
     for (name, source) in VENDOR_SETUP_SOURCES {
         for forbidden in [

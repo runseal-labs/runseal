@@ -147,6 +147,38 @@ unsafe fn create_job_kill_on_close() -> Result<HANDLE> {
     Ok(h_job.into_raw())
 }
 
+unsafe fn assign_child_to_kill_on_close_job(process: HANDLE) -> Result<HANDLE> {
+    let job = create_job_kill_on_close()?;
+    if AssignProcessToJobObject(job, process) == 0 {
+        let err = GetLastError();
+        CloseHandle(job);
+        anyhow::bail!("runner failed to assign child process to job object: {err}");
+    }
+    Ok(job)
+}
+
+unsafe fn close_handle_if_valid(handle: HANDLE) {
+    if handle != 0 && handle != INVALID_HANDLE_VALUE {
+        CloseHandle(handle);
+    }
+}
+
+unsafe fn cleanup_unmanaged_spawned_process(mut spawned: IpcSpawnedProcess) {
+    if spawned.pi.hProcess != 0 {
+        let _ = TerminateProcess(spawned.pi.hProcess, 1);
+    }
+    close_handle_if_valid(spawned.pi.hThread);
+    close_handle_if_valid(spawned.pi.hProcess);
+    close_handle_if_valid(spawned.stdout_handle);
+    close_handle_if_valid(spawned.stderr_handle);
+    if let Some(handle) = spawned.stdin_handle.take() {
+        close_handle_if_valid(handle);
+    }
+    let _ = spawned.hpc_handle.take();
+    drop(spawned.conpty_owner.take());
+    drop(spawned._pipe_handles.take());
+}
+
 /// Open a named pipe created by the parent process.
 fn open_pipe(name: &str, access: u32) -> Result<HANDLE> {
     let path = to_wide(name);
@@ -546,39 +578,23 @@ pub fn main() -> Result<()> {
         }
     };
     let log_dir = Some(ipc_spawn.log_dir.as_path());
+    let h_job = match unsafe { assign_child_to_kill_on_close_job(ipc_spawn.pi.hProcess) } {
+        Ok(job) => job,
+        Err(err) => {
+            log_note(&err.to_string(), log_dir);
+            let _ = send_error(&pipe_write, "spawn_failed", err.to_string());
+            unsafe {
+                cleanup_unmanaged_spawned_process(ipc_spawn);
+            }
+            return Err(err);
+        }
+    };
     let pi = ipc_spawn.pi;
     let stdout_handle = ipc_spawn.stdout_handle;
     let stderr_handle = ipc_spawn.stderr_handle;
     let mut conpty_owner = ipc_spawn.conpty_owner;
     let stdin_handle = ipc_spawn.stdin_handle;
     let hpc_handle = Arc::new(StdMutex::new(ipc_spawn.hpc_handle));
-
-    let h_job = unsafe {
-        match create_job_kill_on_close() {
-            Ok(job) => {
-                if AssignProcessToJobObject(job, pi.hProcess) == 0 {
-                    log_note(
-                        &format!(
-                            "runner failed to assign child process to job object: {}",
-                            GetLastError()
-                        ),
-                        log_dir,
-                    );
-                    CloseHandle(job);
-                    None
-                } else {
-                    Some(job)
-                }
-            }
-            Err(err) => {
-                log_note(
-                    &format!("runner failed to create kill-on-close job object: {err}"),
-                    log_dir,
-                );
-                None
-            }
-        }
-    };
 
     let process_handle = Arc::new(StdMutex::new(Some(pi.hProcess)));
     let terminated_by_request = Arc::new(AtomicBool::new(false));
@@ -647,12 +663,10 @@ pub fn main() -> Result<()> {
         if pi.hProcess != 0 {
             CloseHandle(pi.hProcess);
         }
-        if let Some(job) = h_job {
-            if interrupted {
-                let _ = TerminateJobObject(job, 1);
-            }
-            CloseHandle(job);
+        if interrupted {
+            let _ = TerminateJobObject(h_job, 1);
         }
+        CloseHandle(h_job);
     }
 
     if let Ok(mut guard) = hpc_handle.lock() {
