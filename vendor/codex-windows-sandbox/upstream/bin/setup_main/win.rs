@@ -20,6 +20,7 @@ use codex_windows_sandbox::is_command_cwd_root;
 use codex_windows_sandbox::log_note;
 use codex_windows_sandbox::log_writer;
 use codex_windows_sandbox::path_mask_allows;
+use codex_windows_sandbox::resolve_current_exe_for_launch;
 use codex_windows_sandbox::sandbox_bin_dir;
 use codex_windows_sandbox::sandbox_dir;
 use codex_windows_sandbox::sandbox_secrets_dir;
@@ -69,6 +70,7 @@ const DENY_ACCESS: i32 = 3;
 const SETUP_PAYLOAD_DIRNAME: &str = "payloads";
 const SETUP_PAYLOAD_FILE_PREFIX: &str = "setup-payload-";
 const SETUP_PAYLOAD_FILE_SUFFIX: &str = ".json";
+const SETUP_EXE_FILENAME: &str = "runseal-windows-sandbox-setup.exe";
 const SCHEDULED_SETUP_TASK_NAME: &str = r"\RunSeal\WindowsSandboxSetup";
 const SCHEDULED_SETUP_PAYLOAD_PREFIX: &str = "setup-task-payload-";
 const SCHEDULED_SETUP_RESULT_PREFIX: &str = "setup-task-result-";
@@ -365,7 +367,7 @@ fn setup_task_request_id(path: &Path) -> Option<String> {
 }
 
 fn ensure_scheduled_setup_task(codex_home: &Path, log: &mut dyn Write) -> Result<()> {
-    let exe = std::env::current_exe().context("locate setup helper for scheduled task")?;
+    let exe = resolve_current_exe_for_launch(codex_home, SETUP_EXE_FILENAME);
     let broker_home = scheduled_setup_broker_home(codex_home);
     let task_command = format!(
         "{} --task-run {}",

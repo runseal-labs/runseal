@@ -211,6 +211,15 @@ fn vendored_windows_setup_reuses_elevation_via_scheduled_task() {
     assert!(setup_main.contains("run_scheduled_setup_task"));
     assert!(setup_main.contains("ensure_scheduled_setup_task"));
     assert!(setup_main.contains("ensure_scheduled_setup_task_or_fail"));
+    assert!(setup_main.contains("use codex_windows_sandbox::resolve_current_exe_for_launch;"));
+    assert!(
+        setup_main
+            .contains("const SETUP_EXE_FILENAME: &str = \"runseal-windows-sandbox-setup.exe\";")
+    );
+    assert!(
+        setup_main
+            .contains("let exe = resolve_current_exe_for_launch(codex_home, SETUP_EXE_FILENAME);")
+    );
     assert!(setup_main.contains("/RL"));
     assert!(setup_main.contains("HIGHEST"));
     assert!(setup_main.contains("\\RunSeal\\WindowsSandboxSetup"));

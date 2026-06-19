@@ -19,6 +19,9 @@ Local vendor patches:
   sandbox identity plus a network guard; guarded by `tests/vendor_boundary.rs`.
 - Collapse setup firewall rule names and helper entry points to RunSeal sandbox
   network guard vocabulary; guarded by `tests/vendor_boundary.rs`.
+- Register the scheduled setup broker with a materialized setup helper under
+  the sandbox bin directory instead of the helper process launch path; guarded
+  by `tests/vendor_boundary.rs`.
 - Replace upstream workspace/git dependency inheritance with local trimmed
   vendor crates; guarded by `tests/vendor_boundary.rs`.
 

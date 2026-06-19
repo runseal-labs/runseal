@@ -39,7 +39,7 @@ const MAX_ENV_ENTRIES: usize = 64;
 const MAX_ENV_KEY_BYTES: usize = 128;
 const MAX_ENV_VALUE_BYTES: usize = 4096;
 const WINDOWS_SANDBOX_SETUP_FAILED: &str =
-    "windows sandbox setup failed; first install requires an elevated shell";
+    "windows sandbox setup failed; install or repair requires an elevated shell";
 const HELP_TEXT: &str = "\
 Usage: runseal <command> [options]
 
