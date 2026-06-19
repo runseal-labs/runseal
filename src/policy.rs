@@ -1221,6 +1221,20 @@ mod tests {
     }
 
     #[test]
+    fn workspace_path_changes_canonical_hash() {
+        let first =
+            normalize_policy(&json!("workspace-write"), Path::new("/workspace-a"), None).unwrap();
+        let second =
+            normalize_policy(&json!("workspace-write"), Path::new("/workspace-b"), None).unwrap();
+
+        assert_ne!(
+            first.canonical_json()["filesystem"],
+            second.canonical_json()["filesystem"]
+        );
+        assert_ne!(first.hash(), second.hash());
+    }
+
+    #[test]
     fn inline_policy_rejects_unknown_top_level_fields() {
         assert_policy_invalid(
             json!({
