@@ -343,7 +343,7 @@ fn run_setup(args: &[String]) -> Result<(), String> {
         [target, rest @ ..] if target == "windows-sandbox" => {
             let request = parse_windows_setup_args(rest)?;
             if request.status {
-                return run_windows_sandbox_setup_status(&request.cwd);
+                return run_windows_sandbox_setup_status(&request.cwd, request.json);
             }
             run_windows_sandbox_setup(&request.cwd, request.json)
         }
@@ -440,15 +440,27 @@ fn run_windows_sandbox_setup(cwd: &Path, json_output: bool) -> Result<(), String
 }
 
 #[cfg(windows)]
-fn run_windows_sandbox_setup_status(cwd: &Path) -> Result<(), String> {
-    validate_execution_cwd(cwd).map_err(|err| err.message)?;
+fn run_windows_sandbox_setup_status(cwd: &Path, json_output: bool) -> Result<(), String> {
+    if let Err(err) = validate_execution_cwd(cwd) {
+        if json_output {
+            println!("{}", cli_error_payload(err));
+            return Err(String::new());
+        }
+        return Err(err.message);
+    }
     println!("{}", windows_sandbox_setup_status_for_cwd(cwd)?);
     Ok(())
 }
 
 #[cfg(not(windows))]
-fn run_windows_sandbox_setup_status(cwd: &Path) -> Result<(), String> {
-    validate_execution_cwd(cwd).map_err(|err| err.message)?;
+fn run_windows_sandbox_setup_status(cwd: &Path, json_output: bool) -> Result<(), String> {
+    if let Err(err) = validate_execution_cwd(cwd) {
+        if json_output {
+            println!("{}", cli_error_payload(err));
+            return Err(String::new());
+        }
+        return Err(err.message);
+    }
     println!("{}", windows_sandbox_setup_status_for_cwd(cwd)?);
     Ok(())
 }

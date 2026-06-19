@@ -386,19 +386,32 @@ fn setup_rejects_invalid_cwd_before_windows_setup() -> Result<()> {
 fn setup_json_reports_invalid_cwd_as_json_error() -> Result<()> {
     let tmp = TempDir::new()?;
     let missing = tmp.path().join("missing").to_string_lossy().to_string();
-    let output = run_cli(&["setup", "windows-sandbox", "--json", "--cwd", &missing])?;
 
-    assert!(!output.status.success());
-    assert!(output.stderr.is_empty());
-    let payload = stdout_json(&output)?;
-    assert_eq!(payload["error"]["data"]["code"], "INVALID_REQUEST");
-    assert!(
-        payload["error"]["data"]["reason"]
-            .as_str()
-            .expect("reason")
-            .contains("params.cwd must be an existing directory")
-    );
-    assert_no_private_windows_setup_terms(&payload.to_string());
+    for args in [
+        vec!["setup", "windows-sandbox", "--json", "--cwd", &missing],
+        vec![
+            "setup",
+            "windows-sandbox",
+            "--json",
+            "--cwd",
+            &missing,
+            "--status",
+        ],
+    ] {
+        let output = run_cli(&args)?;
+
+        assert!(!output.status.success());
+        assert!(output.stderr.is_empty());
+        let payload = stdout_json(&output)?;
+        assert_eq!(payload["error"]["data"]["code"], "INVALID_REQUEST");
+        assert!(
+            payload["error"]["data"]["reason"]
+                .as_str()
+                .expect("reason")
+                .contains("params.cwd must be an existing directory")
+        );
+        assert_no_private_windows_setup_terms(&payload.to_string());
+    }
     Ok(())
 }
 
