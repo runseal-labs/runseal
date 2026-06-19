@@ -482,6 +482,15 @@ fn exec_events_stream_uses_execution_vocabulary() -> Result<()> {
     for event in &events {
         assert_event_envelope(event)?;
     }
+    let first_event = events
+        .first()
+        .context("exec --events must emit at least one event")?;
+    for event in &events {
+        assert_eq!(event["execution_id"], first_event["execution_id"]);
+        assert_eq!(event["policy_hash"], first_event["policy_hash"]);
+        assert_eq!(event["policy_epoch"], first_event["policy_epoch"]);
+        assert_eq!(event["policy_epoch"], event["policy_hash"]);
+    }
     let stdout_event = events
         .iter()
         .find(|event| event["type"] == "execution.stdout")
