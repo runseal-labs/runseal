@@ -541,6 +541,12 @@ fn windows_sandbox_setup_status_payload(
     } else {
         "open_elevated_shell"
     };
+    let next_command = match next_action {
+        "run_setup" | "open_elevated_shell" => {
+            Some("runseal setup windows-sandbox --cwd <absolute-workspace-path> --json")
+        }
+        _ => None,
+    };
     json!({
         "setup": "windows-sandbox",
         "platform_supported": platform_supported,
@@ -550,6 +556,7 @@ fn windows_sandbox_setup_status_payload(
         "can_run_setup_now": can_run_setup_now,
         "requires_setup": platform_supported && !broker_available,
         "next_action": next_action,
+        "next_command": next_command,
     })
 }
 
@@ -1750,18 +1757,28 @@ mod tests {
         assert_eq!(elevated["can_run_setup_now"], true);
         assert!(windows_sandbox_setup_can_run_now(&elevated));
         assert_eq!(elevated["next_action"], "run_setup");
+        assert_eq!(
+            elevated["next_command"],
+            "runseal setup windows-sandbox --cwd <absolute-workspace-path> --json"
+        );
         assert_eq!(broker["can_repair"], true);
         assert_eq!(broker["can_run_setup_now"], true);
         assert!(windows_sandbox_setup_can_run_now(&broker));
         assert_eq!(broker["next_action"], "none");
+        assert!(broker["next_command"].is_null());
         assert_eq!(missing["can_repair"], false);
         assert_eq!(missing["can_run_setup_now"], false);
         assert!(!windows_sandbox_setup_can_run_now(&missing));
         assert_eq!(missing["next_action"], "open_elevated_shell");
+        assert_eq!(
+            missing["next_command"],
+            "runseal setup windows-sandbox --cwd <absolute-workspace-path> --json"
+        );
         assert_eq!(unsupported["can_repair"], false);
         assert_eq!(unsupported["can_run_setup_now"], false);
         assert!(!windows_sandbox_setup_can_run_now(&unsupported));
         assert_eq!(unsupported["next_action"], "unsupported");
+        assert!(unsupported["next_command"].is_null());
         assert!(!windows_sandbox_setup_can_run_now(&json!({})));
     }
 

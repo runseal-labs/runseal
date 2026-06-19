@@ -321,6 +321,14 @@ fn setup_status_reports_broker_readiness_without_running_setup() -> Result<()> {
         ),
         "{payload}"
     );
+    match payload["next_action"].as_str() {
+        Some("run_setup" | "open_elevated_shell") => assert_eq!(
+            payload["next_command"],
+            "runseal setup windows-sandbox --cwd <absolute-workspace-path> --json",
+            "{payload}"
+        ),
+        _ => assert!(payload["next_command"].is_null(), "{payload}"),
+    }
     assert_no_private_windows_setup_terms(&payload.to_string());
     Ok(())
 }
