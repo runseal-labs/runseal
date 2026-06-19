@@ -11,6 +11,7 @@ pub struct AuditWriter {
 
 impl AuditWriter {
     pub fn create(cwd: &Path, session_id: &str) -> io::Result<Self> {
+        validate_audit_session_id(session_id)?;
         let audit_dir = cwd.join(".runseal").join("audit");
         fs::create_dir_all(&audit_dir)?;
 
@@ -33,6 +34,21 @@ impl AuditWriter {
         self.file.write_all(b"\n")?;
         self.file.flush()
     }
+}
+
+fn validate_audit_session_id(session_id: &str) -> io::Result<()> {
+    if session_id.starts_with("sess_")
+        && session_id
+            .bytes()
+            .all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
+    {
+        return Ok(());
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::InvalidInput,
+        "invalid audit session id",
+    ))
 }
 
 fn audit_path(session_id: &str) -> String {
@@ -104,6 +120,20 @@ mod tests {
             .join("audit")
             .join("sess_collision.jsonl");
         assert!(fs::read_to_string(audit_file)?.contains("\"first\""));
+        Ok(())
+    }
+
+    #[test]
+    fn audit_writer_rejects_path_like_session_ids() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+
+        for session_id in ["../sess_escape", "sess_../escape", "sess_escape/path"] {
+            let Err(err) = AuditWriter::create(tmp.path(), session_id) else {
+                panic!("path-like session id must be rejected: {session_id}");
+            };
+            assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        }
+
         Ok(())
     }
 }
