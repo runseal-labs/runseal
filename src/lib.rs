@@ -577,6 +577,10 @@ fn timeout_from_params(
     Ok(timeout_ms.map(Duration::from_millis))
 }
 
+fn duration_millis_u64(duration: Duration) -> u64 {
+    duration.as_millis().min(u128::from(u64::MAX)) as u64
+}
+
 fn metadata_from_params(params: &Map<String, Value>) -> Result<Option<Value>, RunSealError> {
     let Some(metadata) = params.get("metadata") else {
         return Ok(None);
@@ -1083,9 +1087,9 @@ fn execute_command(
     let original_stdout_bytes = output.stdout.len();
     let original_stderr_bytes = output.stderr.len();
     let output_truncated = truncate_output(&mut output, policy.resources.max_output_bytes);
-    let duration_ms = timer.elapsed().as_millis() as u64;
+    let duration_ms = duration_millis_u64(timer.elapsed());
     if execution_output.timed_out {
-        let timeout_ms = timeout.map(|duration| duration.as_millis() as u64);
+        let timeout_ms = timeout.map(duration_millis_u64);
         let limit_exceeded = execution_event_now(
             json!({
                 "type": "execution.resource.limit_exceeded",
@@ -1378,5 +1382,11 @@ mod tests {
         assert!(payload.get("sandbox_home").is_none());
         assert!(payload.get("profile_root").is_none());
         assert!(payload.get("runtime_root").is_none());
+    }
+
+    #[test]
+    fn duration_millis_conversion_saturates_to_u64() {
+        assert_eq!(duration_millis_u64(Duration::from_millis(42)), 42);
+        assert_eq!(duration_millis_u64(Duration::MAX), u64::MAX);
     }
 }
