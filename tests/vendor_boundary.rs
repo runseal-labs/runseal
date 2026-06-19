@@ -29,6 +29,8 @@ const VENDOR_SETUP_SOURCES: &[(&str, &str)] = &[
 
 const WINDOWS_SANDBOX_MANIFEST: &str =
     include_str!("../vendor/codex-windows-sandbox/upstream/Cargo.toml");
+const WINDOWS_SANDBOX_VENDOR_NOTES: &str =
+    include_str!("../vendor/codex-windows-sandbox/VENDOR.md");
 const RUNSEAL_BACKEND_SOURCE: &str = include_str!("../src/backend.rs");
 
 const VENDOR_TIMEOUT_SOURCES: &[(&str, &str)] = &[
@@ -45,6 +47,23 @@ const VENDOR_TIMEOUT_SOURCES: &[(&str, &str)] = &[
         include_str!("../vendor/codex-windows-sandbox/upstream/bin/command_runner/win.rs"),
     ),
 ];
+
+#[test]
+fn vendored_windows_sandbox_notes_capture_runseal_divergence() {
+    for required in [
+        "intentionally diverges",
+        "single sandbox identity",
+        "one dedicated sandbox user",
+        "do not add readers or migrations",
+        "upstream `offline` and `online` records",
+        "keep the account model private",
+    ] {
+        assert!(
+            WINDOWS_SANDBOX_VENDOR_NOTES.contains(required),
+            "VENDOR.md must document RunSeal Windows sandbox divergence: {required}"
+        );
+    }
+}
 
 #[test]
 fn vendored_windows_setup_state_uses_single_user_schema() {

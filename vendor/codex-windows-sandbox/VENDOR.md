@@ -8,6 +8,9 @@ The snapshot under `upstream/` is intentionally not a main workspace member.
 It is a standalone vendor crate that can be checked directly with local,
 trimmed `codex-*` dependency crates under `vendor/`.
 
+This vendored implementation intentionally diverges from upstream to implement
+RunSeal's single sandbox identity model.
+
 Keep local RunSeal changes outside `upstream/` unless they are deliberately
 tracked as vendor patches.
 
@@ -64,8 +67,7 @@ Single-user vendor wiring acceptance criteria:
 
 - Setup payloads carry one sandbox identity, not separate offline and online
   identities.
-- Setup secrets use only a single-user schema such as `{ version, user }`; do
-  not add readers or migrations for upstream `offline` and `online` records.
+- Setup secrets use only a single-user schema such as `{ version, user }`; do not add readers or migrations for upstream `offline` and `online` records.
 - Setup markers use only one sandbox username field and require explicit
   network-guard fields; do not add marker fields for upstream offline/online
   identities.
@@ -74,5 +76,4 @@ Single-user vendor wiring acceptance criteria:
   execution is reported as supported.
 - WFP, firewall, proxy, command-runner IPC, restricted-token, and ACL setup must
   all derive from the same single sandbox identity.
-- Public protocol, audit, and capability output must keep the account model
-  private and expose only generic process and sandbox boundary terms.
+- Public protocol, audit, and capability output must keep the account model private and expose only generic process and sandbox boundary terms.
