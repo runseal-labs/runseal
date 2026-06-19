@@ -373,6 +373,9 @@ fn vendored_windows_setup_launches_copied_setup_helper() {
     assert!(setup.contains("use crate::helper_materialization::resolve_exe_for_launch;"));
     assert!(setup.contains("fn find_setup_exe(codex_home: &Path) -> PathBuf"));
     assert!(setup.contains("return resolve_exe_for_launch(&setup_exe, codex_home);"));
+    assert!(setup.contains("setup_exe_fallback(codex_home)"));
+    assert!(setup.contains("helper_bin_dir(codex_home).join(SETUP_EXE_FILENAME)"));
+    assert!(!setup.contains("PathBuf::from(SETUP_EXE_FILENAME)"));
     assert!(setup.contains("let exe = find_setup_exe(codex_home);"));
     assert!(helper_materialization.contains("using unavailable sandbox-bin path"));
     assert!(

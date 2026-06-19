@@ -726,11 +726,15 @@ fn find_setup_exe(codex_home: &Path) -> PathBuf {
     {
         return resolve_exe_for_launch(&setup_exe, codex_home);
     }
-    PathBuf::from(SETUP_EXE_FILENAME)
+    setup_exe_fallback(codex_home)
 }
 
 fn find_setup_exe_for_current_exe(exe: &Path) -> Option<PathBuf> {
     bundled_executable_path_for_exe(exe, SETUP_EXE_FILENAME)
+}
+
+fn setup_exe_fallback(codex_home: &Path) -> PathBuf {
+    helper_bin_dir(codex_home).join(SETUP_EXE_FILENAME)
 }
 
 fn report_helper_failure(
@@ -1519,6 +1523,7 @@ mod tests {
     use super::proxy_ports_from_env;
     use super::remove_setup_payload_file;
     use super::sandbox_proxy_settings_from_env;
+    use super::setup_exe_fallback;
     use super::setup_payload_dir;
     use super::verify_setup_completed;
     use super::write_setup_payload_file;
@@ -1955,6 +1960,16 @@ mod tests {
         let resolved = find_setup_exe_for_current_exe(&exe).expect("setup exe");
 
         assert_eq!(resolved, setup_exe);
+    }
+
+    #[test]
+    fn setup_exe_fallback_stays_under_sandbox_bin() {
+        let codex_home = Path::new(r"C:\Users\example\.codex");
+
+        assert_eq!(
+            helper_bin_dir(codex_home).join("runseal-windows-sandbox-setup.exe"),
+            setup_exe_fallback(codex_home)
+        );
     }
 
     #[test]

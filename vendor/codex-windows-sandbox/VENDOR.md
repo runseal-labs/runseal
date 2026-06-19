@@ -27,6 +27,9 @@ Local vendor patches:
 - Fail closed through sandbox-bin helper paths when helper materialization
   fails, instead of falling back to host executable locations; guarded by
   `tests/vendor_boundary.rs`.
+- Fail closed through the sandbox-bin setup helper path when the setup helper
+  source cannot be resolved; guarded by upstream setup tests and
+  `tests/vendor_boundary.rs`.
 - Lock both workspace and scheduled-broker sandbox bin directories when setup
   materializes helper binaries; guarded by upstream setup helper tests.
 - Treat scheduled setup tasks as usable only when their helper command resolves
