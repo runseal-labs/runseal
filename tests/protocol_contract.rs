@@ -6,6 +6,8 @@ use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
+#[cfg(windows)]
+use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 use tempfile::TempDir;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
@@ -43,6 +45,9 @@ fn run_rpc(message: &str) -> Result<Output> {
 }
 
 fn run_rpc_with_env(message: &str, envs: &[(&str, &str)]) -> Result<Output> {
+    #[cfg(windows)]
+    let _guard = windows_protocol_lock()?;
+
     let bin = require_runseal_bin()?;
     let mut child = Command::new(bin)
         .args(["rpc", "--stdio"])
@@ -62,6 +67,14 @@ fn run_rpc_with_env(message: &str, envs: &[(&str, &str)]) -> Result<Output> {
     child
         .wait_with_output()
         .context("failed to wait for runseal rpc")
+}
+
+#[cfg(windows)]
+fn windows_protocol_lock() -> Result<MutexGuard<'static, ()>> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    // ponytail: global Windows sandbox state; split by policy if protocol test time matters.
+    LOCK.lock()
+        .map_err(|_| anyhow::anyhow!("windows protocol lock poisoned"))
 }
 
 fn python_bin() -> &'static str {
