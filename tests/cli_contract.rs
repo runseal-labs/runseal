@@ -418,6 +418,8 @@ fn setup_json_reports_invalid_cwd_as_json_error() -> Result<()> {
 #[test]
 fn setup_json_reports_parse_errors_as_json_error() -> Result<()> {
     for args in [
+        vec!["setup", "--json"],
+        vec!["setup", "unknown", "--json"],
         vec!["setup", "windows-sandbox", "--json", "--cwd"],
         vec!["setup", "windows-sandbox", "--json", "--unknown"],
     ] {

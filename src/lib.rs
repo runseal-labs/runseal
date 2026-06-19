@@ -358,6 +358,16 @@ fn run_setup(args: &[String]) -> Result<(), String> {
             }
             run_windows_sandbox_setup(&request.cwd, request.json)
         }
+        _ if args.iter().any(|arg| arg == "--json") => {
+            println!(
+                "{}",
+                cli_error_payload(RunSealError::new(
+                    "INVALID_REQUEST",
+                    "usage: runseal setup windows-sandbox [--cwd <path>] [--status] [--json]",
+                ))
+            );
+            Err(String::new())
+        }
         _ => Err(
             "usage: runseal setup windows-sandbox [--cwd <path>] [--status] [--json]".to_string(),
         ),
