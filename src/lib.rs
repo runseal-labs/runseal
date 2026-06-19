@@ -463,6 +463,7 @@ fn windows_sandbox_setup_status_payload(
     broker_available: bool,
     elevated: Option<bool>,
 ) -> Value {
+    let can_run_setup_now = platform_supported && (elevated.unwrap_or(false) || broker_available);
     let next_action = if !platform_supported {
         "unsupported"
     } else if broker_available {
@@ -477,7 +478,8 @@ fn windows_sandbox_setup_status_payload(
         "platform_supported": platform_supported,
         "broker": if broker_available { "available" } else { "unavailable" },
         "elevated": elevated,
-        "can_repair": platform_supported && (elevated.unwrap_or(false) || broker_available),
+        "can_repair": can_run_setup_now,
+        "can_run_setup_now": can_run_setup_now,
         "requires_setup": platform_supported && !broker_available,
         "next_action": next_action,
     })
@@ -1664,12 +1666,16 @@ mod tests {
         let unsupported = windows_sandbox_setup_status_payload(false, true, Some(true));
 
         assert_eq!(elevated["can_repair"], true);
+        assert_eq!(elevated["can_run_setup_now"], true);
         assert_eq!(elevated["next_action"], "run_setup");
         assert_eq!(broker["can_repair"], true);
+        assert_eq!(broker["can_run_setup_now"], true);
         assert_eq!(broker["next_action"], "none");
         assert_eq!(missing["can_repair"], false);
+        assert_eq!(missing["can_run_setup_now"], false);
         assert_eq!(missing["next_action"], "open_elevated_shell");
         assert_eq!(unsupported["can_repair"], false);
+        assert_eq!(unsupported["can_run_setup_now"], false);
         assert_eq!(unsupported["next_action"], "unsupported");
     }
 

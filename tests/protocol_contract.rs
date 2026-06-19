@@ -278,6 +278,11 @@ fn assert_backend_unavailable(response: &Value, root: &std::path::Path) -> Resul
             Some(elevated || broker_available),
             "{setup_status}"
         );
+        assert_eq!(
+            setup_status["can_run_setup_now"].as_bool(),
+            Some(elevated || broker_available),
+            "{setup_status}"
+        );
         assert!(
             matches!(
                 setup_status["next_action"].as_str(),

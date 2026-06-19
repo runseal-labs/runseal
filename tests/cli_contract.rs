@@ -291,9 +291,15 @@ fn setup_status_reports_broker_readiness_without_running_setup() -> Result<()> {
             Some(elevated || broker_available),
             "{payload}"
         );
+        assert_eq!(
+            payload["can_run_setup_now"].as_bool(),
+            Some(elevated || broker_available),
+            "{payload}"
+        );
     } else {
         assert!(payload["elevated"].is_null(), "{payload}");
         assert_eq!(payload["can_repair"], false, "{payload}");
+        assert_eq!(payload["can_run_setup_now"], false, "{payload}");
     }
     assert!(
         matches!(
