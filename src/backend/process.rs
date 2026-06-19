@@ -50,9 +50,9 @@ pub(super) fn spawn_local_command(
             process.stdin(Stdio::piped());
         }
     }
+    process.stdout(Stdio::piped()).stderr(Stdio::piped());
 
     let Some(timeout) = timeout else {
-        process.stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut child = process.spawn()?;
         #[cfg(windows)]
         let _process_job = match assign_windows_process_job(plan, &child) {
@@ -72,9 +72,6 @@ pub(super) fn spawn_local_command(
             });
     };
 
-    if matches!(stdin, ExecutionStdin::Bytes(_) | ExecutionStdin::File(_)) {
-        process.stdout(Stdio::piped()).stderr(Stdio::piped());
-    }
     let start = Instant::now();
     let mut child = process.spawn()?;
     #[cfg(windows)]

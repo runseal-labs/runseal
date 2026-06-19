@@ -1214,6 +1214,47 @@ fn execute_rejects_unimplemented_stdin_modes() -> Result<()> {
 }
 
 #[test]
+fn execute_with_timeout_captures_stdout_when_command_finishes() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let output = run_rpc(&rpc_request(
+        "execute",
+        json!({
+            "command": [python_bin(), "-c", "print('timeout stdout ok')"],
+            "cwd": tmp.path(),
+            "policy": "danger-full-access",
+            "timeout_ms": 5000
+        }),
+    ))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = messages
+        .iter()
+        .find(|message| message.get("id") == Some(&json!(1)))
+        .unwrap();
+
+    assert_eq!(response["result"]["status"], "finished");
+    assert_eq!(response["result"]["exit_code"], 0);
+    assert!(
+        response["result"]["stdout"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("timeout stdout ok")
+    );
+    assert!(
+        response["result"]["stdout_bytes"]
+            .as_u64()
+            .unwrap_or_default()
+            > 0
+    );
+    Ok(())
+}
+
+#[test]
 fn execute_timeout_returns_stable_error_and_audit_event() -> Result<()> {
     let tmp = TempDir::new()?;
     let output = run_rpc(&rpc_request(
