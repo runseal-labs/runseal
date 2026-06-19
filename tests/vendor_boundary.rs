@@ -166,6 +166,26 @@ fn vendored_windows_sandbox_child_processes_do_not_open_console_windows() {
 }
 
 #[test]
+fn vendored_windows_setup_launches_suppress_system_error_dialogs() {
+    for (name, source) in VENDOR_SETUP_SOURCES {
+        if *name == "setup.rs" || *name == "setup_main/win.rs" {
+            assert!(
+                source.contains("SetErrorMode"),
+                "{name} must suppress Windows system error dialogs around setup launches"
+            );
+            assert!(
+                source.contains("SETUP_ERROR_MODE_FLAGS"),
+                "{name} must keep setup launch error-mode flags explicit"
+            );
+            assert!(
+                source.contains("with_suppressed_windows_error_dialogs"),
+                "{name} must wrap setup child-process launches"
+            );
+        }
+    }
+}
+
+#[test]
 fn vendored_windows_timeouts_keep_explicit_limits_finite() {
     for (name, source) in VENDOR_TIMEOUT_SOURCES {
         assert!(

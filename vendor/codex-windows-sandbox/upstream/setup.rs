@@ -43,6 +43,7 @@ use windows_sys::Win32::Security::AllocateAndInitializeSid;
 use windows_sys::Win32::Security::CheckTokenMembership;
 use windows_sys::Win32::Security::FreeSid;
 use windows_sys::Win32::Security::SECURITY_NT_AUTHORITY;
+use windows_sys::Win32::System::Diagnostics::Debug::SetErrorMode;
 
 pub const SETUP_VERSION: u32 = 6;
 pub const SANDBOX_USERNAME: &str = "RunSealSandbox";
@@ -52,6 +53,7 @@ const SETUP_EXE_FILENAME: &str = "runseal-windows-sandbox-setup.exe";
 const SETUP_PAYLOAD_DIRNAME: &str = "payloads";
 const SETUP_PAYLOAD_FILE_PREFIX: &str = "setup-payload-";
 const SETUP_PAYLOAD_FILE_SUFFIX: &str = ".json";
+const SETUP_ERROR_MODE_FLAGS: u32 = 0x0001 | 0x0002;
 const PROTECTED_WRITABLE_CHILDREN: &[&str] = &[".git", ".agents", ".codex"];
 const USERPROFILE_ROOT_EXCLUSIONS: &[&str] = &[
     ".ssh",
@@ -245,7 +247,7 @@ fn run_setup_refresh_inner(
         ),
         Some(&sbx_dir),
     );
-    let status = cmd.status();
+    let status = with_suppressed_windows_error_dialogs(|| cmd.status());
     let _ = remove_setup_payload_file(&payload_path);
     let status = status.map_err(|err| {
         let message = format!(
@@ -835,6 +837,15 @@ fn absolute_path_from_env_value(value: Option<std::ffi::OsString>) -> Option<Pat
     value.map(PathBuf::from).filter(|path| path.is_absolute())
 }
 
+fn with_suppressed_windows_error_dialogs<T>(f: impl FnOnce() -> T) -> T {
+    let previous_error_mode = unsafe { SetErrorMode(SETUP_ERROR_MODE_FLAGS) };
+    let result = f();
+    unsafe {
+        SetErrorMode(previous_error_mode);
+    }
+    result
+}
+
 fn scheduled_setup_payload_path(codex_home: &Path, request_id: &str) -> PathBuf {
     sandbox_dir(codex_home).join(format!("{SCHEDULED_SETUP_PAYLOAD_PREFIX}{request_id}.json"))
 }
@@ -987,13 +998,15 @@ fn scheduled_setup_task_targets_broker_home(xml: &str, broker_home: &Path) -> bo
 }
 
 fn scheduled_setup_task_is_usable(broker_home: &Path) -> bool {
-    let output = Command::new("schtasks.exe")
-        .args(["/Query", "/TN", SCHEDULED_SETUP_TASK_NAME, "/XML"])
-        .creation_flags(0x08000000) // CREATE_NO_WINDOW
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output();
+    let output = with_suppressed_windows_error_dialogs(|| {
+        Command::new("schtasks.exe")
+            .args(["/Query", "/TN", SCHEDULED_SETUP_TASK_NAME, "/XML"])
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output()
+    });
 
     let Ok(output) = output else {
         return false;
@@ -1030,19 +1043,21 @@ fn try_run_setup_exe_via_scheduled_task(
     let payload_sha256 = scheduled_setup_payload_sha256(payload_json);
     let payload_path = write_scheduled_setup_payload_file(&broker_home, &request_id, payload_json)?;
 
-    let output = Command::new("schtasks.exe")
-        .args(["/Run", "/TN", SCHEDULED_SETUP_TASK_NAME])
-        .creation_flags(0x08000000) // CREATE_NO_WINDOW
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|err| {
-            failure(
-                SetupErrorCode::OrchestratorHelperLaunchFailed,
-                format!("failed to run scheduled setup task: {err}"),
-            )
-        })?;
+    let output = with_suppressed_windows_error_dialogs(|| {
+        Command::new("schtasks.exe")
+            .args(["/Run", "/TN", SCHEDULED_SETUP_TASK_NAME])
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .output()
+    })
+    .map_err(|err| {
+        failure(
+            SetupErrorCode::OrchestratorHelperLaunchFailed,
+            format!("failed to run scheduled setup task: {err}"),
+        )
+    })?;
     if !output.status.success() {
         let _ = remove_setup_payload_file(&payload_path);
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1155,14 +1170,16 @@ fn run_setup_exe(
 
     if !needs_elevation {
         let payload_path = write_setup_payload_file(codex_home, payload_json.as_bytes())?;
-        let status = Command::new(&exe)
-            .arg("--payload-file")
-            .arg(&payload_path)
-            .creation_flags(0x08000000) // CREATE_NO_WINDOW
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+        let status = with_suppressed_windows_error_dialogs(|| {
+            Command::new(&exe)
+                .arg("--payload-file")
+                .arg(&payload_path)
+                .creation_flags(0x08000000) // CREATE_NO_WINDOW
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+        });
         let _ = remove_setup_payload_file(&payload_path);
         let status = status.map_err(|err| {
             failure(

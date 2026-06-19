@@ -67,6 +67,7 @@ use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
 use windows_sys::Win32::Storage::FileSystem::MOVEFILE_WRITE_THROUGH;
 use windows_sys::Win32::Storage::FileSystem::MoveFileExW;
+use windows_sys::Win32::System::Diagnostics::Debug::SetErrorMode;
 
 const DENY_ACCESS: i32 = 3;
 const SETUP_PAYLOAD_DIRNAME: &str = "payloads";
@@ -76,6 +77,7 @@ const SETUP_EXE_FILENAME: &str = "runseal-windows-sandbox-setup.exe";
 const SCHEDULED_SETUP_TASK_NAME: &str = r"\RunSeal\WindowsSandboxSetup";
 const SCHEDULED_SETUP_PAYLOAD_PREFIX: &str = "setup-task-payload-";
 const SCHEDULED_SETUP_RESULT_PREFIX: &str = "setup-task-result-";
+const SETUP_ERROR_MODE_FLAGS: u32 = 0x0001 | 0x0002;
 
 mod sandbox_users;
 use read_acl_mutex::acquire_read_acl_mutex;
@@ -257,6 +259,15 @@ fn absolute_path_from_env_value(value: Option<std::ffi::OsString>) -> Option<Pat
     value.map(PathBuf::from).filter(|path| path.is_absolute())
 }
 
+fn with_suppressed_windows_error_dialogs<T>(f: impl FnOnce() -> T) -> T {
+    let previous_error_mode = unsafe { SetErrorMode(SETUP_ERROR_MODE_FLAGS) };
+    let result = f();
+    unsafe {
+        SetErrorMode(previous_error_mode);
+    }
+    result
+}
+
 fn quote_task_arg(arg: &str) -> String {
     let needs = arg.is_empty()
         || arg
@@ -388,27 +399,29 @@ fn ensure_scheduled_setup_task(codex_home: &Path, log: &mut dyn Write) -> Result
         quote_task_arg(&exe.to_string_lossy()),
         quote_task_arg(&broker_home.to_string_lossy())
     );
-    let output = Command::new("schtasks.exe")
-        .args([
-            "/Create",
-            "/TN",
-            SCHEDULED_SETUP_TASK_NAME,
-            "/TR",
-            &task_command,
-            "/SC",
-            "ONCE",
-            "/ST",
-            "00:00",
-            "/RL",
-            "HIGHEST",
-            "/F",
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .creation_flags(0x08000000) // CREATE_NO_WINDOW
-        .output()
-        .context("run schtasks /Create")?;
+    let output = with_suppressed_windows_error_dialogs(|| {
+        Command::new("schtasks.exe")
+            .args([
+                "/Create",
+                "/TN",
+                SCHEDULED_SETUP_TASK_NAME,
+                "/TR",
+                &task_command,
+                "/SC",
+                "ONCE",
+                "/ST",
+                "00:00",
+                "/RL",
+                "HIGHEST",
+                "/F",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .output()
+    })
+    .context("run schtasks /Create")?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         anyhow::bail!(
@@ -443,14 +456,16 @@ fn spawn_read_acl_helper(payload: &Payload, _log: &mut dyn Write) -> Result<()> 
     let payload_json = serde_json::to_vec(&read_payload)?;
     let payload_path = write_setup_payload_file(&payload.codex_home, payload_json.as_slice())?;
     let exe = std::env::current_exe().context("locate setup helper")?;
-    let spawn_result = Command::new(&exe)
-        .arg("--payload-file")
-        .arg(&payload_path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .creation_flags(0x08000000) // CREATE_NO_WINDOW
-        .spawn();
+    let spawn_result = with_suppressed_windows_error_dialogs(|| {
+        Command::new(&exe)
+            .arg("--payload-file")
+            .arg(&payload_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .spawn()
+    });
     if let Err(err) = spawn_result {
         let _ = remove_setup_payload_file(&payload_path);
         return Err(err).with_context(|| {
