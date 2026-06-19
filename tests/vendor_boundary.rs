@@ -142,6 +142,19 @@ fn vendored_windows_runner_requires_kill_on_close_job() {
 }
 
 #[test]
+fn vendored_windows_read_acl_mutex_uses_runseal_namespace() {
+    let runner = include_str!("../vendor/codex-windows-sandbox/upstream/bin/command_runner/win.rs");
+    let setup = include_str!(
+        "../vendor/codex-windows-sandbox/upstream/bin/setup_main/win/read_acl_mutex.rs"
+    );
+
+    for source in [runner, setup] {
+        assert!(source.contains("Local\\\\RunSealSandboxReadAcl"));
+        assert!(!source.contains(concat!("Local\\\\", "Codex", "SandboxReadAcl")));
+    }
+}
+
+#[test]
 fn vendored_windows_setup_has_no_host_app_runtime_bin_special_case() {
     for (name, source) in VENDOR_SETUP_SOURCES {
         for forbidden in [

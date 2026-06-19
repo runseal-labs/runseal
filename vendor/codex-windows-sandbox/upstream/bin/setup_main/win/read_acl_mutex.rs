@@ -11,7 +11,7 @@ use windows_sys::Win32::System::Threading::MUTEX_ALL_ACCESS;
 use windows_sys::Win32::System::Threading::OpenMutexW;
 use windows_sys::Win32::System::Threading::ReleaseMutex;
 
-const READ_ACL_MUTEX_NAME: &str = "Local\\CodexSandboxReadAcl";
+const READ_ACL_MUTEX_NAME: &str = "Local\\RunSealSandboxReadAcl";
 
 pub(super) struct ReadAclMutexGuard {
     handle: HANDLE,

@@ -79,7 +79,7 @@ use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
 use windows_sys::Win32::System::Threading::TerminateProcess;
 use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
-const READ_ACL_MUTEX_NAME: &str = "Local\\CodexSandboxReadAcl";
+const READ_ACL_MUTEX_NAME: &str = "Local\\RunSealSandboxReadAcl";
 const WAIT_TIMEOUT: u32 = 0x0000_0102;
 
 struct IpcSpawnedProcess {
