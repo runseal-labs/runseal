@@ -552,31 +552,53 @@ impl PlatformSandboxPlan {
 
     pub fn prepare_runtime_roots(&self) -> io::Result<Vec<String>> {
         self.validate_runtime_roots_for_setup()?;
-        let mut prepared = Vec::new();
-        for root in [
-            self.runtime_root.as_ref(),
-            self.profile_root.as_ref(),
-            self.synthetic_home.as_ref(),
-            self.temp_root.as_ref(),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            prepare_unique_runtime_root(&mut prepared, root)?;
-        }
-        for (key, root) in &self.environment_runtime {
-            if !runtime_environment_value_is_path(key) {
-                continue;
+        let runtime_root_existed = self
+            .runtime_root
+            .as_ref()
+            .is_some_and(|root| Path::new(root).exists());
+        let result = (|| {
+            let mut prepared = Vec::new();
+            for root in [
+                self.runtime_root.as_ref(),
+                self.profile_root.as_ref(),
+                self.synthetic_home.as_ref(),
+                self.temp_root.as_ref(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                prepare_unique_runtime_root(&mut prepared, root)?;
             }
-            prepare_unique_runtime_root(&mut prepared, root)?;
+            for (key, root) in &self.environment_runtime {
+                if !runtime_environment_value_is_path(key) {
+                    continue;
+                }
+                prepare_unique_runtime_root(&mut prepared, root)?;
+            }
+            if let Some(runtime_root) = &self.runtime_root {
+                fs::write(
+                    Path::new(runtime_root).join(RUNTIME_ROOT_MARKER),
+                    self.execution_id.as_bytes(),
+                )?;
+            }
+            Ok(prepared)
+        })();
+
+        match result {
+            Ok(prepared) => Ok(prepared),
+            Err(setup_err) => {
+                if !runtime_root_existed
+                    && let Some(runtime_root) = &self.runtime_root
+                    && Path::new(runtime_root).exists()
+                    && let Err(cleanup_err) = fs::remove_dir_all(runtime_root)
+                {
+                    return Err(io::Error::other(format!(
+                        "runtime setup failed ({setup_err}); runtime cleanup failed ({cleanup_err})"
+                    )));
+                }
+                Err(setup_err)
+            }
         }
-        if let Some(runtime_root) = &self.runtime_root {
-            fs::write(
-                Path::new(runtime_root).join(RUNTIME_ROOT_MARKER),
-                self.execution_id.as_bytes(),
-            )?;
-        }
-        Ok(prepared)
     }
 
     #[cfg(test)]
@@ -3364,6 +3386,23 @@ mod tests {
 
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
         assert!(runtime_root.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_setup_cleans_fresh_runtime_tree_after_marker_write_failure() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(&cwd)?;
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+        let mut plan = WindowsReferenceBackend.fail_closed_plan("exec_marker_dir", &cwd, &policy);
+        let runtime_root = PathBuf::from(plan.runtime_root.as_ref().unwrap());
+        plan.profile_root = Some(path_string(&runtime_root.join(RUNTIME_ROOT_MARKER)));
+
+        let err = plan.prepare_runtime_roots().unwrap_err();
+
+        assert!(!err.to_string().contains("runtime cleanup failed"), "{err}");
+        assert!(!runtime_root.exists());
         Ok(())
     }
 
