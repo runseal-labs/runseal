@@ -63,6 +63,8 @@ Run sandbox bootstrap or repair explicitly from an elevated PowerShell session:
 ```
 
 Use `--json` when an agent needs structured setup failure details.
+Successful setup also includes `setup_status` so automation can verify readiness
+from the same command.
 
 Check broker readiness without changing setup state:
 

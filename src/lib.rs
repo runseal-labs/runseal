@@ -399,7 +399,7 @@ fn run_windows_sandbox_setup(cwd: &Path, json_output: bool) -> Result<(), String
         }
         return Err(WINDOWS_SANDBOX_SETUP_FAILED.to_string());
     }
-    println!("{}", windows_sandbox_setup_success_payload());
+    println!("{}", windows_sandbox_setup_success_payload(cwd));
     Ok(())
 }
 
@@ -472,11 +472,18 @@ fn windows_sandbox_setup_status_payload(
     })
 }
 
-fn windows_sandbox_setup_success_payload() -> Value {
-    json!({
+fn windows_sandbox_setup_success_payload(cwd: &Path) -> Value {
+    let mut payload = json!({
         "status": "ok",
         "setup": "windows-sandbox",
-    })
+    });
+    if let (Some(payload), Ok(setup_status)) = (
+        payload.as_object_mut(),
+        windows_sandbox_setup_status_for_cwd(cwd),
+    ) {
+        payload.insert("setup_status".to_string(), setup_status);
+    }
+    payload
 }
 
 #[cfg(not(windows))]
@@ -1627,10 +1634,12 @@ mod tests {
 
     #[test]
     fn windows_setup_success_payload_hides_internal_paths() {
-        let payload = windows_sandbox_setup_success_payload();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let payload = windows_sandbox_setup_success_payload(tmp.path());
 
         assert_eq!(payload["status"], "ok");
         assert_eq!(payload["setup"], "windows-sandbox");
+        assert_eq!(payload["setup_status"]["setup"], "windows-sandbox");
         assert!(payload.get("sandbox_home").is_none());
         assert!(payload.get("profile_root").is_none());
         assert!(payload.get("runtime_root").is_none());
