@@ -192,6 +192,15 @@ fn vendored_windows_sandbox_helper_bins_use_windows_subsystem() {
 }
 
 #[test]
+fn vendored_windows_runner_suppresses_startup_feedback() {
+    let runner_client =
+        include_str!("../vendor/codex-windows-sandbox/upstream/elevated/runner_client.rs");
+
+    assert!(runner_client.contains("STARTF_FORCEOFFFEEDBACK"));
+    assert!(runner_client.contains("si.dwFlags = STARTF_FORCEOFFFEEDBACK"));
+}
+
+#[test]
 fn vendored_windows_setup_launches_suppress_system_error_dialogs() {
     for (name, source) in VENDOR_SETUP_SOURCES {
         if *name == "setup.rs" || *name == "setup_main/win.rs" {
