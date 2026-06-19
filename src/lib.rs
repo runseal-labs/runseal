@@ -341,7 +341,18 @@ fn run_setup(args: &[String]) -> Result<(), String> {
             Ok(())
         }
         [target, rest @ ..] if target == "windows-sandbox" => {
-            let request = parse_windows_setup_args(rest)?;
+            let json_output = rest.iter().any(|arg| arg == "--json");
+            let request = match parse_windows_setup_args(rest) {
+                Ok(request) => request,
+                Err(err) if json_output => {
+                    println!(
+                        "{}",
+                        cli_error_payload(RunSealError::new("INVALID_REQUEST", err))
+                    );
+                    return Err(String::new());
+                }
+                Err(err) => return Err(err),
+            };
             if request.status {
                 return run_windows_sandbox_setup_status(&request.cwd, request.json);
             }

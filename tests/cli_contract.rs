@@ -416,6 +416,29 @@ fn setup_json_reports_invalid_cwd_as_json_error() -> Result<()> {
 }
 
 #[test]
+fn setup_json_reports_parse_errors_as_json_error() -> Result<()> {
+    for args in [
+        vec!["setup", "windows-sandbox", "--json", "--cwd"],
+        vec!["setup", "windows-sandbox", "--json", "--unknown"],
+    ] {
+        let output = run_cli(&args)?;
+
+        assert!(!output.status.success());
+        assert!(output.stderr.is_empty());
+        let payload = stdout_json(&output)?;
+        assert_eq!(payload["error"]["data"]["code"], "INVALID_REQUEST");
+        assert!(
+            payload["error"]["data"]["reason"]
+                .as_str()
+                .expect("reason")
+                .contains("usage: runseal setup windows-sandbox")
+        );
+        assert_no_private_windows_setup_terms(&payload.to_string());
+    }
+    Ok(())
+}
+
+#[test]
 fn version_reports_protocol_and_runtime_versions() -> Result<()> {
     let output = run_cli(&["--json", "version"])?;
 
