@@ -38,6 +38,8 @@ Local vendor patches:
 - Treat setup markers as strict single-user network-guard state; missing
   marker fields fail closed instead of defaulting to a stale schema; guarded by
   upstream setup tests and `tests/vendor_boundary.rs`.
+- Reject legacy split-identity setup state even when old identity fields are
+  nested inside the on-disk state file; guarded by upstream identity tests.
 - Replace upstream workspace/git dependency inheritance with local trimmed
   vendor crates; guarded by `tests/vendor_boundary.rs`.
 

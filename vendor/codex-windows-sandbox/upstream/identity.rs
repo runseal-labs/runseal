@@ -110,9 +110,26 @@ fn contains_legacy_split_identity_schema(contents: &str) -> bool {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(contents) else {
         return false;
     };
-    let Some(object) = value.as_object() else {
-        return false;
-    };
+
+    value_contains_legacy_split_identity_schema(&value)
+}
+
+fn value_contains_legacy_split_identity_schema(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(object) => {
+            object.keys().any(|key| is_legacy_split_identity_key(key))
+                || object
+                    .values()
+                    .any(value_contains_legacy_split_identity_schema)
+        }
+        serde_json::Value::Array(values) => values
+            .iter()
+            .any(value_contains_legacy_split_identity_schema),
+        _ => false,
+    }
+}
+
+fn is_legacy_split_identity_key(key: &str) -> bool {
     [
         concat!("off", "line"),
         concat!("on", "line"),
@@ -120,9 +137,18 @@ fn contains_legacy_split_identity_schema(contents: &str) -> bool {
         concat!("on", "line_user"),
         concat!("off", "line_username"),
         concat!("on", "line_username"),
+        concat!("off", "line_sid"),
+        concat!("on", "line_sid"),
+        concat!("off", "line_profile"),
+        concat!("on", "line_profile"),
+        concat!("off", "line_group"),
+        concat!("on", "line_group"),
+        "network_user",
+        "no_network_user",
+        "network_username",
+        "no_network_username",
     ]
-    .iter()
-    .any(|key| object.contains_key(*key))
+    .contains(&key)
 }
 
 fn reject_incompatible_setup_state(codex_home: &Path) -> Result<()> {
@@ -389,6 +415,17 @@ mod tests {
     }
 
     #[test]
+    fn nested_legacy_split_identity_schema_is_detected() {
+        let contents = format!(
+            r#"{{"version":1,"state":{{"{}":"S-1-5-21","{}":"C:/Users/legacy"}}}}"#,
+            concat!("off", "line_sid"),
+            concat!("on", "line_profile")
+        );
+
+        assert!(contains_legacy_split_identity_schema(&contents));
+    }
+
+    #[test]
     fn incompatible_setup_state_rejects_legacy_split_identity_file() {
         let codex_home = TempDir::new().expect("tempdir");
         let users_path = sandbox_users_path(codex_home.path());
@@ -406,6 +443,32 @@ mod tests {
         let failure = err
             .downcast_ref::<SetupFailure>()
             .expect("legacy split identity error must be structured");
+
+        assert_eq!(
+            failure.code,
+            SetupErrorCode::OrchestratorSetupStateIncompatible
+        );
+        assert!(users_path.exists());
+    }
+
+    #[test]
+    fn incompatible_setup_state_rejects_nested_legacy_split_identity_file() {
+        let codex_home = TempDir::new().expect("tempdir");
+        let users_path = sandbox_users_path(codex_home.path());
+        fs::create_dir_all(users_path.parent().expect("sandbox secrets dir"))
+            .expect("create sandbox secrets dir");
+        let contents = format!(
+            r#"{{"version":1,"state":{{"{}":"S-1-5-21","{}":"C:/Users/legacy"}}}}"#,
+            concat!("off", "line_sid"),
+            concat!("on", "line_profile")
+        );
+        fs::write(&users_path, contents).expect("write users");
+
+        let err = reject_incompatible_setup_state(codex_home.path())
+            .expect_err("nested legacy split identity state must fail closed");
+        let failure = err
+            .downcast_ref::<SetupFailure>()
+            .expect("nested legacy split identity error must be structured");
 
         assert_eq!(
             failure.code,
