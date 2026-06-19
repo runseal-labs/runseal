@@ -188,6 +188,32 @@ fn vendored_windows_runner_requires_kill_on_close_job() {
 }
 
 #[test]
+fn vendored_windows_runner_cleanup_does_not_sweep_sandbox_identity() {
+    let runner = include_str!("../vendor/codex-windows-sandbox/upstream/bin/command_runner/win.rs");
+
+    for forbidden in [
+        "taskkill",
+        "WTSLogoffSession",
+        "WTSEnumerateProcesses",
+        "CreateToolhelp32Snapshot",
+        "Process32First",
+        "Process32Next",
+        "EnumProcesses",
+        "OpenProcessToken",
+        "LookupAccountNameW",
+        "TokenUser",
+    ] {
+        assert!(
+            !runner.contains(forbidden),
+            "runner cleanup must stay per-execution and not use user-wide process cleanup token {forbidden}"
+        );
+    }
+
+    assert!(runner.contains("AssignProcessToJobObject(job, process)"));
+    assert!(runner.contains("TerminateJobObject(h_job, 1)"));
+}
+
+#[test]
 fn vendored_windows_read_acl_mutex_uses_runseal_namespace() {
     let runner = include_str!("../vendor/codex-windows-sandbox/upstream/bin/command_runner/win.rs");
     let setup = include_str!(
