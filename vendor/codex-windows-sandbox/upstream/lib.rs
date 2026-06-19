@@ -378,13 +378,19 @@ mod windows_impl {
         Cancelled,
     }
 
+    fn wait_timeout_ms(timeout_ms: Option<u64>) -> u32 {
+        timeout_ms
+            .map(|ms| ms.min(u32::MAX as u64) as u32)
+            .unwrap_or(INFINITE)
+    }
+
     fn wait_for_process(
         process: HANDLE,
         timeout_ms: Option<u64>,
         cancellation: Option<&WindowsSandboxCancellationToken>,
     ) -> WaitOutcome {
         let Some(cancellation) = cancellation else {
-            let timeout = timeout_ms.map(|ms| ms as u32).unwrap_or(INFINITE);
+            let timeout = wait_timeout_ms(timeout_ms);
             let res = unsafe { WaitForSingleObject(process, timeout) };
             return if res == 0x0000_0102 {
                 WaitOutcome::TimedOut

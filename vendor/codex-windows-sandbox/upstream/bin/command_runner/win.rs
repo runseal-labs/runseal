@@ -82,6 +82,12 @@ use windows_sys::Win32::System::Threading::WaitForSingleObject;
 const READ_ACL_MUTEX_NAME: &str = "Local\\RunSealSandboxReadAcl";
 const WAIT_TIMEOUT: u32 = 0x0000_0102;
 
+fn wait_timeout_ms(timeout_ms: Option<u64>) -> u32 {
+    timeout_ms
+        .map(|ms| ms.min(u32::MAX as u64) as u32)
+        .unwrap_or(INFINITE)
+}
+
 struct IpcSpawnedProcess {
     log_dir: PathBuf,
     pi: PROCESS_INFORMATION,
@@ -642,7 +648,7 @@ pub fn main() -> Result<()> {
         log_dir_owned,
     );
 
-    let timeout = req.timeout_ms.map(|ms| ms as u32).unwrap_or(INFINITE);
+    let timeout = wait_timeout_ms(req.timeout_ms);
     let wait_res = unsafe { WaitForSingleObject(pi.hProcess, timeout) };
     let timed_out = wait_res == WAIT_TIMEOUT;
     let interrupted = timed_out || terminated_by_request.load(Ordering::SeqCst);

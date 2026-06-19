@@ -383,6 +383,49 @@ fn runner_stdin_writer_sends_close_stdin_after_input_eof() {
 }
 
 #[test]
+fn runner_stdin_writer_chunks_large_stdin_frames() {
+    let runtime = current_thread_runtime();
+    runtime.block_on(async move {
+        let tempdir = TempDir::new().expect("create tempdir");
+        let frames_path = tempdir.path().join("runner-stdin-large-frames.bin");
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .read(true)
+            .write(true)
+            .open(&frames_path)
+            .expect("create frame file");
+        let outbound_tx = super::start_runner_pipe_writer(file);
+        let (writer_tx, writer_rx) = mpsc::channel::<Vec<u8>>(1);
+        let writer_handle = super::start_runner_stdin_writer(
+            writer_rx,
+            outbound_tx,
+            /*normalize_newlines*/ false,
+            /*stdin_open*/ true,
+        );
+
+        writer_tx
+            .send(vec![b'x'; 64 * 1024 + 7])
+            .await
+            .expect("send stdin bytes");
+        drop(writer_tx);
+        writer_handle.await.expect("join stdin writer");
+
+        let frames = wait_for_frame_count(&frames_path, 3);
+        for (index, expected_len) in [64 * 1024, 7].into_iter().enumerate() {
+            match &frames[index] {
+                Message::Stdin { payload } => {
+                    let bytes = decode_bytes(&payload.data_b64).expect("decode stdin payload");
+                    assert_eq!(bytes.len(), expected_len);
+                }
+                other => panic!("expected stdin frame, got {other:?}"),
+            }
+        }
+        assert!(matches!(frames[2], Message::CloseStdin { .. }));
+    });
+}
+
+#[test]
 fn runner_resizer_sends_resize_frame() {
     let runtime = current_thread_runtime();
     runtime.block_on(async move {

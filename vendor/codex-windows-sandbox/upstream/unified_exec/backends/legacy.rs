@@ -45,6 +45,12 @@ use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
 const WAIT_TIMEOUT: u32 = 0x0000_0102;
 
+fn wait_timeout_ms(timeout_ms: Option<u64>) -> u32 {
+    timeout_ms
+        .map(|ms| ms.min(u32::MAX as u64) as u32)
+        .unwrap_or(INFINITE)
+}
+
 struct LegacyProcessHandles {
     process: PROCESS_INFORMATION,
     output_join: std::thread::JoinHandle<()>,
@@ -177,12 +183,13 @@ fn spawn_input_writer(
 
 fn write_all_handle(handle: HANDLE, mut bytes: &[u8]) -> Result<()> {
     while !bytes.is_empty() {
+        let chunk_len = bytes.len().min(u32::MAX as usize);
         let mut written = 0u32;
         let ok = unsafe {
             WriteFile(
                 handle,
                 bytes.as_ptr() as *const _,
-                bytes.len() as u32,
+                chunk_len as u32,
                 &mut written,
                 ptr::null_mut(),
             )
@@ -381,7 +388,7 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
     let hpc_for_wait = hpc_handle.clone();
     std::thread::spawn(move || {
         let _desktop = desktop;
-        let timeout = timeout_ms.map(|ms| ms as u32).unwrap_or(INFINITE);
+        let timeout = wait_timeout_ms(timeout_ms);
         let wait_res = unsafe { WaitForSingleObject(pi.hProcess, timeout) };
         if wait_res == WAIT_TIMEOUT {
             unsafe {

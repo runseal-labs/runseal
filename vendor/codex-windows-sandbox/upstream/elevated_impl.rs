@@ -65,6 +65,8 @@ mod windows_impl {
 
     pub use crate::windows_impl::CaptureResult;
 
+    const STDIN_FRAME_CHUNK_BYTES: usize = 64 * 1024;
+
     /// Polls for cancellation and sends the runner's terminate IPC frame when requested.
     ///
     /// The 50 ms park bounds cancellation latency without busy-waiting.
@@ -99,14 +101,14 @@ mod windows_impl {
     }
 
     fn write_stdin_and_close(pipe_write: &mut File, bytes: &[u8]) -> Result<()> {
-        if !bytes.is_empty() {
+        for chunk in bytes.chunks(STDIN_FRAME_CHUNK_BYTES) {
             write_frame(
                 &mut *pipe_write,
                 &FramedMessage {
                     version: IPC_PROTOCOL_VERSION,
                     message: Message::Stdin {
                         payload: StdinPayload {
-                            data_b64: encode_bytes(bytes),
+                            data_b64: encode_bytes(chunk),
                         },
                     },
                 },
@@ -346,6 +348,29 @@ mod windows_impl {
 
             let close_frame = read_frame(&mut file)?.expect("close stdin frame");
             assert_eq!(close_frame.version, IPC_PROTOCOL_VERSION);
+            assert!(matches!(close_frame.message, Message::CloseStdin { .. }));
+            assert!(read_frame(&mut file)?.is_none());
+            Ok(())
+        }
+
+        #[test]
+        fn write_stdin_and_close_chunks_large_stdin_frames() -> Result<()> {
+            let mut file = tempfile::tempfile()?;
+            let bytes = vec![b'x'; STDIN_FRAME_CHUNK_BYTES + 7];
+            write_stdin_and_close(&mut file, &bytes)?;
+            file.seek(SeekFrom::Start(0))?;
+
+            for expected_len in [STDIN_FRAME_CHUNK_BYTES, 7] {
+                let frame = read_frame(&mut file)?.expect("stdin frame");
+                match frame.message {
+                    Message::Stdin { payload } => {
+                        assert_eq!(decode_bytes(&payload.data_b64)?.len(), expected_len);
+                    }
+                    other => panic!("expected stdin frame, got {other:?}"),
+                }
+            }
+
+            let close_frame = read_frame(&mut file)?.expect("close stdin frame");
             assert!(matches!(close_frame.message, Message::CloseStdin { .. }));
             assert!(read_frame(&mut file)?.is_none());
             Ok(())
