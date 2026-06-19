@@ -790,18 +790,24 @@ fn scheduled_setup_request_id() -> String {
 }
 
 fn scheduled_setup_broker_home(fallback: &Path) -> PathBuf {
-    if let Some(path) = std::env::var_os("RUNSEAL_WINDOWS_SANDBOX_SETUP_BROKER_HOME") {
-        return PathBuf::from(path);
+    if let Some(path) = absolute_env_path("RUNSEAL_WINDOWS_SANDBOX_SETUP_BROKER_HOME") {
+        return path;
     }
-    if let Some(user_data_dir) = std::env::var_os("RUNSEAL_USER_DATA_DIR") {
-        return PathBuf::from(user_data_dir).join("windows-sandbox");
+    if let Some(user_data_dir) = absolute_env_path("RUNSEAL_USER_DATA_DIR") {
+        return user_data_dir.join("windows-sandbox");
     }
-    if let Some(appdata) = std::env::var_os("APPDATA") {
-        return PathBuf::from(appdata)
-            .join("RunSeal")
-            .join("windows-sandbox");
+    if let Some(appdata) = absolute_env_path("APPDATA") {
+        return appdata.join("RunSeal").join("windows-sandbox");
     }
     fallback.to_path_buf()
+}
+
+fn absolute_env_path(key: &str) -> Option<PathBuf> {
+    absolute_path_from_env_value(std::env::var_os(key))
+}
+
+fn absolute_path_from_env_value(value: Option<std::ffi::OsString>) -> Option<PathBuf> {
+    value.map(PathBuf::from).filter(|path| path.is_absolute())
 }
 
 fn scheduled_setup_payload_path(codex_home: &Path, request_id: &str) -> PathBuf {
@@ -1514,6 +1520,7 @@ fn filter_sensitive_write_roots(mut roots: Vec<PathBuf>, codex_home: &Path) -> V
 #[cfg(test)]
 mod tests {
     use super::WINDOWS_PLATFORM_DEFAULT_READ_ROOTS;
+    use super::absolute_path_from_env_value;
     use super::build_payload_roots;
     use super::find_setup_exe_for_current_exe;
     use super::gather_full_read_roots_for_permissions;
@@ -1969,6 +1976,18 @@ mod tests {
         assert_eq!(
             helper_bin_dir(codex_home).join("runseal-windows-sandbox-setup.exe"),
             setup_exe_fallback(codex_home)
+        );
+    }
+
+    #[test]
+    fn scheduled_setup_env_paths_must_be_absolute() {
+        assert_eq!(
+            absolute_path_from_env_value(Some(std::ffi::OsString::from(r"C:\runseal\broker"))),
+            Some(PathBuf::from(r"C:\runseal\broker"))
+        );
+        assert_eq!(
+            absolute_path_from_env_value(Some(std::ffi::OsString::from(r"relative\broker"))),
+            None
         );
     }
 

@@ -38,6 +38,9 @@ Local vendor patches:
 - Treat scheduled setup tasks as usable only when their XML explicitly carries
   the exact broker home in `--task-run` arguments; guarded by upstream setup
   helper tests.
+- Treat scheduled setup broker environment roots as usable only when absolute,
+  so task payload/result paths never depend on the caller working directory;
+  guarded by upstream setup tests and `tests/vendor_boundary.rs`.
 - Treat setup markers as strict single-user network-guard state; missing
   marker fields fail closed instead of defaulting to a stale schema; guarded by
   upstream setup tests and `tests/vendor_boundary.rs`.

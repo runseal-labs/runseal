@@ -308,6 +308,8 @@ fn vendored_windows_setup_reuses_elevation_via_scheduled_task() {
     assert!(setup.contains("--task-run"));
     assert!(setup.contains("\\RunSeal\\WindowsSandboxSetup"));
     assert!(setup.contains("RUNSEAL_WINDOWS_SANDBOX_SETUP_BROKER_HOME"));
+    assert!(setup.contains("absolute_env_path(\"RUNSEAL_WINDOWS_SANDBOX_SETUP_BROKER_HOME\")"));
+    assert!(setup.contains("filter(|path| path.is_absolute())"));
 
     assert!(setup_main.contains("run_scheduled_setup_task"));
     assert!(setup_main.contains("ensure_scheduled_setup_task"));
@@ -326,6 +328,10 @@ fn vendored_windows_setup_reuses_elevation_via_scheduled_task() {
     assert!(setup_main.contains("HIGHEST"));
     assert!(setup_main.contains("\\RunSeal\\WindowsSandboxSetup"));
     assert!(setup_main.contains("RUNSEAL_WINDOWS_SANDBOX_SETUP_BROKER_HOME"));
+    assert!(
+        setup_main.contains("absolute_env_path(\"RUNSEAL_WINDOWS_SANDBOX_SETUP_BROKER_HOME\")")
+    );
+    assert!(setup_main.contains("filter(|path| path.is_absolute())"));
 
     assert!(setup.contains("RunSeal"));
     assert!(setup_main.contains("RunSeal"));
