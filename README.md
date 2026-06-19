@@ -74,9 +74,9 @@ in sandboxed execution `BACKEND_UNAVAILABLE` errors when setup is missing or
 stale, and in the matching `execution.failed` audit event.
 
 Sandboxed `runseal exec` does not invoke UAC directly. It uses the installed
-`\RunSeal\WindowsSandboxSetup` scheduled task broker; if the broker is missing
-or stale, execution fails closed with `windows sandbox setup unavailable` until
-the setup command above is run again.
+scheduled setup broker; if the broker is missing or stale, execution fails
+closed with `windows sandbox setup unavailable` until the setup command above is
+run again.
 
 ## Intended protocol
 

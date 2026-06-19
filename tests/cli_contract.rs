@@ -253,6 +253,11 @@ fn setup_help_describes_explicit_windows_setup() -> Result<()> {
 }
 
 #[test]
+fn readme_does_not_expose_private_windows_setup_terms() {
+    assert_no_private_windows_setup_terms(include_str!("../README.md"));
+}
+
+#[test]
 fn setup_status_reports_broker_readiness_without_running_setup() -> Result<()> {
     let tmp = TempDir::new()?;
     let cwd = tmp.path().to_string_lossy().to_string();
