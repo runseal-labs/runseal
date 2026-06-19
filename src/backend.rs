@@ -245,6 +245,7 @@ pub trait SandboxBackend {
 pub enum ExecutionStdin {
     Empty,
     Bytes(Vec<u8>),
+    File(Vec<u8>),
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -1213,7 +1214,7 @@ fn execute_windows_sandbox_plan(
     let _runtime_root = required_plan_path(plan.runtime_root.as_deref(), "runtime_root")?;
     let stdin_bytes = match stdin {
         ExecutionStdin::Empty => None,
-        ExecutionStdin::Bytes(bytes) => Some(bytes),
+        ExecutionStdin::Bytes(bytes) | ExecutionStdin::File(bytes) => Some(bytes),
     };
     let vendor_sandbox_home = vendor_sandbox_home(cwd);
     let workspace_roots = windows_sandbox_workspace_roots_for_plan(cwd, plan)?;

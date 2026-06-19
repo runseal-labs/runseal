@@ -381,7 +381,6 @@ fn execute_from_params(params: &Value) -> Result<(Vec<Value>, Value), RunSealErr
             "env",
         ],
     )?;
-    let stdin = stdin_from_params(params)?;
     let metadata = metadata_from_params(params)?;
     let command = params
         .get("command")
@@ -399,6 +398,7 @@ fn execute_from_params(params: &Value) -> Result<(Vec<Value>, Value), RunSealErr
         .and_then(Value::as_str)
         .map(PathBuf::from)
         .unwrap_or_else(current_dir);
+    let stdin = stdin_from_params(params, &cwd)?;
     let policy = params
         .get("policy")
         .cloned()

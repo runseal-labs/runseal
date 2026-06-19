@@ -46,7 +46,7 @@ pub(super) fn spawn_local_command(
         ExecutionStdin::Empty => {
             process.stdin(Stdio::null());
         }
-        ExecutionStdin::Bytes(_) => {
+        ExecutionStdin::Bytes(_) | ExecutionStdin::File(_) => {
             process.stdin(Stdio::piped());
         }
     }
@@ -59,7 +59,7 @@ pub(super) fn spawn_local_command(
             Ok(process_job) => process_job,
             Err(err) => return Err(cleanup_child_after_setup_error(child, err)),
         };
-        if let ExecutionStdin::Bytes(bytes) = stdin
+        if let ExecutionStdin::Bytes(bytes) | ExecutionStdin::File(bytes) = stdin
             && let Err(err) = write_child_stdin(&mut child, bytes)
         {
             return Err(cleanup_child_after_setup_error(child, err));
@@ -72,7 +72,7 @@ pub(super) fn spawn_local_command(
             });
     };
 
-    if matches!(stdin, ExecutionStdin::Bytes(_)) {
+    if matches!(stdin, ExecutionStdin::Bytes(_) | ExecutionStdin::File(_)) {
         process.stdout(Stdio::piped()).stderr(Stdio::piped());
     }
     let start = Instant::now();
@@ -82,7 +82,7 @@ pub(super) fn spawn_local_command(
         Ok(process_job) => process_job,
         Err(err) => return Err(cleanup_child_after_setup_error(child, err)),
     };
-    if let ExecutionStdin::Bytes(bytes) = stdin
+    if let ExecutionStdin::Bytes(bytes) | ExecutionStdin::File(bytes) = stdin
         && let Err(err) = write_child_stdin(&mut child, bytes)
     {
         return Err(cleanup_child_after_setup_error(child, err));

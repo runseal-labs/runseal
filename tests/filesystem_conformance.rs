@@ -558,6 +558,48 @@ fn workspace_write_accepts_bytes_stdin_when_supported_or_fails_closed() -> Resul
 }
 
 #[test]
+fn workspace_write_accepts_file_stdin_when_supported_or_fails_closed() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let workspace = tmp.path().join("workspace");
+    fs::create_dir_all(&workspace)?;
+    let stdin_path = workspace.join("stdin-payload.txt");
+    let stdin_text = "runseal sandbox stdin file";
+    fs::write(&stdin_path, stdin_text)?;
+    let response = execute_params(json!({
+        "command": [
+            python_bin(),
+            "-c",
+            "import sys; print(sys.stdin.buffer.read().decode('utf-8'), end='')"
+        ],
+        "cwd": workspace,
+        "policy": "workspace-write",
+        "network": {"mode": "disabled"},
+        "stdin": {
+            "mode": "file",
+            "path": stdin_path
+        }
+    }))?;
+
+    if is_backend_missing(&response) {
+        let expected_features = expected_missing_features(&["network_disabled"]);
+        assert_backend_missing_features(&response, &workspace, &expected_features)?;
+        return Ok(());
+    }
+    if is_backend_unavailable(&response) {
+        assert_backend_unavailable(&response, &workspace)?;
+        return Ok(());
+    }
+
+    assert_eq!(response["result"]["status"], "finished");
+    assert_eq!(response["result"]["exit_code"], 0);
+    assert_eq!(
+        response["result"]["stdout"].as_str().unwrap_or_default(),
+        stdin_text
+    );
+    Ok(())
+}
+
+#[test]
 fn network_disabled_blocks_direct_egress_when_supported_or_fails_closed() -> Result<()> {
     let tmp = TempDir::new()?;
     let workspace = tmp.path().join("workspace");

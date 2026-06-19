@@ -985,6 +985,103 @@ fn execute_accepts_bytes_stdin_and_audits_metadata_only() -> Result<()> {
 }
 
 #[test]
+fn execute_accepts_file_stdin_and_audits_metadata_only() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let stdin_path = tmp.path().join("stdin-payload.bin");
+    let stdin_bytes = vec![b'x'; 128 * 1024];
+    fs::write(&stdin_path, &stdin_bytes)?;
+    let output = run_rpc(&rpc_request(
+        "execute",
+        json!({
+            "command": [
+                python_bin(),
+                "-c",
+                "import sys; data = sys.stdin.buffer.read(); print(f'stdin_bytes={len(data)}')"
+            ],
+            "cwd": tmp.path(),
+            "policy": "danger-full-access",
+            "stdin": {
+                "mode": "file",
+                "path": stdin_path
+            }
+        }),
+    ))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = messages
+        .iter()
+        .find(|message| message.get("id") == Some(&json!(1)))
+        .unwrap();
+
+    assert_eq!(response["result"]["status"], "finished");
+    assert_eq!(response["result"]["exit_code"], 0);
+    assert!(
+        response["result"]["stdout"]
+            .as_str()
+            .unwrap_or_default()
+            .contains(&format!("stdin_bytes={}", stdin_bytes.len()))
+    );
+
+    let audit_path = response["result"]["audit_path"]
+        .as_str()
+        .expect("execution result must include audit_path");
+    let audit_events = read_audit_events(tmp.path(), audit_path)?;
+    let started = audit_events
+        .iter()
+        .find(|event| event["type"] == "execution.started")
+        .context("execution.started audit event must exist")?;
+    assert_eq!(started["stdin"]["mode"], "file");
+    assert_eq!(started["stdin"]["byte_count"], stdin_bytes.len());
+
+    let audit_jsonl = fs::read_to_string(tmp.path().join(audit_path))?;
+    assert!(!audit_jsonl.contains("stdin-payload.bin"));
+    Ok(())
+}
+
+#[test]
+fn execute_rejects_file_stdin_outside_cwd() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let workspace = tmp.path().join("workspace");
+    fs::create_dir_all(&workspace)?;
+    let outside = tmp.path().join("outside.txt");
+    fs::write(&outside, b"outside-secret")?;
+    let output = run_rpc(&rpc_request(
+        "execute",
+        json!({
+            "command": [python_bin(), "-c", "print('must not run')"],
+            "cwd": workspace,
+            "policy": "danger-full-access",
+            "stdin": {
+                "mode": "file",
+                "path": outside
+            }
+        }),
+    ))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = &messages[0];
+
+    assert_eq!(response["error"]["data"]["code"], "INVALID_REQUEST");
+    assert!(
+        response["error"]["data"]["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("params.stdin.path must be under params.cwd")
+    );
+    Ok(())
+}
+
+#[test]
 fn execute_rejects_invalid_bytes_stdin() -> Result<()> {
     let tmp = TempDir::new()?;
     let cases = [
