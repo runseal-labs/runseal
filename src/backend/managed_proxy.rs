@@ -5,10 +5,13 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const MAX_HEADER_BYTES: usize = 64 * 1024;
 const NO_PROXY: &str = "";
+const MANAGED_PROXY_PORT: u16 = 43129;
+const MANAGED_PROXY_BIND_RETRY_TIMEOUT: Duration = Duration::from_secs(30);
+const MANAGED_PROXY_BIND_RETRY_INTERVAL: Duration = Duration::from_millis(50);
 const PROXY_KEYS: &[&str] = &[
     "HTTP_PROXY",
     "HTTPS_PROXY",
@@ -37,16 +40,27 @@ impl ManagedSandboxProxy {
             .lock()
             .map_err(|_| io::Error::other("managed proxy cache lock poisoned"))?;
         if let Some(inner) = shared.upgrade() {
-            return Ok(Self { inner });
+            if inner
+                .thread
+                .as_ref()
+                .is_some_and(std::thread::JoinHandle::is_finished)
+            {
+                *shared = Weak::new();
+            } else {
+                return Ok(Self { inner });
+            }
         }
 
-        let proxy = Self::start_dedicated()?;
+        let proxy = Self::start_dedicated_on(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            MANAGED_PROXY_PORT,
+        ))?;
         *shared = Arc::downgrade(&proxy.inner);
         Ok(proxy)
     }
 
-    fn start_dedicated() -> io::Result<Self> {
-        let listener = TcpListener::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))?;
+    fn start_dedicated_on(addr: SocketAddr) -> io::Result<Self> {
+        let listener = bind_proxy_listener(addr)?;
         listener.set_nonblocking(true)?;
         let addr = listener.local_addr()?;
         let shutdown = Arc::new(AtomicBool::new(false));
@@ -58,6 +72,11 @@ impl ManagedSandboxProxy {
             thread: Some(thread),
         });
         Ok(Self { inner })
+    }
+
+    #[cfg(test)]
+    fn start_dedicated_ephemeral() -> io::Result<Self> {
+        Self::start_dedicated_on(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
     }
 
     pub(super) fn environment(&self) -> Vec<(String, String)> {
@@ -82,6 +101,29 @@ impl ManagedSandboxProxy {
                 .map(|key| ((*key).to_string(), NO_PROXY.to_string())),
         );
         env
+    }
+}
+
+fn bind_proxy_listener(addr: SocketAddr) -> io::Result<TcpListener> {
+    let started_at = Instant::now();
+    loop {
+        match TcpListener::bind(addr) {
+            Ok(listener) => return Ok(listener),
+            Err(err)
+                if addr.port() == MANAGED_PROXY_PORT
+                    && err.kind() == io::ErrorKind::AddrInUse
+                    && started_at.elapsed() < MANAGED_PROXY_BIND_RETRY_TIMEOUT =>
+            {
+                thread::sleep(MANAGED_PROXY_BIND_RETRY_INTERVAL);
+            }
+            Err(err) if addr.port() == MANAGED_PROXY_PORT => {
+                return Err(io::Error::new(
+                    err.kind(),
+                    format!("fixed managed proxy port {addr} is unavailable: {err}"),
+                ));
+            }
+            Err(err) => return Err(err),
+        }
     }
 }
 
@@ -110,7 +152,6 @@ fn accept_loop(listener: TcpListener, shutdown: Arc<AtomicBool>) {
         }
     }
 }
-
 fn handle_client(mut client: TcpStream) -> io::Result<()> {
     let mut buffer = Vec::with_capacity(4096);
     loop {
@@ -281,6 +322,7 @@ mod tests {
             .iter()
             .find_map(|(key, value)| (key == "HTTP_PROXY").then_some(value.as_str()))
             .expect("HTTP_PROXY");
+        assert_eq!(proxy_url, format!("http://127.0.0.1:{MANAGED_PROXY_PORT}"));
         for key in [
             "HTTPS_PROXY",
             "http_proxy",
@@ -330,7 +372,7 @@ mod tests {
 
     #[test]
     fn drops_listener_when_last_proxy_handle_drops() {
-        let proxy = ManagedSandboxProxy::start_dedicated().expect("start proxy");
+        let proxy = ManagedSandboxProxy::start_dedicated_ephemeral().expect("start proxy");
         let addr = proxy.inner.addr;
         let stream = TcpStream::connect_timeout(&addr, Duration::from_secs(1))
             .expect("proxy listener should accept while proxy is alive");
