@@ -12,6 +12,7 @@ mod managed_proxy;
 mod process;
 mod runtime;
 
+use crate::events::timestamp_now;
 use filesystem::{
     WindowsFilesystemAclDriver, WindowsFilesystemAclSubject,
     apply_private_filesystem_acl_transaction, new_windows_filesystem_acl_driver,
@@ -263,6 +264,7 @@ impl ExecutionEnv {
 pub struct BackendExecutionOutput {
     pub output: Output,
     pub timed_out: bool,
+    pub events: Vec<Value>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1261,6 +1263,20 @@ fn execute_windows_sandbox_plan(
         } else {
             None
         };
+        let events = if managed_proxy.is_some() {
+            vec![json!({
+                "type": "execution.network.proxy_ready",
+                "time": timestamp_now(),
+                "decision": "ready",
+                "network": {
+                    "mode": plan.network_mode,
+                    "direct_egress": plan.network_direct_egress,
+                    "managed_proxy": plan.network_managed_proxy,
+                },
+            })]
+        } else {
+            Vec::new()
+        };
         let env_map = sandbox_environment(plan, env, managed_proxy.as_ref());
         let workspace_contained = plan.sandbox_level == SandboxLevel::WorkspaceContained.as_str();
         let deny_read_paths = if workspace_contained {
@@ -1270,38 +1286,40 @@ fn execute_windows_sandbox_plan(
         };
         let sandbox_command = windows_sandbox_command(command, &env_map);
 
-        codex_windows_sandbox::run_windows_sandbox_capture_for_permission_profile_elevated(
-            codex_windows_sandbox::ElevatedSandboxProfileCaptureRequest {
-                permission_profile: &permission_profile,
-                workspace_roots: workspace_roots.as_slice(),
-                codex_home: &vendor_sandbox_home,
-                command: sandbox_command,
-                cwd,
-                env_map,
-                stdin_bytes,
-                timeout_ms: timeout.map(duration_millis_u64),
-                cancellation: None,
-                use_private_desktop: false,
-                proxy_enforced: plan.network_managed_proxy == "required",
-                read_roots_override: None,
-                read_roots_include_platform_defaults: workspace_contained,
-                write_roots_override: Some(write_roots_override.as_slice()),
-                deny_read_paths_override: deny_read_paths.as_slice(),
-                deny_write_paths_override: &[],
-            },
-        )
-        .map_err(|err| {
-            if let Some(failure) = codex_windows_sandbox::extract_setup_failure(&err) {
-                return io::Error::other(BackendUnavailableError {
-                    reason: public_windows_setup_unavailable_reason(failure.code.as_str()),
-                });
-            }
-            io::Error::other(err.to_string())
-        })
+        let capture =
+            codex_windows_sandbox::run_windows_sandbox_capture_for_permission_profile_elevated(
+                codex_windows_sandbox::ElevatedSandboxProfileCaptureRequest {
+                    permission_profile: &permission_profile,
+                    workspace_roots: workspace_roots.as_slice(),
+                    codex_home: &vendor_sandbox_home,
+                    command: sandbox_command,
+                    cwd,
+                    env_map,
+                    stdin_bytes,
+                    timeout_ms: timeout.map(duration_millis_u64),
+                    cancellation: None,
+                    use_private_desktop: false,
+                    proxy_enforced: plan.network_managed_proxy == "required",
+                    read_roots_override: None,
+                    read_roots_include_platform_defaults: workspace_contained,
+                    write_roots_override: Some(write_roots_override.as_slice()),
+                    deny_read_paths_override: deny_read_paths.as_slice(),
+                    deny_write_paths_override: &[],
+                },
+            )
+            .map_err(|err| {
+                if let Some(failure) = codex_windows_sandbox::extract_setup_failure(&err) {
+                    return io::Error::other(BackendUnavailableError {
+                        reason: public_windows_setup_unavailable_reason(failure.code.as_str()),
+                    });
+                }
+                io::Error::other(err.to_string())
+            })?;
+        Ok((capture, events))
     })();
     let cleanup = plan.cleanup_runtime_roots();
 
-    let capture = match (result, cleanup) {
+    let (capture, events) = match (result, cleanup) {
         (Ok(capture), Ok(_)) => capture,
         (Err(err), Ok(_)) => return Err(err),
         (Ok(_), Err(err)) => return Err(err),
@@ -1319,6 +1337,7 @@ fn execute_windows_sandbox_plan(
             stderr: capture.stderr,
         },
         timed_out: capture.timed_out,
+        events,
     })
 }
 

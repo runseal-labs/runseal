@@ -1003,6 +1003,21 @@ $successText
             .unwrap_or_default()
             .contains("proxy-ok")
     );
+    let audit_path = response["result"]["audit_path"]
+        .as_str()
+        .context("successful response must include audit_path")?;
+    let audit_jsonl = fs::read_to_string(workspace.join(audit_path))?;
+    assert_no_proxy_credential_terms_in_str(&audit_jsonl);
+    let audit_events = audit_jsonl
+        .lines()
+        .map(|line| serde_json::from_str(line).context("audit line must be JSON"))
+        .collect::<Result<Vec<Value>>>()?;
+    assert!(
+        audit_events
+            .iter()
+            .any(|event| event["type"] == "execution.network.proxy_ready"),
+        "managed proxy executions must audit proxy readiness"
+    );
     Ok(())
 }
 

@@ -111,7 +111,7 @@ pub(crate) fn backend_event_json(name: &str, status: &str, platform: &str) -> Va
 
 fn event_at(mut event: Value, time: &str) -> Value {
     if let Some(object) = event.as_object_mut() {
-        object.insert("time".to_string(), json!(time));
+        object.entry("time").or_insert_with(|| json!(time));
     }
     event
 }
@@ -120,5 +120,37 @@ pub(crate) fn timestamp_now() -> String {
     match OffsetDateTime::now_utc().format(&Rfc3339) {
         Ok(timestamp) => timestamp,
         Err(_) => "1970-01-01T00:00:00Z".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn execution_event_preserves_backend_supplied_time() {
+        let ids = ExecutionIds {
+            execution_id: "exec_test".to_string(),
+            session_id: "sess_test".to_string(),
+            seal_id: "seal_test".to_string(),
+        };
+        let context = ExecutionEventContext {
+            ids: &ids,
+            policy_id: "policy",
+            policy_hash: "hash",
+            policy_epoch: "epoch",
+            audit_path: ".runseal/audit/sess_test.jsonl",
+            backend: json!({"name": "test"}),
+        };
+        let event = execution_event_now(
+            json!({
+                "type": "execution.network.proxy_ready",
+                "time": "2026-01-01T00:00:00Z",
+            }),
+            &context,
+        );
+
+        assert_eq!(event["time"], "2026-01-01T00:00:00Z");
+        assert_eq!(event["execution_id"], "exec_test");
     }
 }

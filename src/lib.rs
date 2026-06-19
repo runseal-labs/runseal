@@ -1476,6 +1476,10 @@ fn execute_command(
             ));
         }
     };
+    for event in &execution_output.events {
+        let event = execution_event_now(event.clone(), &event_context);
+        write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
+    }
     let mut output = execution_output.output;
     let original_stdout_bytes = output.stdout.len();
     let original_stderr_bytes = output.stderr.len();

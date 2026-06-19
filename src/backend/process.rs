@@ -70,6 +70,7 @@ pub(super) fn spawn_local_command(
             .map(|output| BackendExecutionOutput {
                 output,
                 timed_out: false,
+                events: Vec::new(),
             });
     };
 
@@ -101,6 +102,7 @@ pub(super) fn spawn_local_command(
             stderr: join_pipe_reader(stderr_reader)?,
         },
         timed_out,
+        events: Vec::new(),
     })
 }
 
