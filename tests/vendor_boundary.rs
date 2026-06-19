@@ -37,6 +37,10 @@ const WINDOWS_SANDBOX_VENDOR_NOTES: &str =
     include_str!("../vendor/codex-windows-sandbox/VENDOR.md");
 const RUNSEAL_BACKEND_SOURCE: &str = include_str!("../src/backend.rs");
 const RUNSEAL_LIB_SOURCE: &str = include_str!("../src/lib.rs");
+const WINDOWS_SANDBOX_SETUP_MAIN: &str =
+    include_str!("../vendor/codex-windows-sandbox/upstream/bin/setup_main/main.rs");
+const WINDOWS_SANDBOX_RUNNER_MAIN: &str =
+    include_str!("../vendor/codex-windows-sandbox/upstream/bin/command_runner/main.rs");
 
 const VENDOR_TIMEOUT_SOURCES: &[(&str, &str)] = &[
     (
@@ -178,6 +182,13 @@ fn vendored_windows_sandbox_child_processes_do_not_open_console_windows() {
             "CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW"
         )
     );
+}
+
+#[test]
+fn vendored_windows_sandbox_helper_bins_use_windows_subsystem() {
+    for source in [WINDOWS_SANDBOX_SETUP_MAIN, WINDOWS_SANDBOX_RUNNER_MAIN] {
+        assert!(source.contains("#![windows_subsystem = \"windows\"]"));
+    }
 }
 
 #[test]
