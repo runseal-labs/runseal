@@ -27,6 +27,8 @@ const PROXY_KEYS: &[&str] = &[
     "https_proxy",
     "ALL_PROXY",
     "all_proxy",
+    "GIT_HTTP_PROXY",
+    "GIT_HTTPS_PROXY",
 ];
 const NO_PROXY_KEYS: &[&str] = &["NO_PROXY", "no_proxy"];
 
@@ -429,6 +431,8 @@ mod tests {
             "https_proxy",
             "ALL_PROXY",
             "all_proxy",
+            "GIT_HTTP_PROXY",
+            "GIT_HTTPS_PROXY",
         ] {
             assert!(
                 env.iter()
