@@ -1470,9 +1470,13 @@ fn execute_command(
             ));
         }
     };
-    for event in &execution_output.events {
-        let event = execution_event_now(event.clone(), &event_context);
-        write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
+    let backend_events = execution_output
+        .events
+        .iter()
+        .map(|event| execution_event_now(event.clone(), &event_context))
+        .collect::<Vec<_>>();
+    for event in &backend_events {
+        write_audit_event_with_metadata(&mut audit, event, &metadata)?;
     }
     let mut output = execution_output.output;
     let original_stdout_bytes = output.stdout.len();
@@ -1523,6 +1527,7 @@ fn execute_command(
         ));
     }
     let mut events = vec![started];
+    events.extend(backend_events);
     if !output.stdout.is_empty() {
         let event = stream_event("execution.stdout", &event_context, &output.stdout, 0);
         let audit_event = audit_stream_event_metadata(&event);

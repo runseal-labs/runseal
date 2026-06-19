@@ -33,6 +33,7 @@ const PROXY_KEYS: &[&str] = &[
     "GIT_HTTPS_PROXY",
 ];
 const NO_PROXY_KEYS: &[&str] = &["NO_PROXY", "no_proxy"];
+const PROXY_AUTHORIZATION_KEY: &str = "RUNSEAL_NETWORK_PROXY_AUTHORIZATION";
 type ProxyEventBuffer = Arc<Mutex<Vec<Value>>>;
 type ProxyTokenMap = Arc<Mutex<HashMap<String, ProxyEventBuffer>>>;
 
@@ -122,6 +123,10 @@ impl ManagedSandboxProxy {
         let proxy_url = format!("http://runseal:{}@{}", self.token, self.inner.addr);
         let mut env = vec![
             ("RUNSEAL_NETWORK_PROXY_ACTIVE".to_string(), "1".to_string()),
+            (
+                PROXY_AUTHORIZATION_KEY.to_string(),
+                proxy_basic_auth_value(&self.token),
+            ),
             (
                 "RUNSEAL_NETWORK_ALLOW_LOCAL_BINDING".to_string(),
                 "0".to_string(),
@@ -550,6 +555,9 @@ mod tests {
                 proxy.token
             )
         );
+        assert!(env.iter().any(|(key, value)| {
+            key == PROXY_AUTHORIZATION_KEY && value == &proxy_basic_auth_value(&proxy.token)
+        }));
         for key in [
             "HTTPS_PROXY",
             "http_proxy",

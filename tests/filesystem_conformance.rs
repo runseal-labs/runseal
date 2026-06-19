@@ -162,6 +162,13 @@ fn execute_params(params: Value) -> Result<Value> {
 }
 
 fn execute_params_unlocked(params: Value) -> Result<Value> {
+    execute_messages_unlocked(params)?
+        .into_iter()
+        .find(|message| message.get("id") == Some(&json!(1)))
+        .context("execute response with id 1 must exist")
+}
+
+fn execute_messages_unlocked(params: Value) -> Result<Vec<Value>> {
     let output = run_rpc(&rpc_request("execute", params))?;
 
     assert!(
@@ -170,10 +177,7 @@ fn execute_params_unlocked(params: Value) -> Result<Value> {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    stdout_json_lines(&output)?
-        .into_iter()
-        .find(|message| message.get("id") == Some(&json!(1)))
-        .context("execute response with id 1 must exist")
+    stdout_json_lines(&output)
 }
 
 #[cfg(windows)]
@@ -891,12 +895,9 @@ fn network_proxy_allows_http_through_managed_proxy_when_supported_or_fails_close
 
     let (port, upstream) = start_loopback_http_server()?;
     let code = format!(
-        "import base64, os, socket, time, urllib.parse\n\
+        "import os, socket, time, urllib.parse\n\
          proxy = urllib.parse.urlparse(os.environ['HTTP_PROXY'])\n\
-         proxy_auth = ''\n\
-         if proxy.username is not None and proxy.password is not None:\n\
-             token = (urllib.parse.unquote(proxy.username) + ':' + urllib.parse.unquote(proxy.password)).encode('utf-8')\n\
-             proxy_auth = 'Proxy-Authorization: Basic ' + base64.b64encode(token).decode('ascii') + '\\r\\n'\n\
+         proxy_auth = 'Proxy-Authorization: ' + os.environ['RUNSEAL_NETWORK_PROXY_AUTHORIZATION'] + '\\r\\n'\n\
          request = f'GET http://127.0.0.1:{port}/proxy-ok HTTP/1.1\\r\\nHost: 127.0.0.1:{port}\\r\\n{{proxy_auth}}Connection: close\\r\\n\\r\\n'.encode('ascii')\n\
          deadline = time.monotonic() + 8\n\
          last = None\n\
@@ -929,10 +930,7 @@ fn network_proxy_allows_http_through_managed_proxy_when_supported_or_fails_close
 $ErrorActionPreference = 'Stop'
 $proxy = [Uri]$env:HTTP_PROXY
 $request = __REQUEST__
-if (-not [string]::IsNullOrEmpty($proxy.UserInfo)) {
-    $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([Uri]::UnescapeDataString($proxy.UserInfo)))
-    $request = $request.Replace("Connection: close`r`n", "Proxy-Authorization: Basic $encoded`r`nConnection: close`r`n")
-}
+$request = $request.Replace("Connection: close`r`n", "Proxy-Authorization: $env:RUNSEAL_NETWORK_PROXY_AUTHORIZATION`r`nConnection: close`r`n")
 $deadline = [DateTime]::UtcNow.AddSeconds(8)
 $last = $null
 $successText = $null
@@ -971,25 +969,29 @@ if ($null -eq $successText) {
 $successText
 "#
     .replace("__REQUEST__", &proxy_request);
-    let response = execute_params_unlocked(platform_script_params(
+    let messages = execute_messages_unlocked(platform_script_params(
         "workspace-write",
         &workspace,
         Some("proxy"),
         code,
         ps_code,
     ))?;
+    let response = messages
+        .iter()
+        .find(|message| message.get("id") == Some(&json!(1)))
+        .context("execute response with id 1 must exist")?;
 
-    if is_backend_missing(&response) {
+    if is_backend_missing(response) {
         let upstream_hit = upstream.join().expect("upstream server thread")?;
         assert!(!upstream_hit);
         let expected_features = expected_missing_features(&["network_proxy", "managed_proxy"]);
-        assert_backend_missing_features(&response, &workspace, &expected_features)?;
+        assert_backend_missing_features(response, &workspace, &expected_features)?;
         return Ok(());
     }
-    if is_backend_unavailable(&response) {
+    if is_backend_unavailable(response) {
         let upstream_hit = upstream.join().expect("upstream server thread")?;
         assert!(!upstream_hit);
-        assert_backend_unavailable(&response, &workspace)?;
+        assert_backend_unavailable(response, &workspace)?;
         return Ok(());
     }
 
@@ -1023,6 +1025,13 @@ $successText
             .iter()
             .any(|event| event["type"] == "execution.network.request"),
         "managed proxy executions must audit proxy requests"
+    );
+    assert!(
+        messages.iter().any(|message| {
+            message.get("method") == Some(&json!("event"))
+                && message["params"]["type"] == "execution.network.request"
+        }),
+        "managed proxy executions must stream proxy request events"
     );
     Ok(())
 }
