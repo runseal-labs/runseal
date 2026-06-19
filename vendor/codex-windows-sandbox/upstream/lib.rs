@@ -138,7 +138,6 @@ pub use acl::ensure_allow_write_aces;
 pub use acl::fetch_dacl_handle;
 #[cfg(target_os = "windows")]
 pub use acl::path_mask_allows;
-pub use acl::remove_deny_read_aces;
 #[cfg(target_os = "windows")]
 pub use acl::remove_deny_write_aces;
 #[cfg(target_os = "windows")]

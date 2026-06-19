@@ -500,14 +500,6 @@ pub unsafe fn remove_deny_write_aces(path: &Path, psid: *mut c_void) -> Result<b
     remove_deny_aces(path, psid, DenyAceKind::Write)
 }
 
-/// Removes explicit read-deny ACEs for the given SID on the target path.
-///
-/// # Safety
-/// Caller must ensure `psid` points to a valid SID and `path` refers to an existing file or directory.
-pub unsafe fn remove_deny_read_aces(path: &Path, psid: *mut c_void) -> Result<bool> {
-    remove_deny_aces(path, psid, DenyAceKind::Read)
-}
-
 unsafe fn remove_deny_aces(path: &Path, psid: *mut c_void, kind: DenyAceKind) -> Result<bool> {
     let mut p_sd: *mut c_void = std::ptr::null_mut();
     let mut p_dacl: *mut ACL = std::ptr::null_mut();
