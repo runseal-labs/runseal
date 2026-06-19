@@ -39,8 +39,7 @@ const MAX_PROTOCOL_ID_BYTES: usize = 128;
 const MAX_ENV_ENTRIES: usize = 64;
 const MAX_ENV_KEY_BYTES: usize = 128;
 const MAX_ENV_VALUE_BYTES: usize = 4096;
-const WINDOWS_SANDBOX_SETUP_FAILED: &str =
-    "windows sandbox setup failed; install or repair requires an elevated shell";
+const WINDOWS_SANDBOX_SETUP_FAILED: &str = "windows sandbox setup failed; first install requires an elevated shell; later repairs can reuse the setup broker";
 const HELP_TEXT: &str = "\
 Usage: runseal <command> [options]
 
@@ -1550,6 +1549,9 @@ mod tests {
     fn windows_setup_failure_message_hides_vendor_codes() {
         assert!(!WINDOWS_SANDBOX_SETUP_FAILED.contains("orchestrator_"));
         assert!(!WINDOWS_SANDBOX_SETUP_FAILED.contains("helper_"));
+        assert!(WINDOWS_SANDBOX_SETUP_FAILED.contains("first install requires an elevated shell"));
+        assert!(WINDOWS_SANDBOX_SETUP_FAILED.contains("repairs can reuse the setup broker"));
+        assert!(!WINDOWS_SANDBOX_SETUP_FAILED.contains("install or repair requires"));
     }
 
     #[test]
