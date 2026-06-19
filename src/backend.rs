@@ -2830,6 +2830,39 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_kill_on_close_job_leaves_unassigned_process_running() -> io::Result<()> {
+        let job = WindowsKillOnCloseJob::new()?;
+        let mut assigned = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", "Start-Sleep -Seconds 30; exit 7"])
+            .spawn()?;
+        let mut unassigned = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", "Start-Sleep -Seconds 30; exit 9"])
+            .spawn()?;
+
+        job.assign_child(&assigned)?;
+        let started = Instant::now();
+        drop(job);
+        assigned.wait()?;
+        let elapsed = started.elapsed();
+        let unassigned_still_running = unassigned.try_wait()?.is_none();
+        if unassigned_still_running {
+            unassigned.kill()?;
+        }
+        let _ = unassigned.wait();
+
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "kill-on-close job should terminate only the assigned child promptly"
+        );
+        assert!(
+            unassigned_still_running,
+            "kill-on-close job must not terminate unrelated processes"
+        );
+        Ok(())
+    }
+
     #[test]
     fn filesystem_acl_transaction_executor_captures_before_apply() -> io::Result<()> {
         let rules = vec![
