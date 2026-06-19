@@ -9,8 +9,8 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 const WFP_SETUP_SERVICE_NAME: &str = "runseal-windows-sandbox-setup";
-const WFP_SETUP_SUCCESS_METRIC: &str = "codex.windows_sandbox.wfp_setup_success";
-const WFP_SETUP_FAILURE_METRIC: &str = "codex.windows_sandbox.wfp_setup_failure";
+const WFP_SETUP_SUCCESS_METRIC: &str = "runseal.windows_sandbox.wfp_setup_success";
+const WFP_SETUP_FAILURE_METRIC: &str = "runseal.windows_sandbox.wfp_setup_failure";
 
 #[derive(Debug, Clone, Copy)]
 enum WfpSetupMetricOutcome {
@@ -100,7 +100,7 @@ fn emit_wfp_setup_metric(
 fn emit_wfp_setup_metric_safely<F>(
     codex_home: &Path,
     otel: Option<&StatsigMetricsSettings>,
-    offline_username: &str,
+    sandbox_username: &str,
     metric: &WfpSetupMetric,
     log: &mut F,
 ) where
@@ -112,12 +112,12 @@ fn emit_wfp_setup_metric_safely<F>(
     match result {
         Ok(Ok(())) => {}
         Ok(Err(err)) => log(&format!(
-            "failed to emit WFP setup metric for {offline_username}: {err}"
+            "failed to emit WFP setup metric for {sandbox_username}: {err}"
         )),
         Err(panic_payload) => {
             let error = panic_payload_to_string(panic_payload);
             log(&format!(
-                "WFP setup metric emission panicked for {offline_username}: {error}"
+                "WFP setup metric emission panicked for {sandbox_username}: {error}"
             ));
         }
     }
@@ -125,22 +125,22 @@ fn emit_wfp_setup_metric_safely<F>(
 
 pub fn install_wfp_filters<F>(
     codex_home: &Path,
-    offline_username: &str,
+    sandbox_username: &str,
     otel: Option<&StatsigMetricsSettings>,
     mut log: F,
 ) where
     F: FnMut(&str),
 {
     let metric = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        install_wfp_filters_for_account(offline_username)
+        install_wfp_filters_for_account(sandbox_username)
     })) {
         Ok(Ok(installed_filter_count)) => {
             log(&format!(
-                "WFP setup succeeded for {offline_username} with {installed_filter_count} installed filters"
+                "WFP setup succeeded for {sandbox_username} with {installed_filter_count} installed filters"
             ));
             WfpSetupMetric {
                 outcome: WfpSetupMetricOutcome::Success,
-                target_account: offline_username.to_string(),
+                target_account: sandbox_username.to_string(),
                 installed_filter_count,
                 error: None,
             }
@@ -148,11 +148,11 @@ pub fn install_wfp_filters<F>(
         Ok(Err(err)) => {
             let error = err.to_string();
             log(&format!(
-                "WFP setup failed for {offline_username}: {error}; continuing elevated setup"
+                "WFP setup failed for {sandbox_username}: {error}; continuing elevated setup"
             ));
             WfpSetupMetric {
                 outcome: WfpSetupMetricOutcome::Failure,
-                target_account: offline_username.to_string(),
+                target_account: sandbox_username.to_string(),
                 installed_filter_count: 0,
                 error: Some(error),
             }
@@ -160,16 +160,16 @@ pub fn install_wfp_filters<F>(
         Err(panic_payload) => {
             let error = panic_payload_to_string(panic_payload);
             log(&format!(
-                "WFP setup panicked for {offline_username}: {error}; continuing elevated setup"
+                "WFP setup panicked for {sandbox_username}: {error}; continuing elevated setup"
             ));
             WfpSetupMetric {
                 outcome: WfpSetupMetricOutcome::Failure,
-                target_account: offline_username.to_string(),
+                target_account: sandbox_username.to_string(),
                 installed_filter_count: 0,
                 error: Some(format!("panic: {error}")),
             }
         }
     };
 
-    emit_wfp_setup_metric_safely(codex_home, otel, offline_username, &metric, &mut log);
+    emit_wfp_setup_metric_safely(codex_home, otel, sandbox_username, &metric, &mut log);
 }

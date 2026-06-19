@@ -21,6 +21,10 @@ const VENDOR_SETUP_SOURCES: &[(&str, &str)] = &[
         "setup_main/win/firewall.rs",
         include_str!("../vendor/codex-windows-sandbox/upstream/bin/setup_main/win/firewall.rs"),
     ),
+    (
+        "wfp_setup.rs",
+        include_str!("../vendor/codex-windows-sandbox/upstream/wfp_setup.rs"),
+    ),
 ];
 
 const WINDOWS_SANDBOX_MANIFEST: &str =
@@ -80,6 +84,15 @@ fn vendored_windows_setup_state_uses_single_user_schema() {
             .iter()
             .any(|(_, source)| source.contains("user: SandboxUserRecord"))
     );
+}
+
+#[test]
+fn vendored_windows_wfp_metrics_use_runseal_namespace() {
+    let wfp_setup = include_str!("../vendor/codex-windows-sandbox/upstream/wfp_setup.rs");
+
+    assert!(wfp_setup.contains("runseal.windows_sandbox.wfp_setup_success"));
+    assert!(wfp_setup.contains("runseal.windows_sandbox.wfp_setup_failure"));
+    assert!(!wfp_setup.contains("codex.windows_sandbox"));
 }
 
 #[test]
