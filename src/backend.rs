@@ -1226,27 +1226,27 @@ fn execute_windows_sandbox_plan(
     let workspace_roots = windows_sandbox_workspace_roots_for_plan(cwd, plan)?;
     let permission_profile = plan.vendor_permission_profile()?;
     plan.prepare_runtime_roots()?;
-    prepare_vendor_sandbox_home(cwd, &vendor_sandbox_home)?;
 
-    let managed_proxy = if plan.network_managed_proxy == "required" {
-        Some(ManagedSandboxProxy::start().map_err(|err| {
-            io::Error::other(BackendUnavailableError {
-                reason: format!("windows managed proxy unavailable: {err}"),
-            })
-        })?)
-    } else {
-        None
-    };
-    let env_map = sandbox_environment(plan, env, managed_proxy.as_ref());
-    let workspace_contained = plan.sandbox_level == SandboxLevel::WorkspaceContained.as_str();
-    let deny_read_paths = if workspace_contained {
-        windows_workspace_contained_deny_read_paths(&workspace_roots, plan, &env_map)?
-    } else {
-        Vec::new()
-    };
-    let sandbox_command = windows_sandbox_command(command, &env_map);
+    let result = (|| {
+        prepare_vendor_sandbox_home(cwd, &vendor_sandbox_home)?;
+        let managed_proxy = if plan.network_managed_proxy == "required" {
+            Some(ManagedSandboxProxy::start().map_err(|err| {
+                io::Error::other(BackendUnavailableError {
+                    reason: format!("windows managed proxy unavailable: {err}"),
+                })
+            })?)
+        } else {
+            None
+        };
+        let env_map = sandbox_environment(plan, env, managed_proxy.as_ref());
+        let workspace_contained = plan.sandbox_level == SandboxLevel::WorkspaceContained.as_str();
+        let deny_read_paths = if workspace_contained {
+            windows_workspace_contained_deny_read_paths(&workspace_roots, plan, &env_map)?
+        } else {
+            Vec::new()
+        };
+        let sandbox_command = windows_sandbox_command(command, &env_map);
 
-    let result =
         codex_windows_sandbox::run_windows_sandbox_capture_for_permission_profile_elevated(
             codex_windows_sandbox::ElevatedSandboxProfileCaptureRequest {
                 permission_profile: &permission_profile,
@@ -1274,7 +1274,8 @@ fn execute_windows_sandbox_plan(
                 });
             }
             io::Error::other(err.to_string())
-        });
+        })
+    })();
     let cleanup = plan.cleanup_runtime_roots();
 
     let capture = match (result, cleanup) {
@@ -1845,8 +1846,18 @@ mod tests {
     use std::fs;
     use std::io;
     use std::path::{Path, PathBuf};
+    #[cfg(windows)]
+    use std::sync::{MutexGuard, OnceLock};
     use std::time::{Duration, Instant};
     use tempfile::TempDir;
+
+    #[cfg(windows)]
+    fn windows_sandbox_gate_test_lock() -> MutexGuard<'static, ()> {
+        static LOCK: OnceLock<std::sync::Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap()
+    }
 
     #[cfg(unix)]
     fn symlink_dir_for_test(target: &Path, link: &Path) -> io::Result<()> {
@@ -1884,6 +1895,7 @@ mod tests {
     #[test]
     fn windows_sandbox_execution_gate_allows_same_policy_and_rejects_mixed_policy() -> io::Result<()>
     {
+        let _test_lock = windows_sandbox_gate_test_lock();
         let policy_a = WindowsSandboxPolicyCohortKey {
             policy_hash: "hash-a".to_string(),
         };
@@ -2807,6 +2819,39 @@ mod tests {
         assert_eq!(driver.events, vec!["rollback"]);
         assert!(runtime_root.exists());
         plan.cleanup_runtime_roots()?;
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn sandbox_execution_cleans_runtime_tree_after_vendor_home_prepare_failure() -> io::Result<()> {
+        let _test_lock = windows_sandbox_gate_test_lock();
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        fs::create_dir_all(cwd.join(".runseal"))?;
+        fs::write(cwd.join(".runseal").join("sandbox"), b"not a directory")?;
+        let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+        let plan =
+            WindowsReferenceBackend.fail_closed_plan("exec_vendor_home_failure", &cwd, &policy);
+        let runtime_root = PathBuf::from(plan.runtime_root.as_ref().unwrap());
+        let command = vec![
+            "cmd.exe".to_string(),
+            "/C".to_string(),
+            "echo ok".to_string(),
+        ];
+
+        let err = execute_windows_sandbox_plan(
+            &plan,
+            &command,
+            &cwd,
+            ExecutionStdin::Empty,
+            &ExecutionEnv::default(),
+            None,
+        )
+        .expect_err("vendor sandbox home preparation must fail");
+
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        assert!(!runtime_root.exists());
         Ok(())
     }
 
