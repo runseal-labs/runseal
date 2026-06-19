@@ -246,7 +246,7 @@ fn run_exec(args: &[String]) -> Result<(), String> {
         request.network,
     ) {
         Ok(policy) => policy,
-        Err(err) if request.json => {
+        Err(err) if request.json || request.events => {
             println!("{}", cli_error_payload(err.into()));
             return Err(String::new());
         }
@@ -262,7 +262,7 @@ fn run_exec(args: &[String]) -> Result<(), String> {
         request.timeout,
     ) {
         Ok(result) => result,
-        Err(err) if request.json => {
+        Err(err) if request.json || request.events => {
             println!("{}", cli_error_payload(err));
             return Err(String::new());
         }

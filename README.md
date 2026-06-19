@@ -45,6 +45,8 @@ runseal exec --policy danger-full-access -- python skill.py
 
 When `runseal exec --json` fails, stdout contains a structured `error` object
 and the process exits non-zero.
+When `runseal exec --events` fails before an event stream can be completed,
+stdout contains one structured `error` object line and the process exits non-zero.
 
 ## Windows sandbox setup
 

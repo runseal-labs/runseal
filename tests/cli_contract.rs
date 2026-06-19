@@ -554,6 +554,35 @@ fn exec_events_stream_uses_execution_vocabulary() -> Result<()> {
 }
 
 #[test]
+fn exec_events_reports_policy_errors_as_json_line() -> Result<()> {
+    let output = run_cli(&[
+        "exec",
+        "--events",
+        "--policy",
+        "workspace-proxy",
+        "--",
+        python_bin(),
+        "-c",
+        "print('must not run')",
+    ])?;
+
+    assert!(!output.status.success());
+    assert!(output.stderr.is_empty());
+    let messages = stdout_json_lines(&output)?;
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0]["error"]["data"]["code"], "POLICY_INVALID");
+    assert!(
+        messages[0]["error"]["data"]["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("unknown policy profile"),
+        "{}",
+        messages[0]
+    );
+    Ok(())
+}
+
+#[test]
 fn exec_json_returns_execution_result() -> Result<()> {
     let tmp = TempDir::new()?;
     let cwd = tmp.path().to_string_lossy().to_string();
