@@ -1608,15 +1608,27 @@ fn backend_execution_error(
         return Some(("POLICY_TRANSITION_BUSY", reason.to_string(), None));
     }
     if sandbox_enforced {
-        return backend_unavailable_reason(err).map(|reason| {
-            (
-                "BACKEND_UNAVAILABLE",
-                reason.to_string(),
-                backend_unavailable_setup_status(reason, cwd),
-            )
-        });
+        let reason =
+            backend_unavailable_reason(err).unwrap_or(generic_backend_unavailable_reason());
+        return Some((
+            "BACKEND_UNAVAILABLE",
+            reason.to_string(),
+            backend_unavailable_setup_status(reason, cwd),
+        ));
     }
     None
+}
+
+fn generic_backend_unavailable_reason() -> &'static str {
+    #[cfg(windows)]
+    {
+        "windows sandbox setup unavailable; run `runseal setup windows-sandbox` to install or repair"
+    }
+
+    #[cfg(not(windows))]
+    {
+        "sandbox backend unavailable"
+    }
 }
 
 fn backend_unavailable_setup_status(reason: &str, cwd: &Path) -> Option<Value> {

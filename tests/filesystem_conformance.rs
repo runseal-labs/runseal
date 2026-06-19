@@ -103,6 +103,22 @@ fn execute_platform_script(
     python_code: String,
     powershell_script: String,
 ) -> Result<Value> {
+    execute_params(platform_script_params(
+        policy,
+        cwd,
+        network,
+        python_code,
+        powershell_script,
+    ))
+}
+
+fn platform_script_params(
+    policy: &str,
+    cwd: &Path,
+    network: Option<&str>,
+    python_code: String,
+    powershell_script: String,
+) -> Value {
     let mut params = json!({
         "command": platform_script_command(python_code, powershell_script),
         "cwd": cwd,
@@ -111,7 +127,7 @@ fn execute_platform_script(
     if let Some(network) = network {
         params["network"] = json!({"mode": network});
     }
-    execute_params(params)
+    params
 }
 
 fn ps_literal(value: &str) -> String {
@@ -142,6 +158,10 @@ fn execute_params(params: Value) -> Result<Value> {
     #[cfg(windows)]
     let _guard = windows_conformance_lock()?;
 
+    execute_params_unlocked(params)
+}
+
+fn execute_params_unlocked(params: Value) -> Result<Value> {
     let output = run_rpc(&rpc_request("execute", params))?;
 
     assert!(
@@ -159,6 +179,7 @@ fn execute_params(params: Value) -> Result<Value> {
 #[cfg(windows)]
 fn windows_conformance_lock() -> Result<MutexGuard<'static, ()>> {
     static LOCK: Mutex<()> = Mutex::new(());
+    // ponytail: global Windows sandbox state; use narrower locks if test throughput matters.
     LOCK.lock()
         .map_err(|_| anyhow::anyhow!("windows conformance lock poisoned"))
 }
@@ -847,13 +868,15 @@ fn network_proxy_allows_http_through_managed_proxy_when_supported_or_fails_close
     let tmp = TempDir::new()?;
     let workspace = tmp.path().join("workspace");
     fs::create_dir_all(&workspace)?;
-    let warmup = execute_platform_script(
+    #[cfg(windows)]
+    let _guard = windows_conformance_lock()?;
+    let warmup = execute_params_unlocked(platform_script_params(
         "workspace-write",
         &workspace,
         Some("proxy"),
         "print('proxy-warmup')".to_string(),
         "Write-Output proxy-warmup".to_string(),
-    )?;
+    ))?;
     if is_backend_missing(&warmup) {
         let expected_features = expected_missing_features(&["network_proxy", "managed_proxy"]);
         assert_backend_missing_features(&warmup, &workspace, &expected_features)?;
@@ -940,8 +963,13 @@ if ($null -eq $successText) {
 $successText
 "#
     .replace("__REQUEST__", &proxy_request);
-    let response =
-        execute_platform_script("workspace-write", &workspace, Some("proxy"), code, ps_code)?;
+    let response = execute_params_unlocked(platform_script_params(
+        "workspace-write",
+        &workspace,
+        Some("proxy"),
+        code,
+        ps_code,
+    ))?;
 
     if is_backend_missing(&response) {
         let upstream_hit = upstream.join().expect("upstream server thread")?;
