@@ -127,6 +127,9 @@ On Windows, run the local dogfood smoke after rebuilding helper binaries:
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows-smoke.ps1
 ```
 
+Windows reference-backend readiness requires the smoke check plus the Rust
+checks above to pass on a Windows host.
+
 For the managed proxy path specifically:
 
 ```powershell

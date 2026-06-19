@@ -10,7 +10,9 @@ RUNSEAL_BIN=/path/to/runseal cargo test --test cli_contract --test protocol_cont
 
 On Windows, the tests serialize shared sandbox setup state internally, so the default `cargo test` path is supported.
 
-CI runs the suite on Linux and Windows so platform selection, fail-closed behavior, and the Windows reference backend stay buildable as capabilities are promoted.
+Run the suite on Windows before claiming reference-backend readiness. Other
+platforms can run the same tests to verify platform selection and fail-closed
+behavior until their backends are promoted.
 
 The tests are black-box by design:
 
