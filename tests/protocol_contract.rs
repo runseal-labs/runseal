@@ -535,6 +535,35 @@ fn lookup_and_session_methods_reject_path_like_ids() -> Result<()> {
 }
 
 #[test]
+fn lookup_and_session_methods_reject_empty_id_suffixes() -> Result<()> {
+    let cases = [
+        ("getExecution", json!({"execution_id": "exec_"})),
+        ("disposeSession", json!({"session_id": "sess_"})),
+    ];
+
+    for (method, params) in cases {
+        let output = run_rpc(&rpc_request(method, params))?;
+
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let messages = stdout_json_lines(&output)?;
+        let response = &messages[0];
+
+        assert_eq!(response["error"]["data"]["code"], "INVALID_REQUEST");
+        assert!(
+            response["error"]["data"]["reason"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("must include an id suffix")
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn lookup_and_session_methods_reject_overlong_ids() -> Result<()> {
     let long_exec_id = format!("exec_{}", "a".repeat(128));
     let long_session_id = format!("sess_{}", "a".repeat(128));

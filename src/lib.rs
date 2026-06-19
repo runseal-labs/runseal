@@ -532,6 +532,12 @@ fn required_prefixed_string_param(
             format!("params.{field} must start with {prefix}"),
         ));
     }
+    if value.len() == prefix.len() {
+        return Err(RunSealError::new(
+            "INVALID_REQUEST",
+            format!("params.{field} must include an id suffix"),
+        ));
+    }
     if value.len() > MAX_PROTOCOL_ID_BYTES {
         return Err(RunSealError::new(
             "INVALID_REQUEST",

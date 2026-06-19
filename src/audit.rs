@@ -40,6 +40,7 @@ impl AuditWriter {
 
 fn validate_audit_session_id(session_id: &str) -> io::Result<()> {
     if session_id.starts_with("sess_")
+        && session_id.len() > "sess_".len()
         && session_id.len() <= MAX_AUDIT_SESSION_ID_BYTES
         && session_id
             .bytes()
@@ -137,6 +138,18 @@ mod tests {
             assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn audit_writer_rejects_empty_session_id_suffix() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+
+        let Err(err) = AuditWriter::create(tmp.path(), "sess_") else {
+            panic!("empty session id suffix must be rejected");
+        };
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
         Ok(())
     }
 
