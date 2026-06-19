@@ -1005,3 +1005,63 @@ $successText
     );
     Ok(())
 }
+
+#[test]
+fn network_proxy_credentials_are_redacted_when_supported_or_fails_closed() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let workspace = tmp.path().join("workspace");
+    fs::create_dir_all(&workspace)?;
+    let response = execute_platform_script(
+        "workspace-write",
+        &workspace,
+        Some("proxy"),
+        "print('proxy-redaction-ok')".to_string(),
+        "Write-Output proxy-redaction-ok".to_string(),
+    )?;
+
+    if is_backend_missing(&response) {
+        let expected_features = expected_missing_features(&["network_proxy", "managed_proxy"]);
+        assert_backend_missing_features(&response, &workspace, &expected_features)?;
+        return Ok(());
+    }
+    if is_backend_unavailable(&response) {
+        assert_backend_unavailable(&response, &workspace)?;
+        return Ok(());
+    }
+
+    assert_eq!(response["result"]["status"], "finished");
+    assert_eq!(response["result"]["exit_code"], 0);
+    assert!(
+        response["result"]["stdout"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("proxy-redaction-ok")
+    );
+    assert_no_proxy_credential_terms(&response);
+
+    let audit_path = response["result"]["audit_path"]
+        .as_str()
+        .context("successful response must include audit_path")?;
+    let audit_jsonl = fs::read_to_string(workspace.join(audit_path))?;
+    assert_no_proxy_credential_terms_in_str(&audit_jsonl);
+    Ok(())
+}
+
+fn assert_no_proxy_credential_terms(value: &Value) {
+    assert_no_proxy_credential_terms_in_str(&value.to_string());
+}
+
+fn assert_no_proxy_credential_terms_in_str(payload: &str) {
+    for private_term in [
+        "http://runseal:",
+        "https://runseal:",
+        "Proxy-Authorization",
+        "proxy-authorization",
+        "Basic runseal",
+    ] {
+        assert!(
+            !payload.contains(private_term),
+            "structured output must not expose proxy credential term {private_term}"
+        );
+    }
+}
