@@ -56,6 +56,9 @@ fn load_marker(codex_home: &Path) -> Result<Option<SetupMarker>> {
         Ok(contents) => match serde_json::from_str::<SetupMarker>(&contents) {
             Ok(m) => Some(m),
             Err(err) => {
+                if contains_legacy_split_identity_schema(&contents) {
+                    return Err(legacy_split_identity_error());
+                }
                 debug_log(
                     &format!("sandbox setup marker parse failed: {err}"),
                     Some(codex_home),
@@ -92,10 +95,7 @@ fn load_users(codex_home: &Path) -> Result<Option<SandboxUsersFile>> {
         Ok(users) => Ok(Some(users)),
         Err(err) => {
             if contains_legacy_split_identity_schema(&file) {
-                return Err(anyhow::Error::new(SetupFailure::new(
-                    SetupErrorCode::OrchestratorSetupStateIncompatible,
-                    "legacy split-identity Windows sandbox setup state detected; run `runseal setup windows-sandbox` from an elevated shell to repair",
-                )));
+                return Err(legacy_split_identity_error());
             }
             debug_log(
                 &format!("sandbox users parse failed: {err}"),
@@ -104,6 +104,13 @@ fn load_users(codex_home: &Path) -> Result<Option<SandboxUsersFile>> {
             Ok(None)
         }
     }
+}
+
+fn legacy_split_identity_error() -> anyhow::Error {
+    anyhow::Error::new(SetupFailure::new(
+        SetupErrorCode::OrchestratorSetupStateIncompatible,
+        "legacy split-identity Windows sandbox setup state detected; run `runseal setup windows-sandbox` from an elevated shell to repair",
+    ))
 }
 
 fn contains_legacy_split_identity_schema(contents: &str) -> bool {
@@ -152,6 +159,7 @@ fn is_legacy_split_identity_key(key: &str) -> bool {
 }
 
 fn reject_incompatible_setup_state(codex_home: &Path) -> Result<()> {
+    let _ = load_marker(codex_home)?;
     let _ = load_users(codex_home)?;
     Ok(())
 }
@@ -374,6 +382,7 @@ mod tests {
     use super::reject_incompatible_setup_state;
     use super::remove_sandbox_users_file;
     use crate::setup::sandbox_users_path;
+    use crate::setup::setup_marker_path;
     use crate::setup_error::SetupErrorCode;
     use crate::setup_error::SetupFailure;
     use std::fs;
@@ -449,6 +458,31 @@ mod tests {
             SetupErrorCode::OrchestratorSetupStateIncompatible
         );
         assert!(users_path.exists());
+    }
+
+    #[test]
+    fn incompatible_setup_state_rejects_legacy_split_identity_marker() {
+        let codex_home = TempDir::new().expect("tempdir");
+        let marker_path = setup_marker_path(codex_home.path());
+        fs::create_dir_all(marker_path.parent().expect("sandbox dir")).expect("create sandbox dir");
+        let contents = format!(
+            r#"{{"version":1,"{}":{{}},"{}":{{}}}}"#,
+            concat!("off", "line_username"),
+            concat!("on", "line_username")
+        );
+        fs::write(&marker_path, contents).expect("write marker");
+
+        let err = reject_incompatible_setup_state(codex_home.path())
+            .expect_err("legacy split identity marker must fail closed");
+        let failure = err
+            .downcast_ref::<SetupFailure>()
+            .expect("legacy split identity marker error must be structured");
+
+        assert_eq!(
+            failure.code,
+            SetupErrorCode::OrchestratorSetupStateIncompatible
+        );
+        assert!(marker_path.exists());
     }
 
     #[test]
