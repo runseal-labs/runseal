@@ -58,7 +58,7 @@ Usage: runseal setup windows-sandbox [--cwd <path>] [--status] [--json]
 Windows sandbox setup:
   First install requires an elevated PowerShell; later repairs reuse the sandbox broker when available.
   Sandboxed exec fails closed when setup is missing or stale.
-  --status reports broker readiness without changing setup state.
+  --status reports setup readiness without changing setup state.
   --json reports setup failures as structured JSON.
 ";
 const EXEC_HELP_TEXT: &str = "\
@@ -496,10 +496,12 @@ fn windows_sandbox_setup_status_for_cwd(cwd: &Path) -> Result<Value, String> {
     let sandbox_home = backend::windows_sandbox_home(cwd);
     let broker_available =
         codex_windows_sandbox::provisioning_setup_broker_is_available(&sandbox_home);
+    let setup_complete = codex_windows_sandbox::sandbox_setup_is_complete(&sandbox_home);
     let elevated = codex_windows_sandbox::current_process_is_elevated()
         .map_err(|err| format!("windows sandbox setup status failed: {err}"))?;
     Ok(windows_sandbox_setup_status_payload(
         true,
+        setup_complete,
         broker_available,
         Some(elevated),
     ))
@@ -508,12 +510,15 @@ fn windows_sandbox_setup_status_for_cwd(cwd: &Path) -> Result<Value, String> {
 #[cfg(not(windows))]
 fn windows_sandbox_setup_status_for_cwd(cwd: &Path) -> Result<Value, String> {
     validate_execution_cwd(cwd).map_err(|err| err.message)?;
-    Ok(windows_sandbox_setup_status_payload(false, false, None))
+    Ok(windows_sandbox_setup_status_payload(
+        false, false, false, None,
+    ))
 }
 
 fn windows_sandbox_setup_failed_error(cwd: &Path) -> RunSealError {
-    let setup_status = windows_sandbox_setup_status_for_cwd(cwd)
-        .unwrap_or_else(|_| windows_sandbox_setup_status_payload(cfg!(windows), false, None));
+    let setup_status = windows_sandbox_setup_status_for_cwd(cwd).unwrap_or_else(|_| {
+        windows_sandbox_setup_status_payload(cfg!(windows), false, false, None)
+    });
     let (code, reason) = if cfg!(windows) {
         ("WINDOWS_SANDBOX_SETUP_FAILED", WINDOWS_SANDBOX_SETUP_FAILED)
     } else {
@@ -528,15 +533,16 @@ fn windows_sandbox_setup_can_run_now(setup_status: &Value) -> bool {
 
 fn windows_sandbox_setup_status_payload(
     platform_supported: bool,
+    setup_complete: bool,
     broker_available: bool,
     elevated: Option<bool>,
 ) -> Value {
     let can_run_setup_now = platform_supported && (elevated.unwrap_or(false) || broker_available);
     let next_action = if !platform_supported {
         "unsupported"
-    } else if broker_available {
+    } else if setup_complete {
         "none"
-    } else if elevated.unwrap_or(false) {
+    } else if can_run_setup_now {
         "run_setup"
     } else {
         "open_elevated_shell"
@@ -554,7 +560,7 @@ fn windows_sandbox_setup_status_payload(
         "elevated": elevated,
         "can_repair": can_run_setup_now,
         "can_run_setup_now": can_run_setup_now,
-        "requires_setup": platform_supported && !broker_available,
+        "requires_setup": platform_supported && !setup_complete,
         "next_action": next_action,
         "next_command": next_command,
     })
@@ -1748,14 +1754,16 @@ mod tests {
 
     #[test]
     fn windows_setup_status_can_repair_via_elevation_or_broker() {
-        let elevated = windows_sandbox_setup_status_payload(true, false, Some(true));
-        let broker = windows_sandbox_setup_status_payload(true, true, Some(false));
-        let missing = windows_sandbox_setup_status_payload(true, false, Some(false));
-        let unsupported = windows_sandbox_setup_status_payload(false, true, Some(true));
+        let elevated = windows_sandbox_setup_status_payload(true, false, false, Some(true));
+        let broker = windows_sandbox_setup_status_payload(true, false, true, Some(false));
+        let ready = windows_sandbox_setup_status_payload(true, true, false, Some(false));
+        let missing = windows_sandbox_setup_status_payload(true, false, false, Some(false));
+        let unsupported = windows_sandbox_setup_status_payload(false, false, true, Some(true));
 
         assert_eq!(elevated["can_repair"], true);
         assert_eq!(elevated["can_run_setup_now"], true);
         assert!(windows_sandbox_setup_can_run_now(&elevated));
+        assert_eq!(elevated["requires_setup"], true);
         assert_eq!(elevated["next_action"], "run_setup");
         assert_eq!(
             elevated["next_command"],
@@ -1764,11 +1772,22 @@ mod tests {
         assert_eq!(broker["can_repair"], true);
         assert_eq!(broker["can_run_setup_now"], true);
         assert!(windows_sandbox_setup_can_run_now(&broker));
-        assert_eq!(broker["next_action"], "none");
-        assert!(broker["next_command"].is_null());
+        assert_eq!(broker["requires_setup"], true);
+        assert_eq!(broker["next_action"], "run_setup");
+        assert_eq!(
+            broker["next_command"],
+            "runseal setup windows-sandbox --cwd <absolute-workspace-path> --json"
+        );
+        assert_eq!(ready["can_repair"], false);
+        assert_eq!(ready["can_run_setup_now"], false);
+        assert!(!windows_sandbox_setup_can_run_now(&ready));
+        assert_eq!(ready["requires_setup"], false);
+        assert_eq!(ready["next_action"], "none");
+        assert!(ready["next_command"].is_null());
         assert_eq!(missing["can_repair"], false);
         assert_eq!(missing["can_run_setup_now"], false);
         assert!(!windows_sandbox_setup_can_run_now(&missing));
+        assert_eq!(missing["requires_setup"], true);
         assert_eq!(missing["next_action"], "open_elevated_shell");
         assert_eq!(
             missing["next_command"],
@@ -1777,6 +1796,7 @@ mod tests {
         assert_eq!(unsupported["can_repair"], false);
         assert_eq!(unsupported["can_run_setup_now"], false);
         assert!(!windows_sandbox_setup_can_run_now(&unsupported));
+        assert_eq!(unsupported["requires_setup"], false);
         assert_eq!(unsupported["next_action"], "unsupported");
         assert!(unsupported["next_command"].is_null());
         assert!(!windows_sandbox_setup_can_run_now(&json!({})));

@@ -66,13 +66,13 @@ Use `--json` when an agent needs structured setup failure details.
 Successful setup also includes `setup_status` so automation can verify readiness
 from the same command.
 
-Check broker readiness without changing setup state:
+Check setup readiness without changing setup state:
 
 ```powershell
 .\target\debug\runseal.exe setup windows-sandbox --cwd C:\path\to\workspace --status
 ```
 
-The status payload reports coarse readiness only: `broker`, `elevated`,
+The status payload reports coarse setup readiness only: `broker`, `elevated`,
 `can_repair`, `can_run_setup_now`, `requires_setup`, and `next_action`. The
 same `setup_status` object is included in sandboxed execution
 `BACKEND_UNAVAILABLE` errors when setup is missing or stale, and in the matching
@@ -81,6 +81,9 @@ same `setup_status` object is included in sandboxed execution
 claims and local readiness can be checked from one response.
 `runseal explain-policy` includes it alongside policy support for the requested
 workspace.
+`requires_setup` stays true until setup marker and sandbox user artifacts are
+complete; `broker` only reports whether repairs can run without opening an
+elevated shell.
 `can_repair` is true when the current process is elevated or when the scheduled
 setup broker is already available.
 

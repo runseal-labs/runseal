@@ -270,7 +270,7 @@ fn readme_does_not_expose_private_windows_setup_terms() {
 }
 
 #[test]
-fn setup_status_reports_broker_readiness_without_running_setup() -> Result<()> {
+fn setup_status_reports_setup_readiness_without_running_setup() -> Result<()> {
     let tmp = TempDir::new()?;
     let cwd = tmp.path().to_string_lossy().to_string();
     let output = run_cli(&["setup", "windows-sandbox", "--cwd", &cwd, "--status"])?;
@@ -310,10 +310,7 @@ fn setup_status_reports_broker_readiness_without_running_setup() -> Result<()> {
         ),
         "{payload}"
     );
-    assert_eq!(
-        payload["requires_setup"],
-        cfg!(windows) && payload["broker"] == "unavailable"
-    );
+    assert!(payload["requires_setup"].is_boolean(), "{payload}");
     assert!(
         matches!(
             payload["next_action"].as_str(),
@@ -322,12 +319,19 @@ fn setup_status_reports_broker_readiness_without_running_setup() -> Result<()> {
         "{payload}"
     );
     match payload["next_action"].as_str() {
-        Some("run_setup" | "open_elevated_shell") => assert_eq!(
-            payload["next_command"],
-            "runseal setup windows-sandbox --cwd <absolute-workspace-path> --json",
-            "{payload}"
-        ),
-        _ => assert!(payload["next_command"].is_null(), "{payload}"),
+        Some("run_setup" | "open_elevated_shell") => {
+            assert_eq!(payload["requires_setup"], true, "{payload}");
+            assert_eq!(
+                payload["next_command"],
+                "runseal setup windows-sandbox --cwd <absolute-workspace-path> --json",
+                "{payload}"
+            );
+        }
+        Some("none" | "unsupported") => {
+            assert_eq!(payload["requires_setup"], false, "{payload}");
+            assert!(payload["next_command"].is_null(), "{payload}");
+        }
+        _ => unreachable!("{payload}"),
     }
     assert_no_private_windows_setup_terms(&payload.to_string());
     Ok(())
