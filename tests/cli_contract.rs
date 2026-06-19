@@ -823,7 +823,11 @@ fn exec_json_returns_execution_result() -> Result<()> {
         .iter()
         .find(|event| event["type"] == "execution.stdout")
         .context("execution.stdout audit event must exist")?;
-    assert!(decode_stream_event(audit_stdout)?.contains("42"));
+    assert_eq!(audit_stdout["encoding"], "base64");
+    assert_eq!(audit_stdout["stream_offset"], 0);
+    assert!(audit_stdout["bytes"].as_u64().unwrap_or_default() > 0);
+    assert!(audit_stdout.get("data").is_none());
+    assert!(audit_stdout.get("text").is_none());
     assert!(payload["stdout_bytes"].as_u64().unwrap_or_default() > 0);
     assert_eq!(payload["output_truncated"], false);
     assert!(payload["resource_usage"]["duration_ms"].as_u64().is_some());

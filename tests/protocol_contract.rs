@@ -2517,6 +2517,21 @@ fn execute_rpc_streams_events_and_final_result() -> Result<()> {
         response["result"]["audit_path"],
         format!(".runseal/audit/{session_id}.jsonl")
     );
+    let audit_path = response["result"]["audit_path"]
+        .as_str()
+        .expect("ExecutionResult must include audit_path");
+    let audit_jsonl = fs::read_to_string(tmp.path().join(audit_path))?;
+    assert!(!audit_jsonl.contains("protocol ok"));
+    let audit_events = read_audit_events(tmp.path(), audit_path)?;
+    let audit_stdout = audit_events
+        .iter()
+        .find(|event| event["type"] == "execution.stdout")
+        .context("execution.stdout audit event must exist")?;
+    assert_eq!(audit_stdout["encoding"], "base64");
+    assert_eq!(audit_stdout["stream_offset"], 0);
+    assert_eq!(audit_stdout["bytes"], stdout_event["bytes"]);
+    assert!(audit_stdout.get("data").is_none());
+    assert!(audit_stdout.get("text").is_none());
     assert_eq!(response["result"]["sandbox"]["enforced"], false);
     assert_eq!(
         response["result"]["backend"]["name"],

@@ -1527,12 +1527,14 @@ fn execute_command(
     let mut events = vec![started];
     if !output.stdout.is_empty() {
         let event = stream_event("execution.stdout", &event_context, &output.stdout, 0);
-        write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
+        let audit_event = audit_stream_event_metadata(&event);
+        write_audit_event_with_metadata(&mut audit, &audit_event, &metadata)?;
         events.push(event);
     }
     if !output.stderr.is_empty() {
         let event = stream_event("execution.stderr", &event_context, &output.stderr, 0);
-        write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
+        let audit_event = audit_stream_event_metadata(&event);
+        write_audit_event_with_metadata(&mut audit, &audit_event, &metadata)?;
         events.push(event);
     }
     if output_truncated {
@@ -1738,6 +1740,15 @@ fn truncate_output(output: &mut Output, max_output_bytes: Option<u64>) -> bool {
         .truncate(output.stderr.len().min(stderr_budget));
 
     output.stdout.len() != original_stdout_len || output.stderr.len() != original_stderr_len
+}
+
+fn audit_stream_event_metadata(event: &Value) -> Value {
+    let mut event = event.clone();
+    if let Some(object) = event.as_object_mut() {
+        object.remove("data");
+        object.remove("text");
+    }
+    event
 }
 
 fn validate_execution_cwd(cwd: &Path) -> Result<(), RunSealError> {
