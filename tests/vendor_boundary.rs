@@ -96,6 +96,19 @@ fn vendored_windows_wfp_metrics_use_runseal_namespace() {
 }
 
 #[test]
+fn vendored_windows_wfp_objects_use_runseal_namespace() {
+    let wfp = include_str!("../vendor/codex-windows-sandbox/upstream/wfp.rs");
+    let filter_specs = include_str!("../vendor/codex-windows-sandbox/upstream/wfp/filter_specs.rs");
+
+    for source in [wfp, filter_specs] {
+        assert!(source.contains("RunSeal") || source.contains("runseal_wfp_"));
+        assert!(!source.contains("Codex Windows Sandbox WFP"));
+        assert!(!source.contains("codex_wfp_"));
+        assert!(!source.contains("Codex-owned"));
+    }
+}
+
+#[test]
 fn vendored_windows_timeouts_keep_explicit_limits_finite() {
     for (name, source) in VENDOR_TIMEOUT_SOURCES {
         assert!(
