@@ -4,12 +4,13 @@ use super::{
 };
 use std::env;
 use std::ffi::OsString;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 #[cfg(windows)]
 use std::os::windows::io::AsRawHandle;
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::thread;
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 #[cfg(windows)]
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
@@ -72,26 +73,36 @@ pub(super) fn spawn_local_command(
             });
     };
 
-    let start = Instant::now();
     let mut child = process.spawn()?;
     #[cfg(windows)]
     let _process_job = match assign_windows_process_job(plan, &child) {
         Ok(process_job) => process_job,
         Err(err) => return Err(cleanup_child_after_setup_error(child, err)),
     };
+    let stdout_reader = child.stdout.take().map(read_pipe_in_thread);
+    let stderr_reader = child.stderr.take().map(read_pipe_in_thread);
     if let ExecutionStdin::Bytes(bytes) | ExecutionStdin::File(bytes) = stdin
         && let Err(err) = write_child_stdin(&mut child, bytes)
     {
         return Err(cleanup_child_after_setup_error(child, err));
     }
+
+    let (status, timed_out) = wait_child_with_timeout(&mut child, timeout)?;
+    Ok(BackendExecutionOutput {
+        output: Output {
+            status,
+            stdout: join_pipe_reader(stdout_reader)?,
+            stderr: join_pipe_reader(stderr_reader)?,
+        },
+        timed_out,
+    })
+}
+
+fn wait_child_with_timeout(child: &mut Child, timeout: Duration) -> io::Result<(ExitStatus, bool)> {
+    let start = Instant::now();
     loop {
-        if child.try_wait()?.is_some() {
-            return child
-                .wait_with_output()
-                .map(|output| BackendExecutionOutput {
-                    output,
-                    timed_out: false,
-                });
+        if let Some(status) = child.try_wait()? {
+            return Ok((status, false));
         }
 
         if start.elapsed() >= timeout {
@@ -100,12 +111,7 @@ pub(super) fn spawn_local_command(
             {
                 return Err(err);
             }
-            return child
-                .wait_with_output()
-                .map(|output| BackendExecutionOutput {
-                    output,
-                    timed_out: true,
-                });
+            return child.wait().map(|status| (status, true));
         }
 
         thread::sleep(
@@ -114,6 +120,23 @@ pub(super) fn spawn_local_command(
                 .min(Duration::from_millis(10)),
         );
     }
+}
+
+fn read_pipe_in_thread(mut pipe: impl Read + Send + 'static) -> JoinHandle<io::Result<Vec<u8>>> {
+    thread::spawn(move || {
+        let mut bytes = Vec::new();
+        pipe.read_to_end(&mut bytes)?;
+        Ok(bytes)
+    })
+}
+
+fn join_pipe_reader(reader: Option<JoinHandle<io::Result<Vec<u8>>>>) -> io::Result<Vec<u8>> {
+    let Some(reader) = reader else {
+        return Ok(Vec::new());
+    };
+    reader
+        .join()
+        .map_err(|_| io::Error::other("output reader thread panicked"))?
 }
 
 fn write_child_stdin(child: &mut Child, bytes: Vec<u8>) -> io::Result<()> {

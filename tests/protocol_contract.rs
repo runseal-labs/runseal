@@ -1255,6 +1255,46 @@ fn execute_with_timeout_captures_stdout_when_command_finishes() -> Result<()> {
 }
 
 #[test]
+fn execute_with_timeout_drains_large_stdout_while_waiting() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let stdout_bytes = 256 * 1024;
+    let output = run_rpc(&rpc_request(
+        "execute",
+        json!({
+            "command": [
+                python_bin(),
+                "-c",
+                format!("import sys; sys.stdout.buffer.write(b'x' * {stdout_bytes})")
+            ],
+            "cwd": tmp.path(),
+            "policy": {
+                "version": "runseal.policy/v1",
+                "sandbox_level": "danger-full-access",
+                "resources": {"max_output_bytes": stdout_bytes + 1024}
+            },
+            "timeout_ms": 5000
+        }),
+    ))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = messages
+        .iter()
+        .find(|message| message.get("id") == Some(&json!(1)))
+        .unwrap();
+
+    assert_eq!(response["result"]["status"], "finished");
+    assert_eq!(response["result"]["exit_code"], 0);
+    assert_eq!(response["result"]["stdout_bytes"], stdout_bytes);
+    assert_eq!(response["result"]["output_truncated"], false);
+    Ok(())
+}
+
+#[test]
 fn execute_timeout_returns_stable_error_and_audit_event() -> Result<()> {
     let tmp = TempDir::new()?;
     let output = run_rpc(&rpc_request(
