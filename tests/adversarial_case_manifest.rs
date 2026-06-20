@@ -313,6 +313,14 @@ fn adversarial_result_schema_requires_public_skip_reason() -> Result<()> {
     assert!(validate_result(&result).is_err());
     result["skipped"] = json!(true);
 
+    result["skipped"] = json!(false);
+    result["status"] = json!("failed");
+    result["skip_reason"] = json!("not actually skipped");
+    assert!(validate_result(&result).is_err());
+    result["skip_reason"] = Value::Null;
+    result["status"] = json!("skipped");
+    result["skipped"] = json!(true);
+
     result["skip_reason"] = json!("mentions ACL detail");
     assert!(validate_result(&result).is_err());
 
@@ -595,6 +603,9 @@ fn validate_result(result: &Value) -> Result<()> {
     }
     if skipped && result.get("skip_reason").and_then(Value::as_str).is_none() {
         bail!("skipped adversarial results must include skip_reason");
+    }
+    if !skipped && !result.get("skip_reason").is_some_and(Value::is_null) {
+        bail!("non-skipped adversarial results must set skip_reason=null");
     }
     Ok(())
 }
