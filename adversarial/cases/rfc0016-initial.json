@@ -1,6 +1,89 @@
 [
   {
     "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.filesystem.parent-traversal.v1",
+    "title": "Parent traversal must not escape workspace",
+    "primary_class": "filesystem",
+    "capabilities_under_test": ["filesystem_policy"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community"],
+    "sandbox_level": "workspace-contained",
+    "network_mode": "disabled",
+    "fixtures": [{"kind": "file", "path": "outside/secret.txt"}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print(open('subdir/../../outside/secret.txt').read())"],
+      "policy": "workspace-contained"
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["path_not_accessible"]
+    },
+    "public_report_labels": ["filesystem_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.filesystem.symlink-parent-traversal.v1",
+    "title": "Symlink parent traversal must not escape workspace",
+    "primary_class": "filesystem",
+    "secondary_classes": ["runtime"],
+    "capabilities_under_test": ["filesystem_policy", "runtime_roots"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community"],
+    "sandbox_level": "workspace-contained",
+    "network_mode": "disabled",
+    "fixtures": [
+      {"kind": "directory", "path": "outside"},
+      {"kind": "symlink", "path": "workspace-link", "target": "outside"}
+    ],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "open('workspace-link/escape.txt','w').write('escape')"],
+      "policy": "workspace-contained"
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["file_not_exists"]
+    },
+    "public_report_labels": ["filesystem_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.filesystem.preexisting-symlinked-runtime-root.v1",
+    "title": "Preexisting symlinked runtime roots must not escape workspace",
+    "primary_class": "filesystem",
+    "secondary_classes": ["runtime"],
+    "capabilities_under_test": ["filesystem_policy", "runtime_roots"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community"],
+    "sandbox_level": "workspace-contained",
+    "network_mode": "disabled",
+    "fixtures": [
+      {"kind": "directory", "path": "outside/runtime-target"},
+      {"kind": "preexisting_runtime_root", "path": ".runseal/runtime/preexisting", "target": "outside/runtime-target"}
+    ],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "open('.runseal/runtime/preexisting/escape.txt','w').write('escape')"],
+      "policy": "workspace-contained"
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["path_not_modified"]
+    },
+    "public_report_labels": ["filesystem_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
     "case_id": "adv.filesystem.protected-subpath-write.v1",
     "title": "Protected workspace subpaths must reject writes",
     "primary_class": "filesystem",
@@ -372,7 +455,7 @@
       "events": {"required": true},
       "forbidden_side_effects": ["audit_not_contains_secret", "event_not_contains_private_detail"]
     },
-    "public_report_labels": ["filesystem_conformance"]
+    "public_report_labels": ["network_conformance"]
   },
   {
     "schema_version": "runseal.adversarial-case/v1",
