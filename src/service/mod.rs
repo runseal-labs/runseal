@@ -1,4 +1,4 @@
-use crate::commands;
+use crate::control;
 use crate::error::RunSealError;
 use crate::execution::execute_command;
 use crate::protocol::request_validation::{
@@ -61,11 +61,11 @@ impl Service {
 
         match method {
             "getVersion" => match validate_empty_params(&params, "getVersion") {
-                Ok(()) => vec![rpc::result(id, commands::version::payload())],
+                Ok(()) => vec![rpc::result(id, control::version_payload())],
                 Err(err) => vec![rpc::error(id, err)],
             },
             "getCapabilities" => match validate_empty_params(&params, "getCapabilities") {
-                Ok(()) => vec![rpc::result(id, commands::capabilities::payload())],
+                Ok(()) => vec![rpc::result(id, control::capabilities_payload())],
                 Err(err) => vec![rpc::error(id, err)],
             },
             "getServiceStatus" => match validate_empty_params(&params, "getServiceStatus") {
@@ -73,10 +73,9 @@ impl Service {
                 Err(err) => vec![rpc::error(id, err)],
             },
             "explainPolicy" => match explain_policy_request_from_params(&params) {
-                Ok((policy, cwd)) => vec![rpc::result(
-                    id,
-                    commands::explain_policy::explain_policy_json(&policy, &cwd),
-                )],
+                Ok((policy, cwd)) => {
+                    vec![rpc::result(id, control::explain_policy_json(&policy, &cwd))]
+                }
                 Err(err) => vec![rpc::error(id, err)],
             },
             "getSetupStatus" => {

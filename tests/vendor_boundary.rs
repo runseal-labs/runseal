@@ -45,6 +45,7 @@ const WINDOWS_SANDBOX_RUNNER_MAIN: &str =
 const RUNSEAL_BACKEND_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/backend");
 const RUNSEAL_EXECUTION_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/execution");
 const RUNSEAL_PROTOCOL_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/protocol");
+const RUNSEAL_SERVICE_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/service");
 
 const VENDOR_TIMEOUT_SOURCES: &[(&str, &str)] = &[
     (
@@ -136,6 +137,25 @@ fn protocol_modules_do_not_call_execution_engine() {
 #[test]
 fn execution_modules_do_not_depend_on_command_modules() {
     for entry in std::fs::read_dir(RUNSEAL_EXECUTION_DIR).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
+            continue;
+        }
+
+        let source = std::fs::read_to_string(&path).unwrap();
+        for forbidden in ["crate::commands", "super::commands"] {
+            assert!(
+                !source.contains(forbidden),
+                "{} must not depend on command module token {forbidden}",
+                path.display()
+            );
+        }
+    }
+}
+
+#[test]
+fn service_modules_do_not_depend_on_command_modules() {
+    for entry in std::fs::read_dir(RUNSEAL_SERVICE_DIR).unwrap() {
         let path = entry.unwrap().path();
         if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
             continue;

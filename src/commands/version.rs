@@ -1,13 +1,8 @@
-use crate::PROTOCOL_VERSION;
-use crate::policy::POLICY_VERSION;
-use serde_json::{Value, json};
+use crate::control;
+use serde_json::Value;
 
 pub(crate) fn payload() -> Value {
-    json!({
-        "runseal_version": env!("CARGO_PKG_VERSION"),
-        "protocol_version": PROTOCOL_VERSION,
-        "policy_versions": [POLICY_VERSION],
-    })
+    control::version_payload()
 }
 
 pub(crate) fn print_plain() -> Result<(), String> {

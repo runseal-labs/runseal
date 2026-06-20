@@ -2,6 +2,7 @@ mod audit;
 mod backend;
 mod cli;
 mod commands;
+mod control;
 mod error;
 mod events;
 mod execution;
