@@ -46,7 +46,7 @@
       "max_severity": "S0",
       "audit": {"required": true},
       "events": {"required": true},
-      "side_effects": ["policy_hash_consistent", "policy_epoch_consistent"]
+      "forbidden_side_effects": ["policy_hash_consistent", "policy_epoch_consistent"]
     },
     "public_report_labels": ["protocol_contract"]
   },
@@ -152,7 +152,7 @@
       "max_severity": "S0",
       "audit": {"required": true},
       "events": {"required": true},
-      "side_effects": ["audit_not_contains_secret"]
+      "forbidden_side_effects": ["audit_not_contains_secret"]
     },
     "public_report_labels": ["protocol_contract"]
   },
