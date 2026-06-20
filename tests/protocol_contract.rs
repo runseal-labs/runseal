@@ -389,6 +389,7 @@ fn assert_portable_capability_probe_contract(payload: &Value) {
     assert!(!serialized.contains("/proc/"));
     assert!(!serialized.contains("/sys/"));
     assert!(!serialized.contains("/usr/bin"));
+    assert!(!serialized.contains("/usr/libexec"));
 
     if cfg!(target_os = "linux") {
         for key in [
