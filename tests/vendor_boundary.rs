@@ -99,6 +99,7 @@ fn protocol_modules_do_not_depend_on_backend_modules() {
 #[test]
 fn service_uses_stable_setup_status_error_code() {
     assert!(!RUNSEAL_SERVICE_SOURCE.contains("SETUP_STATUS_FAILED"));
+    assert!(!RUNSEAL_SETUP_COMMAND_SOURCE.contains("WINDOWS_SANDBOX_SETUP_STATUS_FAILED"));
 }
 
 #[test]

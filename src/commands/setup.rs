@@ -113,10 +113,7 @@ fn run_windows_sandbox_setup(cwd: &Path, json_output: bool) -> Result<(), String
         Err(err) if json_output => {
             println!(
                 "{}",
-                cli_error_payload(RunSealError::new(
-                    "WINDOWS_SANDBOX_SETUP_STATUS_FAILED",
-                    err,
-                ))
+                cli_error_payload(RunSealError::new("INTERNAL_ERROR", err))
             );
             return Err(String::new());
         }
