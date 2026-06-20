@@ -3678,6 +3678,64 @@ fn execute_audits_effective_network_routes() -> Result<()> {
 }
 
 #[test]
+fn execute_policy_hash_tracks_network_override() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let proxy_output = run_rpc(&rpc_request(
+        "execute",
+        json!({
+            "command": [python_bin(), "-c", "print('network override proxy')"],
+            "cwd": tmp.path(),
+            "policy": "danger-full-access",
+            "network": {"mode": "proxy"}
+        }),
+    ))?;
+    let disabled_output = run_rpc(&rpc_request(
+        "execute",
+        json!({
+            "command": [python_bin(), "-c", "print('network override disabled')"],
+            "cwd": tmp.path(),
+            "policy": "danger-full-access",
+            "network": {"mode": "disabled"}
+        }),
+    ))?;
+
+    assert!(
+        proxy_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&proxy_output.stderr)
+    );
+    assert!(
+        disabled_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&disabled_output.stderr)
+    );
+    let proxy_messages = stdout_json_lines(&proxy_output)?;
+    let disabled_messages = stdout_json_lines(&disabled_output)?;
+    let proxy = response_with_id(&proxy_messages, 1)?;
+    let disabled = response_with_id(&disabled_messages, 1)?;
+
+    assert_eq!(proxy["result"]["network"]["mode"], "proxy");
+    assert_eq!(disabled["result"]["network"]["mode"], "disabled");
+    assert_eq!(
+        proxy["result"]["policy_epoch"],
+        proxy["result"]["policy_hash"]
+    );
+    assert_eq!(
+        disabled["result"]["policy_epoch"],
+        disabled["result"]["policy_hash"]
+    );
+    assert_ne!(
+        proxy["result"]["policy_hash"],
+        disabled["result"]["policy_hash"]
+    );
+    assert_ne!(
+        proxy["result"]["policy_epoch"],
+        disabled["result"]["policy_epoch"]
+    );
+    Ok(())
+}
+
+#[test]
 fn execute_redacts_sensitive_metadata_in_audit_events() -> Result<()> {
     let tmp = TempDir::new()?;
     let output = run_rpc(&rpc_request(
