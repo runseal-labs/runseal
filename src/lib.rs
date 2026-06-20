@@ -66,7 +66,7 @@ fn run() -> Result<(), String> {
             protocol::rpc_handler::run_rpc_stdio()
         }
         [command, flag] if command == "service" && flag == "--stdio" => {
-            protocol::rpc_handler::run_rpc_stdio()
+            protocol::rpc_handler::run_service_stdio()
         }
         [command, flag, ..] if command == "service" && (flag == "--pipe" || flag == "--socket") => {
             Err(format!(
