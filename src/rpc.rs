@@ -6,10 +6,10 @@ pub(crate) fn result(id: Value, result: Value) -> Value {
 }
 
 pub(crate) fn error(id: Value, err: RunSealError) -> Value {
-    let code = if err.code == "INVALID_REQUEST" {
-        -32602
-    } else {
-        -32000
+    let code = match err.code.as_str() {
+        "INVALID_REQUEST" => -32602,
+        "INTERNAL_ERROR" => -32603,
+        _ => -32000,
     };
     error_with_code(id, code, err)
 }
@@ -52,4 +52,20 @@ fn error_with_code(id: Value, code: i64, err: RunSealError) -> Value {
             "data": data
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn internal_error_uses_json_rpc_internal_error_code() {
+        let response = error(
+            json!(1),
+            RunSealError::new("INTERNAL_ERROR", "unexpected implementation failure"),
+        );
+
+        assert_eq!(response["error"]["code"], -32603);
+        assert_eq!(response["error"]["data"]["code"], "INTERNAL_ERROR");
+    }
 }
