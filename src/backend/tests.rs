@@ -21,10 +21,14 @@ use super::process::minimal_environment;
 use super::process::{cleanup_child_after_setup_error, spawn_local_command};
 use super::runtime::RUNTIME_ROOT_MARKER;
 use super::skeleton::{LinuxCommunityBackend, MacosExperimentalBackend};
-use super::windows::WindowsReferenceBackend;
-use super::windows::has_single_user_setup_payload;
+use super::windows::{WindowsReferenceBackend, has_single_user_setup_payload};
 #[cfg(all(test, windows))]
-use super::windows::*;
+use super::windows::{
+    collect_workspace_contained_profile_denies, execute_windows_sandbox_plan,
+    windows_explicit_deny_read_paths, windows_sandbox_command, windows_sandbox_path_key,
+    windows_sandbox_workspace_roots_for_plan, windows_sandbox_write_roots_for_plan,
+    windows_sensitive_profile_deny_read_paths_for_profile,
+};
 use crate::execution::{ExecutionEnv, ExecutionStdin};
 use crate::policy::{BackendFeature, NetworkMode, normalize_policy};
 use crate::windows::policy::{
