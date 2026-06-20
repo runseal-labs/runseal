@@ -259,13 +259,20 @@ fn execution_not_cancellable(result: &Value) -> RunSealError {
         .get("status")
         .and_then(Value::as_str)
         .unwrap_or("unknown");
+    let mut details = json!({
+        "execution_id": execution_id,
+        "status": status,
+    });
+    if let (Some(details), Some(session_id)) = (
+        details.as_object_mut(),
+        result.get("session_id").and_then(Value::as_str),
+    ) {
+        details.insert("session_id".to_string(), json!(session_id));
+    }
     RunSealError::with_details(
         "EXECUTION_NOT_CANCELLABLE",
         format!("execution is not cancellable: {execution_id}"),
-        json!({
-            "execution_id": execution_id,
-            "status": status,
-        }),
+        details,
     )
 }
 

@@ -1435,6 +1435,7 @@ fn service_stdio_keeps_completed_execution_state() -> Result<()> {
         cancel_response["error"]["data"]["execution_id"],
         execution_id
     );
+    assert_eq!(cancel_response["error"]["data"]["session_id"], session_id);
     assert_eq!(cancel_response["error"]["data"]["status"], "finished");
 
     stdin.write_all(
