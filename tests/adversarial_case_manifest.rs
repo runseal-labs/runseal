@@ -91,6 +91,40 @@ const SIDE_EFFECTS: &[&str] = &[
     "policy_epoch_consistent",
 ];
 const PRIVATE_TERMS: &[&str] = &["sid", "acl", "wfp", "seatbelt", "seccomp", "landlock"];
+const CASE_FIELDS: &[&str] = &[
+    "schema_version",
+    "case_id",
+    "title",
+    "primary_class",
+    "secondary_classes",
+    "capabilities_under_test",
+    "platforms",
+    "backend_status",
+    "sandbox_level",
+    "network_mode",
+    "request",
+    "oracle",
+    "risk_summary",
+    "references",
+    "fixtures",
+    "preconditions",
+    "setup_steps",
+    "inspection_steps",
+    "cleanup_steps",
+    "timeout_ms",
+    "skip_if",
+    "xfail_if",
+    "negative_side_effects",
+    "public_report_labels",
+];
+const ORACLE_FIELDS: &[&str] = &[
+    "expected_result",
+    "max_severity",
+    "forbidden_side_effects",
+    "audit",
+    "events",
+];
+const FIXTURE_FIELDS: &[&str] = &["kind", "path", "target", "name", "value", "command", "body"];
 
 #[test]
 fn adversarial_case_manifests_match_rfc0016_shape() -> Result<()> {
@@ -132,6 +166,7 @@ fn manifest_paths() -> Result<Vec<PathBuf>> {
 }
 
 fn validate_case(case: &Value, path: &Path, case_ids: &mut HashSet<String>) -> Result<()> {
+    assert_allowed_fields(case, "case", CASE_FIELDS, path)?;
     let case_id = required_string(case, "case_id", path)?;
     if !case_ids.insert(case_id.to_string()) {
         bail!("duplicate case_id {case_id} in {}", path.display());
@@ -180,6 +215,12 @@ fn validate_case(case: &Value, path: &Path, case_ids: &mut HashSet<String>) -> R
         .get("oracle")
         .and_then(Value::as_object)
         .context("case.oracle must be an object")?;
+    assert_allowed_fields(
+        &Value::Object(oracle.clone()),
+        "case.oracle",
+        ORACLE_FIELDS,
+        path,
+    )?;
     assert_member(
         oracle
             .get("expected_result")
@@ -269,11 +310,27 @@ fn validate_fixtures(fixtures: &Value, path: &Path) -> Result<()> {
         .as_array()
         .with_context(|| format!("case.fixtures must be an array in {}", path.display()))?;
     for fixture in fixtures {
+        assert_allowed_fields(fixture, "case.fixtures[]", FIXTURE_FIELDS, path)?;
         let kind = fixture
             .get("kind")
             .and_then(Value::as_str)
             .context("case.fixtures entries must include kind")?;
         assert_member(kind, FIXTURE_KINDS, path)?;
+    }
+    Ok(())
+}
+
+fn assert_allowed_fields(value: &Value, label: &str, allowed: &[&str], path: &Path) -> Result<()> {
+    let object = value
+        .as_object()
+        .with_context(|| format!("{label} must be an object in {}", path.display()))?;
+    for key in object.keys() {
+        if !allowed.contains(&key.as_str()) {
+            bail!(
+                "{label}.{key} is not an RFC-0016 field in {}",
+                path.display()
+            );
+        }
     }
     Ok(())
 }
