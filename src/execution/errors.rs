@@ -1,3 +1,5 @@
+#[cfg(windows)]
+use crate::backend::public_windows_setup_unavailable_reason;
 use crate::backend::{backend_unavailable_reason, policy_transition_busy_reason};
 use serde_json::Value;
 use std::io;
@@ -12,26 +14,27 @@ pub(crate) fn backend_execution_error(
         return Some(("POLICY_TRANSITION_BUSY", reason.to_string(), None));
     }
     if sandbox_enforced {
-        let reason =
-            backend_unavailable_reason(err).unwrap_or(generic_backend_unavailable_reason());
+        let reason = backend_unavailable_reason(err)
+            .map(str::to_string)
+            .unwrap_or_else(generic_backend_unavailable_reason);
         return Some((
             "BACKEND_UNAVAILABLE",
-            reason.to_string(),
-            backend_unavailable_setup_status(reason, cwd),
+            reason.clone(),
+            backend_unavailable_setup_status(&reason, cwd),
         ));
     }
     None
 }
 
-fn generic_backend_unavailable_reason() -> &'static str {
+fn generic_backend_unavailable_reason() -> String {
     #[cfg(windows)]
     {
-        "windows sandbox setup unavailable; run `runseal setup windows-sandbox` to install or repair"
+        public_windows_setup_unavailable_reason("setup_unavailable")
     }
 
     #[cfg(not(windows))]
     {
-        "sandbox backend unavailable"
+        "sandbox backend unavailable".to_string()
     }
 }
 

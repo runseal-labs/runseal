@@ -67,7 +67,7 @@ pub(crate) fn policy_transition_busy_error_for_test() -> io::Error {
 }
 
 #[cfg(windows)]
-pub(super) fn public_windows_setup_unavailable_reason(_code: &str) -> String {
+pub(crate) fn public_windows_setup_unavailable_reason(_code: &str) -> String {
     "windows sandbox setup unavailable; run `runseal setup windows-sandbox` to install or repair"
         .to_string()
 }

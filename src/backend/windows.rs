@@ -406,7 +406,7 @@ fn ensure_windows_sandbox_setup_ready(cwd: &Path) -> io::Result<()> {
     })?;
     if setup_status["requires_setup"].as_bool().unwrap_or(true) {
         return Err(io::Error::other(BackendUnavailableError {
-            reason: "windows sandbox setup unavailable; run `runseal setup windows-sandbox` to install or repair".to_string(),
+            reason: public_windows_setup_unavailable_reason("setup_required"),
         }));
     }
     Ok(())

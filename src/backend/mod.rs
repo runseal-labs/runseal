@@ -19,6 +19,8 @@ pub use core::SandboxBackend;
 pub use error::BackendError;
 #[cfg(all(test, windows))]
 pub(crate) use error::policy_transition_busy_error_for_test;
+#[cfg(windows)]
+pub(crate) use error::public_windows_setup_unavailable_reason;
 pub(crate) use error::{backend_unavailable_reason, policy_transition_busy_reason};
 pub use execution::BackendExecutionOutput;
 pub use plan::PlatformSandboxPlan;
