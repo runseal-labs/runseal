@@ -288,6 +288,13 @@ fn adversarial_result_schema_requires_public_skip_reason() -> Result<()> {
     result["skip_reason"] = json!("unsupported fixture kind");
     validate_result(&result)?;
 
+    result["status"] = json!("failed");
+    assert!(validate_result(&result).is_err());
+    result["status"] = json!("skipped");
+    result["skipped"] = json!(false);
+    assert!(validate_result(&result).is_err());
+    result["skipped"] = json!(true);
+
     result["skip_reason"] = json!("mentions ACL detail");
     assert!(validate_result(&result).is_err());
 
@@ -538,6 +545,12 @@ fn validate_result(result: &Value) -> Result<()> {
     }
     if status != "passed" && passed {
         bail!("non-passed adversarial results must not set passed=true");
+    }
+    if status == "skipped" && !skipped {
+        bail!("skipped adversarial status must set skipped=true");
+    }
+    if status != "skipped" && skipped {
+        bail!("non-skipped adversarial status must not set skipped=true");
     }
     if skipped && result.get("skip_reason").and_then(Value::as_str).is_none() {
         bail!("skipped adversarial results must include skip_reason");
