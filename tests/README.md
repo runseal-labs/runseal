@@ -50,3 +50,8 @@ The tests are black-box by design:
 - Policy denials and backend fail-closed decisions also write JSONL audit events.
 - `danger-full-access` is explicit local execution with no sandbox guarantee.
 - Sandboxed policies fail closed unless a backend can enforce them or explicitly reports an experimental conformance-gated path.
+
+Adversarial conformance follows RFC-0015's escape taxonomy: filesystem,
+runtime, process, network, policy, execution injection, and audit. Backend
+capabilities may be promoted only when the relevant adversarial cases produce
+S0 or S1 outcomes, and public output remains platform-neutral.
