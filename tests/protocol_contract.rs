@@ -1189,6 +1189,7 @@ fn no_param_methods_reject_unsupported_params() -> Result<()> {
         let messages = stdout_json_lines(&output)?;
         let response = &messages[0];
 
+        assert_eq!(response["error"]["code"], -32602);
         assert_eq!(response["error"]["data"]["code"], "INVALID_REQUEST");
         assert_eq!(
             response["error"]["data"]["reason"],
@@ -1211,6 +1212,7 @@ fn no_param_methods_require_object_params() -> Result<()> {
         let messages = stdout_json_lines(&output)?;
         let response = &messages[0];
 
+        assert_eq!(response["error"]["code"], -32602);
         assert_eq!(response["error"]["data"]["code"], "INVALID_REQUEST");
         assert_eq!(
             response["error"]["data"]["reason"],
