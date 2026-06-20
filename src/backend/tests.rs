@@ -611,6 +611,27 @@ fn windows_fail_closed_preview_includes_runtime_environment_redirects() -> io::R
 }
 
 #[test]
+fn windows_runtime_roots_are_per_execution() -> io::Result<()> {
+    let tmp = TempDir::new()?;
+    let cwd = tmp.path().join("workspace");
+    fs::create_dir_all(&cwd)?;
+    let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+
+    let first = WindowsReferenceBackend.fail_closed_plan("exec_first", &cwd, &policy);
+    let second = WindowsReferenceBackend.fail_closed_plan("exec_second", &cwd, &policy);
+
+    assert_ne!(first.runtime_root, second.runtime_root);
+    assert_ne!(first.profile_root, second.profile_root);
+    assert_ne!(first.synthetic_home, second.synthetic_home);
+    assert_ne!(first.temp_root, second.temp_root);
+    assert_ne!(
+        environment_runtime_json(&first.environment_runtime),
+        environment_runtime_json(&second.environment_runtime)
+    );
+    Ok(())
+}
+
+#[test]
 fn windows_fail_closed_preview_includes_proxy_network_guard() -> io::Result<()> {
     let tmp = TempDir::new()?;
     let cwd = tmp.path().join("workspace");
