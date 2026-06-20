@@ -374,6 +374,11 @@ fn validate_case(case: &Value, path: &Path, case_ids: &mut HashSet<String>) -> R
         NETWORK_MODES,
         path,
     )?;
+    let malformed_sandbox = required_string(case, "sandbox_level", path)? == "malformed";
+    let malformed_network = required_string(case, "network_mode", path)? == "malformed";
+    if (malformed_sandbox || malformed_network) && primary_class != "policy" {
+        bail!("malformed sandbox/network values are only valid for policy cases");
+    }
     case.get("request")
         .and_then(Value::as_object)
         .context("case.request must be an object")?;
