@@ -1598,6 +1598,14 @@ fn service_stdio_keeps_completed_execution_state() -> Result<()> {
     let (_, get_response) = read_rpc_response(&mut stdout, 2)?;
     assert_eq!(get_response["result"]["execution_id"], execution_id);
     assert_eq!(get_response["result"]["status"], "finished");
+    assert_eq!(
+        get_response["result"]["platform_plan"],
+        execute_response["result"]["platform_plan"]
+    );
+    assert_eq!(
+        get_response["result"]["platform_plan"]["backend"],
+        execute_response["result"]["backend"]
+    );
 
     stdin.write_all(
         rpc_request_with_id(
