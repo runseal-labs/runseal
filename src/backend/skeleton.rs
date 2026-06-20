@@ -1,6 +1,12 @@
 use super::*;
 use std::time::Duration;
 
+const CONTROL_FEATURES: &[BackendFeature] = &[
+    BackendFeature::SetupReadiness,
+    BackendFeature::StdinBytes,
+    BackendFeature::StdinFile,
+];
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct LocalBackend;
 
@@ -18,7 +24,7 @@ impl SandboxBackend for LocalBackend {
     }
 
     fn supported_features(&self) -> &'static [BackendFeature] {
-        &[]
+        CONTROL_FEATURES
     }
 
     fn compile_plan(
@@ -69,7 +75,7 @@ impl SandboxBackend for MacosExperimentalBackend {
     }
 
     fn supported_features(&self) -> &'static [BackendFeature] {
-        &[]
+        CONTROL_FEATURES
     }
 
     fn compile_plan(
@@ -123,7 +129,7 @@ impl SandboxBackend for LinuxCommunityBackend {
     }
 
     fn supported_features(&self) -> &'static [BackendFeature] {
-        &[]
+        CONTROL_FEATURES
     }
 
     fn compile_plan(

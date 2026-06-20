@@ -147,6 +147,9 @@ const WINDOWS_REFERENCE_SUPPORTED_FEATURES: &[BackendFeature] = &[
     BackendFeature::NetworkProxy,
     BackendFeature::ManagedProxy,
     BackendFeature::PolicyEpoch,
+    BackendFeature::SetupReadiness,
+    BackendFeature::StdinBytes,
+    BackendFeature::StdinFile,
 ];
 
 #[cfg(not(windows))]
@@ -154,6 +157,9 @@ const WINDOWS_REFERENCE_SUPPORTED_FEATURES: &[BackendFeature] = &[
     BackendFeature::RuntimeRoots,
     BackendFeature::RuntimeEnvironment,
     BackendFeature::ProcessCleanup,
+    BackendFeature::SetupReadiness,
+    BackendFeature::StdinBytes,
+    BackendFeature::StdinFile,
 ];
 
 impl SandboxBackend for WindowsReferenceBackend {

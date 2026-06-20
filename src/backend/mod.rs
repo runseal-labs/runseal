@@ -411,12 +411,18 @@ mod tests {
                 BackendFeature::NetworkProxy,
                 BackendFeature::ManagedProxy,
                 BackendFeature::PolicyEpoch,
+                BackendFeature::SetupReadiness,
+                BackendFeature::StdinBytes,
+                BackendFeature::StdinFile,
             ]
         } else {
             &[
                 BackendFeature::RuntimeRoots,
                 BackendFeature::RuntimeEnvironment,
                 BackendFeature::ProcessCleanup,
+                BackendFeature::SetupReadiness,
+                BackendFeature::StdinBytes,
+                BackendFeature::StdinFile,
             ]
         }
     }
@@ -546,7 +552,11 @@ mod tests {
     fn linux_skeleton_reports_community_track_without_sandbox_features() {
         assert_eq!(LinuxCommunityBackend.name(), "runseal-linux-community");
         assert_eq!(LinuxCommunityBackend.status(), "future-community");
-        assert!(LinuxCommunityBackend.supported_features().is_empty());
+        assert!(
+            !LinuxCommunityBackend
+                .supported_features()
+                .contains(&BackendFeature::FilesystemPolicy)
+        );
         let capabilities = LinuxCommunityBackend.capabilities_json();
         assert_eq!(
             capabilities["capability_probes"]["sandboxed_execution"],
@@ -561,6 +571,8 @@ mod tests {
             "unsupported"
         );
         assert_eq!(capabilities["features"]["process_isolation"], false);
+        assert_eq!(capabilities["features"]["stdin_bytes"], true);
+        assert_eq!(capabilities["features"]["stdin_file"], true);
         assert!(
             capabilities["capability_probes"]["runtime"]["user_namespace"]
                 .as_str()
@@ -578,7 +590,11 @@ mod tests {
             "runseal-macos-experimental"
         );
         assert_eq!(MacosExperimentalBackend.status(), "experimental");
-        assert!(MacosExperimentalBackend.supported_features().is_empty());
+        assert!(
+            !MacosExperimentalBackend
+                .supported_features()
+                .contains(&BackendFeature::FilesystemPolicy)
+        );
         let capabilities = MacosExperimentalBackend.capabilities_json();
         assert_eq!(
             capabilities["capability_probes"]["sandboxed_execution"],
@@ -593,6 +609,8 @@ mod tests {
             "unsupported"
         );
         assert_eq!(capabilities["features"]["process_isolation"], false);
+        assert_eq!(capabilities["features"]["stdin_bytes"], true);
+        assert_eq!(capabilities["features"]["stdin_file"], true);
         assert!(
             capabilities["capability_probes"]["runtime"]["sandbox_exec"]
                 .as_str()

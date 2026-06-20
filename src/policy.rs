@@ -75,6 +75,9 @@ pub enum BackendFeature {
     NetworkProxy,
     ManagedProxy,
     PolicyEpoch,
+    SetupReadiness,
+    StdinBytes,
+    StdinFile,
     ResourceLimits,
 }
 
@@ -91,6 +94,9 @@ impl BackendFeature {
             Self::NetworkProxy => "network_proxy",
             Self::ManagedProxy => "managed_proxy",
             Self::PolicyEpoch => "policy_epoch",
+            Self::SetupReadiness => "setup_readiness",
+            Self::StdinBytes => "stdin_bytes",
+            Self::StdinFile => "stdin_file",
             Self::ResourceLimits => "resource_limits",
         }
     }
