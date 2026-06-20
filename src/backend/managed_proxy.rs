@@ -535,7 +535,16 @@ fn new_proxy_token() -> io::Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        MANAGED_PROXY_PORT, ManagedSandboxProxy, PROXY_AUTHORIZATION_KEY,
+        authority_with_default_port, proxy_basic_auth_value, rewrite_plain_http_request,
+        strip_http_scheme,
+    };
+    use serde_json::Value;
+    use std::io::{Read, Write};
+    use std::net::{Shutdown, TcpListener, TcpStream};
+    use std::thread;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn environment_sets_loopback_proxy_for_vendor_guard() {
