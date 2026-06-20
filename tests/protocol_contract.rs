@@ -1579,6 +1579,22 @@ fn service_stdio_keeps_completed_execution_state() -> Result<()> {
     );
     assert_eq!(cancel_response["error"]["data"]["session_id"], session_id);
     assert_eq!(cancel_response["error"]["data"]["status"], "finished");
+    assert_eq!(
+        cancel_response["error"]["data"]["policy_id"],
+        execute_response["result"]["policy_id"]
+    );
+    assert_eq!(
+        cancel_response["error"]["data"]["policy_hash"],
+        execute_response["result"]["policy_hash"]
+    );
+    assert_eq!(
+        cancel_response["error"]["data"]["policy_epoch"],
+        execute_response["result"]["policy_epoch"]
+    );
+    assert_eq!(
+        cancel_response["error"]["data"]["backend"],
+        execute_response["result"]["backend"]
+    );
 
     stdin.write_all(
         rpc_request_with_id(5, "disposeSession", json!({ "session_id": session_id })).as_bytes(),
@@ -1808,6 +1824,26 @@ fn service_stdio_keeps_failed_execution_state() -> Result<()> {
         execution_id
     );
     assert_eq!(cancel_response["error"]["data"]["status"], "failed");
+    assert_eq!(
+        cancel_response["error"]["data"]["session_id"],
+        execute_response["error"]["data"]["session_id"]
+    );
+    assert_eq!(
+        cancel_response["error"]["data"]["policy_id"],
+        execute_response["error"]["data"]["policy_id"]
+    );
+    assert_eq!(
+        cancel_response["error"]["data"]["policy_hash"],
+        execute_response["error"]["data"]["policy_hash"]
+    );
+    assert_eq!(
+        cancel_response["error"]["data"]["policy_epoch"],
+        execute_response["error"]["data"]["policy_epoch"]
+    );
+    assert_eq!(
+        cancel_response["error"]["data"]["backend"],
+        execute_response["error"]["data"]["backend"]
+    );
 
     stdin.write_all(
         rpc_request_with_id(
