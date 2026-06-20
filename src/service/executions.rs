@@ -12,7 +12,6 @@ pub(super) struct ExecutionStore {
 }
 
 struct ExecutionRecord {
-    session_id: String,
     result: Value,
     events: Vec<Value>,
 }
@@ -28,7 +27,6 @@ impl ExecutionStore {
         self.records.insert(
             execution_id.to_string(),
             ExecutionRecord {
-                session_id: session_id.to_string(),
                 result: result.clone(),
                 events: events.to_vec(),
             },
@@ -71,7 +69,6 @@ impl ExecutionStore {
         self.records.insert(
             execution_id.to_string(),
             ExecutionRecord {
-                session_id: session_id.to_string(),
                 result,
                 events: vec![failed_event(execution_id, session_id, err, details)],
             },
@@ -123,13 +120,6 @@ impl ExecutionStore {
             .flat_map(|record| filter_events(&record.events, types))
             .map(|event| audit_stream_event_metadata(&event))
             .collect()
-    }
-
-    pub(super) fn remove_session(&mut self, session_id: &str) -> usize {
-        let before = self.records.len();
-        self.records
-            .retain(|_, record| record.session_id != session_id);
-        before - self.records.len()
     }
 }
 
