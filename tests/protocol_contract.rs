@@ -1971,6 +1971,72 @@ fn service_stdio_cancels_running_execution() -> Result<()> {
 }
 
 #[test]
+fn service_stdio_streams_events_before_execution_finishes() -> Result<()> {
+    #[cfg(windows)]
+    let _guard = windows_protocol_lock()?;
+
+    let tmp = TempDir::new()?;
+    let mut child = Command::new(require_runseal_bin()?)
+        .args(["service", "--stdio"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to spawn runseal service")?;
+    let mut stdin = child.stdin.take().context("stdin unavailable")?;
+    let stdout = child.stdout.take().context("stdout unavailable")?;
+    let mut stdout = BufReader::new(stdout);
+
+    stdin.write_all(
+        rpc_request_with_id(
+            1,
+            "execute",
+            json!({
+                "command": [python_bin(), "-c", "import time; time.sleep(5)"],
+                "cwd": tmp.path(),
+                "policy": "danger-full-access",
+            }),
+        )
+        .as_bytes(),
+    )?;
+    stdin.flush()?;
+
+    let started = Instant::now();
+    let first_message = read_rpc_message(&mut stdout)?;
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "service event stream waited for execution completion"
+    );
+    assert_eq!(first_message["method"], "event");
+    let execution_id = first_message["params"]["execution_id"]
+        .as_str()
+        .context("streamed event must include execution_id")?
+        .to_string();
+
+    stdin.write_all(
+        rpc_request_with_id(
+            2,
+            "cancelExecution",
+            json!({ "execution_id": execution_id, "reason": "test" }),
+        )
+        .as_bytes(),
+    )?;
+    let (_, cancel_response) = read_rpc_response(&mut stdout, 2)?;
+    assert_eq!(cancel_response["result"]["status"], "cancelling");
+
+    let (_, execute_response) = read_rpc_response(&mut stdout, 1)?;
+    assert_eq!(
+        execute_response["error"]["data"]["code"],
+        "EXECUTION_CANCELLED"
+    );
+
+    drop(stdin);
+    let status = child.wait().context("failed to wait for runseal service")?;
+    assert!(status.success());
+    Ok(())
+}
+
+#[test]
 fn service_stdio_dispose_session_cancels_running_execution() -> Result<()> {
     #[cfg(windows)]
     let _guard = windows_protocol_lock()?;
@@ -2559,19 +2625,23 @@ fn read_rpc_response(
 ) -> Result<(Vec<Value>, Value)> {
     let mut notifications = Vec::new();
     loop {
-        let mut line = String::new();
-        stdout
-            .read_line(&mut line)
-            .context("failed to read service stdout")?;
-        if line.is_empty() {
-            bail!("service stdout closed before response id {id}");
-        }
-        let message: Value = serde_json::from_str(&line).context("stdout line was not JSON")?;
+        let message = read_rpc_message(stdout)?;
         if message.get("id").and_then(Value::as_u64) == Some(id) {
             return Ok((notifications, message));
         }
         notifications.push(message);
     }
+}
+
+fn read_rpc_message(stdout: &mut BufReader<impl std::io::Read>) -> Result<Value> {
+    let mut line = String::new();
+    stdout
+        .read_line(&mut line)
+        .context("failed to read service stdout")?;
+    if line.is_empty() {
+        bail!("service stdout closed before response");
+    }
+    serde_json::from_str(&line).context("stdout line was not JSON")
 }
 
 #[test]

@@ -158,7 +158,7 @@ impl Service {
                 None,
             )
         });
-        self.record_execute_result(id, result)
+        self.record_execute_result(id, result, true)
     }
 
     fn execute_async(&self, id: Value, params: &Value, sender: Sender<Vec<Value>>) -> Vec<Value> {
@@ -175,12 +175,14 @@ impl Service {
 
         let service = self.clone();
         let execution_id = ids.execution_id.clone();
+        let event_sender = sender.clone();
         std::thread::spawn(move || {
             let event_service = service.clone();
             let mut event_sink = move |event: &Value| {
                 event_service
                     .state()
                     .record_execution_event(&execution_id, event);
+                let _ = event_sender.send(vec![event_notification(event.clone())]);
             };
             let result = execute_command_with_ids(
                 ids,
@@ -194,7 +196,7 @@ impl Service {
                 Some(cancellation),
                 Some(&mut event_sink),
             );
-            let _ = sender.send(service.record_execute_result(id, result));
+            let _ = sender.send(service.record_execute_result(id, result, false));
         });
 
         Vec::new()
@@ -204,24 +206,19 @@ impl Service {
         &self,
         id: Value,
         result: Result<(Vec<Value>, Value), RunSealError>,
+        emit_events: bool,
     ) -> Vec<Value> {
         match result {
             Ok((events, result)) => {
                 self.state().record_finished_execution(&result, &events);
-                let mut messages: Vec<Value> = events
-                    .into_iter()
-                    .map(|event| json!({"jsonrpc": "2.0", "method": "event", "params": event}))
-                    .collect();
+                let mut messages = event_notifications(events, emit_events);
                 messages.push(rpc::result(id, result));
                 messages
             }
             Err(err) => {
                 let events = err.events.clone();
                 self.state().record_failed_execution(&err);
-                let mut messages: Vec<Value> = events
-                    .into_iter()
-                    .map(|event| json!({"jsonrpc": "2.0", "method": "event", "params": event}))
-                    .collect();
+                let mut messages = event_notifications(events, emit_events);
                 messages.push(rpc::error(id, err));
                 messages
             }
@@ -383,6 +380,18 @@ fn audit_event_metadata(events: Vec<Value>) -> Vec<Value> {
             event
         })
         .collect()
+}
+
+fn event_notifications(events: Vec<Value>, emit_events: bool) -> Vec<Value> {
+    if emit_events {
+        events.into_iter().map(event_notification).collect()
+    } else {
+        Vec::new()
+    }
+}
+
+fn event_notification(event: Value) -> Value {
+    json!({"jsonrpc": "2.0", "method": "event", "params": event})
 }
 
 fn execution_not_cancellable(result: &Value) -> RunSealError {
