@@ -139,6 +139,8 @@ fn execution_summary(result: &Value) -> Value {
         "policy_hash",
         "policy_epoch",
         "backend",
+        "support",
+        "missing_features",
         "audit_path",
         "started_at",
         "finished_at",

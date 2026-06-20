@@ -1860,15 +1860,33 @@ fn service_stdio_retains_backend_capability_failure_events() -> Result<()> {
             .any(|feature| feature == "resource_limits")
     );
 
+    stdin.write_all(rpc_request_with_id(3, "listExecutions", json!({})).as_bytes())?;
+    let (_, list_response) = read_rpc_response(&mut stdout, 3)?;
+    let summaries = list_response["result"]["executions"]
+        .as_array()
+        .context("executions must be an array")?;
+    let summary = summaries
+        .iter()
+        .find(|summary| summary["execution_id"] == execution_id)
+        .context("backend capability failure summary must exist")?;
+    assert_eq!(summary["support"], "unsupported");
+    assert!(
+        summary["missing_features"]
+            .as_array()
+            .context("summary missing_features must be an array")?
+            .iter()
+            .any(|feature| feature == "resource_limits")
+    );
+
     stdin.write_all(
         rpc_request_with_id(
-            3,
+            4,
             "getAuditEvents",
             json!({ "execution_id": execution_id, "types": ["sandbox.*"] }),
         )
         .as_bytes(),
     )?;
-    let (_, audit_response) = read_rpc_response(&mut stdout, 3)?;
+    let (_, audit_response) = read_rpc_response(&mut stdout, 4)?;
     assert_eq!(audit_response["result"]["execution_id"], execution_id);
     assert!(
         audit_response["result"]["events"]
@@ -1884,9 +1902,9 @@ fn service_stdio_retains_backend_capability_failure_events() -> Result<()> {
     );
 
     stdin.write_all(
-        rpc_request_with_id(4, "tailAudit", json!({ "types": ["sandbox.*"] })).as_bytes(),
+        rpc_request_with_id(5, "tailAudit", json!({ "types": ["sandbox.*"] })).as_bytes(),
     )?;
-    let (_, tail_response) = read_rpc_response(&mut stdout, 4)?;
+    let (_, tail_response) = read_rpc_response(&mut stdout, 5)?;
     assert!(
         tail_response["result"]["events"]
             .as_array()
