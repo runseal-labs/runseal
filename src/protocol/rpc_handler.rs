@@ -12,7 +12,7 @@ pub(crate) fn run_service_stdio() -> Result<(), String> {
 fn run_stdio(stateful: bool) -> Result<(), String> {
     let stdin = io::stdin();
     let mut stdout = io::stdout().lock();
-    let mut service = stateful.then(crate::service::Service::default);
+    let mut service = stateful.then(crate::service::Service::stateful);
     for line in stdin.lock().lines() {
         let line = line.map_err(|err| format!("failed to read stdin: {err}"))?;
         if line.trim().is_empty() {
@@ -22,7 +22,7 @@ fn run_stdio(stateful: bool) -> Result<(), String> {
             .map_err(|err| format!("invalid JSON-RPC request: {err}"))?;
         let messages = match service.as_mut() {
             Some(service) => service.handle_rpc_request(&request),
-            None => crate::service::Service::default().handle_rpc_request(&request),
+            None => crate::service::Service::direct().handle_rpc_request(&request),
         };
         for message in messages {
             writeln!(stdout, "{message}")

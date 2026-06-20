@@ -525,6 +525,39 @@ fn rpc_stdio_does_not_keep_completed_execution_state() -> Result<()> {
 }
 
 #[test]
+fn rpc_and_service_report_current_control_plane_mode() -> Result<()> {
+    for (command, expected_mode, expected_stateful) in
+        [("rpc", "direct", false), ("service", "service", true)]
+    {
+        let mut child = Command::new(require_runseal_bin()?)
+            .args([command, "--stdio"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .with_context(|| format!("failed to spawn runseal {command}"))?;
+        let mut stdin = child.stdin.take().context("stdin unavailable")?;
+        let stdout = child.stdout.take().context("stdout unavailable")?;
+        let mut stdout = BufReader::new(stdout);
+
+        stdin.write_all(rpc_request_with_id(1, "getServiceStatus", json!({})).as_bytes())?;
+        let (_, response) = read_rpc_response(&mut stdout, 1)?;
+        assert_eq!(response["result"]["status"], "running");
+        assert_eq!(response["result"]["mode"], expected_mode);
+        assert_eq!(response["result"]["transport"], "stdio");
+        assert_eq!(response["result"]["stateful"], expected_stateful);
+        assert_eq!(response["result"]["local_only"], true);
+        assert_eq!(response["result"]["remote_listener"], false);
+        assert_no_private_windows_setup_terms(&response["result"]);
+
+        drop(stdin);
+        let status = child.wait().context("failed to wait for runseal")?;
+        assert!(status.success());
+    }
+    Ok(())
+}
+
+#[test]
 fn get_capabilities_rpc_contract() -> Result<()> {
     let output = run_rpc(&rpc_request("getCapabilities", json!({})))?;
 
