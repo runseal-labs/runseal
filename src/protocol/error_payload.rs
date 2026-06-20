@@ -1,4 +1,5 @@
-use super::*;
+use crate::error::RunSealError;
+use serde_json::{Value, json};
 
 pub(crate) fn cli_error_payload(err: RunSealError) -> Value {
     let mut data = json!({

@@ -1,6 +1,8 @@
 use super::*;
 #[cfg(not(windows))]
 use crate::execution::validate_execution_cwd;
+#[cfg(windows)]
+use crate::policy::NetworkMode;
 
 const SETUP_HELP_TEXT: &str = "\
 Usage: runseal setup windows-sandbox [--cwd <path>] [--status] [--json]
