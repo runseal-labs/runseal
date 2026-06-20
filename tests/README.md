@@ -23,6 +23,10 @@ The tests are black-box by design:
 - macOS and Linux hosts select explicit experimental/community skeleton backends and still fail closed for unsupported sandbox levels.
 - Windows sandbox plans include runtime root, synthetic home, setup requirements, protected filesystem categories, process boundary state, and network guard planning.
 - Windows filesystem ACL setup must bind rules to a single sandbox user restricted process identity before any rule can be applied.
+- Windows single-identity freeze gates cover policy epoch immutability,
+  same-policy concurrency, mixed-policy rejection, per-execution runtime
+  isolation, process cleanup scope, and legacy dual-user setup artifact
+  rejection.
 - Windows runtime roots can be reported as a verified single capability without making any sandbox level supported by itself.
 - Windows runtime environment redirects can be reported as a verified single capability without making any sandbox level supported by itself.
 - Windows process cleanup can be reported as a verified single capability without making any sandbox level supported by itself.
