@@ -1418,6 +1418,10 @@ fn service_stdio_keeps_completed_execution_state() -> Result<()> {
                 "command": [python_bin(), "-c", "print('service-ok')"],
                 "cwd": tmp.path(),
                 "policy": "danger-full-access",
+                "metadata": {
+                    "Authorization": "Bearer service-secret",
+                    "safe": "visible"
+                },
             }),
         )
         .as_bytes(),
@@ -1431,6 +1435,12 @@ fn service_stdio_keeps_completed_execution_state() -> Result<()> {
         .as_str()
         .context("execute result must include session_id")?
         .to_string();
+    assert!(!execute_response.to_string().contains("service-secret"));
+    assert!(
+        execute_events
+            .iter()
+            .all(|event| event["params"].get("metadata").is_none())
+    );
     assert!(
         execute_events
             .iter()
@@ -1537,6 +1547,8 @@ fn service_stdio_keeps_completed_execution_state() -> Result<()> {
         .find(|summary| summary["execution_id"] == execution_id)
         .context("disposed session execution summary must remain queryable")?;
     assert_eq!(summary["status"], "finished");
+    assert!(summary.get("metadata").is_none());
+    assert!(!summary.to_string().contains("service-secret"));
 
     stdin.write_all(
         rpc_request_with_id(8, "getExecution", json!({ "execution_id": execution_id })).as_bytes(),
@@ -1544,6 +1556,12 @@ fn service_stdio_keeps_completed_execution_state() -> Result<()> {
     let (_, retained_response) = read_rpc_response(&mut stdout, 8)?;
     assert_eq!(retained_response["result"]["execution_id"], execution_id);
     assert_eq!(retained_response["result"]["status"], "finished");
+    assert!(retained_response["result"].get("metadata").is_none());
+    assert!(
+        !retained_response["result"]
+            .to_string()
+            .contains("service-secret")
+    );
 
     stdin.write_all(
         rpc_request_with_id(
@@ -1555,6 +1573,18 @@ fn service_stdio_keeps_completed_execution_state() -> Result<()> {
     )?;
     let (_, audit_response) = read_rpc_response(&mut stdout, 9)?;
     assert_eq!(audit_response["result"]["count"], 1);
+    assert!(
+        !audit_response["result"]
+            .to_string()
+            .contains("service-secret")
+    );
+    assert!(
+        audit_response["result"]["events"]
+            .as_array()
+            .context("audit events must be an array")?
+            .iter()
+            .all(|event| event.get("metadata").is_none())
+    );
 
     stdin.write_all(
         rpc_request_with_id(
@@ -1569,6 +1599,16 @@ fn service_stdio_keeps_completed_execution_state() -> Result<()> {
         .as_array()
         .context("audit stdout events must be an array")?;
     assert_eq!(audit_stdout_events.len(), 1);
+    assert!(
+        !audit_stdout_response["result"]
+            .to_string()
+            .contains("service-secret")
+    );
+    assert!(
+        audit_stdout_events
+            .iter()
+            .all(|event| event.get("metadata").is_none())
+    );
     assert_eq!(audit_stdout_events[0]["bytes"], subscribed_stdout["bytes"]);
     assert!(audit_stdout_events[0].get("data").is_none());
     assert!(audit_stdout_events[0].get("text").is_none());
@@ -1585,9 +1625,15 @@ fn service_stdio_keeps_completed_execution_state() -> Result<()> {
             .iter()
             .any(|event| event["type"] == "execution.stdout")
     );
+    assert!(
+        !tail_stdout_response["result"]
+            .to_string()
+            .contains("service-secret")
+    );
     assert!(tail_stdout_events.iter().all(|event| {
-        event["type"] != "execution.stdout"
-            || (event.get("data").is_none() && event.get("text").is_none())
+        event.get("metadata").is_none()
+            && (event["type"] != "execution.stdout"
+                || (event.get("data").is_none() && event.get("text").is_none()))
     }));
 
     drop(stdin);
