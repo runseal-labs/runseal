@@ -218,6 +218,23 @@ fn assert_no_private_windows_setup_terms(text: &str) {
     }
 }
 
+fn assert_no_private_linux_backend_terms(text: &str) {
+    for private_term in [
+        "bwrap",
+        "bubblewrap",
+        "--unshare-user",
+        "--unshare-pid",
+        "--unshare-net",
+        "--ro-bind",
+        "namespace flags",
+    ] {
+        assert!(
+            !text.contains(private_term),
+            "CLI output must not expose private Linux backend term {private_term}"
+        );
+    }
+}
+
 fn assert_portable_capability_probe_contract(payload: &Value) {
     if cfg!(windows) {
         assert!(payload.get("capability_probes").is_none());
@@ -979,7 +996,7 @@ fn sandboxed_exec_cli_uses_backend_or_reports_unavailable() -> Result<()> {
     if cfg!(windows) {
         args.extend(["cmd", "/d", "/c", "echo sandbox-ok"]);
     } else {
-        args.extend([python_bin(), "-c", "print('must not run')"]);
+        args.extend([python_bin(), "-c", "print('cli-read-only-ok')"]);
     }
     let output = run_cli(&args)?;
 
@@ -1025,6 +1042,29 @@ fn sandboxed_exec_cli_uses_backend_or_reports_unavailable() -> Result<()> {
             .with_context(|| format!("runtime dir must exist at {}", runtime_dir.display()))?
             .collect::<Result<Vec<_>, _>>()?;
         assert_eq!(runtime_entries.len(), 0);
+        return Ok(());
+    }
+
+    if cfg!(target_os = "linux") && output.status.success() {
+        let payload = stdout_json(&output)?;
+        assert_eq!(payload["sandbox"]["enforced"], true);
+        assert_eq!(
+            payload["platform_plan"]["enforcement"],
+            "linux-read-only-sandbox"
+        );
+        assert!(
+            payload["stdout"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("cli-read-only-ok"),
+            "{payload}"
+        );
+        assert_no_private_linux_backend_terms(&payload.to_string());
+        let audit_path = payload["audit_path"]
+            .as_str()
+            .context("ExecutionResult must include audit_path")?;
+        let audit_jsonl = fs::read_to_string(tmp.path().join(audit_path))?;
+        assert_no_private_linux_backend_terms(&audit_jsonl);
         return Ok(());
     }
 
