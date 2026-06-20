@@ -1,6 +1,7 @@
 use crate::control;
 use crate::error::RunSealError;
-use crate::execution::{audit_stream_event_metadata, execute_command};
+use crate::events::new_execution_ids;
+use crate::execution::{audit_stream_event_metadata, execute_command_with_ids};
 use crate::rpc;
 use crate::setup::windows_sandbox_setup_status_for_cwd;
 use request_validation::{
@@ -118,7 +119,9 @@ impl Service {
 
     fn execute(&mut self, id: Value, params: &Value) -> Vec<Value> {
         let result = execute_request_from_params(params).and_then(|request| {
-            execute_command(
+            let ids = new_execution_ids();
+            execute_command_with_ids(
+                ids,
                 &request.command,
                 &request.cwd,
                 &request.policy,

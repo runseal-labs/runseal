@@ -6,8 +6,8 @@ use crate::backend::{SandboxBackend, active_backend};
 use crate::duration::duration_millis_u64;
 use crate::error::RunSealError;
 use crate::events::{
-    ExecutionEventContext, backend_event_json, execution_event_at, execution_event_now,
-    new_execution_ids, stream_event, timestamp_now,
+    ExecutionEventContext, ExecutionIds, backend_event_json, execution_event_at,
+    execution_event_now, new_execution_ids, stream_event, timestamp_now,
 };
 use crate::execution::{ExecutionEnv, ExecutionStdin};
 use crate::policy::SandboxPolicy;
@@ -26,12 +26,37 @@ pub(crate) fn execute_command(
     metadata: Option<Value>,
     timeout: Option<Duration>,
 ) -> Result<(Vec<Value>, Value), RunSealError> {
+    execute_command_with_ids(
+        new_execution_ids(),
+        command,
+        cwd,
+        policy,
+        stdin,
+        env,
+        metadata,
+        timeout,
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "ponytail: one caller-owned id input; add a request struct when active execution needs it"
+)]
+pub(crate) fn execute_command_with_ids(
+    ids: ExecutionIds,
+    command: &[String],
+    cwd: &Path,
+    policy: &SandboxPolicy,
+    stdin: ExecutionStdin,
+    env: ExecutionEnv,
+    metadata: Option<Value>,
+    timeout: Option<Duration>,
+) -> Result<(Vec<Value>, Value), RunSealError> {
     if command.is_empty() {
         return Err(RunSealError::new("INVALID_REQUEST", "command is empty"));
     }
     validate_execution_cwd(cwd)?;
 
-    let ids = new_execution_ids();
     let policy_id = policy.id.clone();
     let policy_hash = policy.hash();
     // ponytail: stdio MVP has no mutable daemon epoch; promote to a real epoch store when concurrent policy transitions exist.
@@ -675,4 +700,52 @@ fn network_audit_json(policy: &SandboxPolicy) -> Value {
         "routes": policy.network.routes,
         "direct_allow_hosts": policy.network.direct_allow_hosts,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::execute_command_with_ids;
+    use crate::events::ExecutionIds;
+    use crate::execution::{ExecutionEnv, ExecutionStdin};
+    use crate::policy::normalize_policy;
+    use serde_json::json;
+
+    #[test]
+    fn execute_command_uses_caller_ids() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let policy =
+            normalize_policy(&json!("danger-full-access"), tmp.path(), None).expect("policy");
+        let ids = ExecutionIds {
+            execution_id: "exec_caller_owned".to_string(),
+            session_id: "sess_caller_owned".to_string(),
+            seal_id: "seal_caller_owned".to_string(),
+        };
+        let command = if cfg!(windows) {
+            ["cmd", "/d", "/c", "exit /b 0"]
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        } else {
+            ["sh", "-c", "true"]
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        };
+
+        let (_, result) = execute_command_with_ids(
+            ids,
+            &command,
+            tmp.path(),
+            &policy,
+            ExecutionStdin::Empty,
+            ExecutionEnv::default(),
+            None,
+            None,
+        )
+        .expect("execution");
+
+        assert_eq!(result["execution_id"], "exec_caller_owned");
+        assert_eq!(result["session_id"], "sess_caller_owned");
+        assert_eq!(result["seal_id"], "seal_caller_owned");
+    }
 }

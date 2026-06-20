@@ -21,7 +21,7 @@ impl ExecutionEnv {
     }
 }
 
-pub(crate) use engine::execute_command;
+pub(crate) use engine::{execute_command, execute_command_with_ids};
 pub(crate) use output::audit_stream_event_metadata;
 #[cfg(not(windows))]
 pub(crate) use paths::validate_execution_cwd;
