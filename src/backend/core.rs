@@ -1,9 +1,10 @@
 use super::capability::missing_backend_features;
 use super::error::BackendError;
-use super::execution::{BackendExecutionOutput, ExecutionEnv, ExecutionStdin};
+use super::execution::BackendExecutionOutput;
 use super::plan::PlatformSandboxPlan;
 use super::skeleton::{LinuxCommunityBackend, LocalBackend, MacosExperimentalBackend};
 use super::windows::WindowsReferenceBackend;
+use crate::execution::{ExecutionEnv, ExecutionStdin};
 use crate::policy::{BackendFeature, SandboxPolicy};
 use serde_json::Value;
 use std::io;

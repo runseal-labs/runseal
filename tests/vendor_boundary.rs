@@ -42,6 +42,7 @@ const WINDOWS_SANDBOX_SETUP_MAIN: &str =
 const WINDOWS_SANDBOX_RUNNER_MAIN: &str =
     include_str!("../vendor/codex-windows-sandbox/upstream/bin/command_runner/main.rs");
 const RUNSEAL_BACKEND_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/backend");
+const RUNSEAL_PROTOCOL_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/protocol");
 
 const VENDOR_TIMEOUT_SOURCES: &[(&str, &str)] = &[
     (
@@ -74,6 +75,23 @@ fn backend_modules_do_not_depend_on_service_modules() {
                 path.display()
             );
         }
+    }
+}
+
+#[test]
+fn protocol_modules_do_not_depend_on_backend_modules() {
+    for entry in std::fs::read_dir(RUNSEAL_PROTOCOL_DIR).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
+            continue;
+        }
+
+        let source = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !source.contains("crate::backend"),
+            "{} must not depend on backend modules",
+            path.display()
+        );
     }
 }
 

@@ -17,7 +17,7 @@ mod windows;
 
 #[cfg(windows)]
 use crate::windows::vendor_adapter::WindowsVendorSandboxProfile;
-use backend::{ExecutionEnv, ExecutionStdin, SandboxBackend, active_backend};
+use backend::{SandboxBackend, active_backend};
 use cli::{parse_exec_args, parse_policy_args};
 #[cfg(all(test, not(windows)))]
 use commands::setup::{windows_sandbox_setup_failed_error, windows_sandbox_setup_status_payload};
@@ -27,6 +27,7 @@ use commands::setup::{
     windows_sandbox_setup_success_payload,
 };
 use error::RunSealError;
+use execution::{ExecutionEnv, ExecutionStdin};
 use policy::{POLICY_VERSION, SandboxPolicy, normalize_policy};
 use serde_json::{Value, json};
 use std::env;

@@ -5,7 +5,6 @@ use super::error::POLICY_TRANSITION_BUSY_REASON;
 use super::error::policy_transition_busy_reason;
 #[cfg(windows)]
 use super::error::public_windows_setup_unavailable_reason;
-use super::execution::{ExecutionEnv, ExecutionStdin};
 use super::filesystem::{
     WindowsFilesystemAclDriver, WindowsFilesystemAclSubject,
     apply_private_filesystem_acl_transaction,
@@ -26,6 +25,7 @@ use super::windows::WindowsReferenceBackend;
 use super::windows::has_single_user_setup_payload;
 #[cfg(all(test, windows))]
 use super::windows::*;
+use crate::execution::{ExecutionEnv, ExecutionStdin};
 use crate::policy::{BackendFeature, NetworkMode, normalize_policy};
 use crate::windows::policy::{
     WindowsFilesystemAccess, WindowsFilesystemAclEntry, WindowsFilesystemAclPlan,

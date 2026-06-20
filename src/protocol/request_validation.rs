@@ -1,7 +1,6 @@
-use crate::backend::ExecutionEnv;
 use crate::commands;
 use crate::error::RunSealError;
-use crate::execution::{current_dir, execute_command, normalize_execution_cwd};
+use crate::execution::{ExecutionEnv, current_dir, execute_command, normalize_execution_cwd};
 use crate::policy::{
     NetworkMode, SandboxPolicy, matches_environment_scrub_pattern, normalize_policy,
 };

@@ -20,7 +20,7 @@ pub use error::BackendError;
 #[cfg(all(test, windows))]
 pub(crate) use error::policy_transition_busy_error_for_test;
 pub(crate) use error::{backend_unavailable_reason, policy_transition_busy_reason};
-pub use execution::{BackendExecutionOutput, ExecutionEnv, ExecutionStdin};
+pub use execution::BackendExecutionOutput;
 pub use plan::PlatformSandboxPlan;
 pub use registry::active_backend;
 #[cfg(windows)]

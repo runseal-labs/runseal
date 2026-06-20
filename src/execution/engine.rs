@@ -2,12 +2,13 @@ use super::errors::backend_execution_error;
 use super::output::{audit_stream_event_metadata, truncate_output};
 use super::paths::validate_execution_cwd;
 use crate::audit::{create_audit_writer, write_audit_event_with_metadata};
-use crate::backend::{ExecutionEnv, ExecutionStdin, SandboxBackend, active_backend};
+use crate::backend::{SandboxBackend, active_backend};
 use crate::error::RunSealError;
 use crate::events::{
     ExecutionEventContext, backend_event_json, execution_event_at, execution_event_now,
     new_execution_ids, stream_event, timestamp_now,
 };
+use crate::execution::{ExecutionEnv, ExecutionStdin};
 use crate::policy::SandboxPolicy;
 use crate::process_output::decode_process_output;
 use crate::protocol::request_validation::duration_millis_u64;

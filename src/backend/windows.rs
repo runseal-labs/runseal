@@ -3,7 +3,7 @@ use super::core::SandboxBackend;
 use super::error::BackendError;
 #[cfg(windows)]
 use super::error::{BackendUnavailableError, public_windows_setup_unavailable_reason};
-use super::execution::{BackendExecutionOutput, ExecutionEnv, ExecutionStdin};
+use super::execution::BackendExecutionOutput;
 #[cfg(windows)]
 use super::managed_proxy::ManagedSandboxProxy;
 use super::path_string;
@@ -19,6 +19,7 @@ use super::runtime::{
 };
 #[cfg(windows)]
 use crate::events::timestamp_now;
+use crate::execution::{ExecutionEnv, ExecutionStdin};
 #[cfg(windows)]
 use crate::policy::SandboxLevel;
 use crate::policy::{BackendFeature, SandboxPolicy};

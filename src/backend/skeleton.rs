@@ -1,10 +1,11 @@
 use super::capability::capabilities_json_for;
 use super::core::SandboxBackend;
 use super::error::BackendError;
-use super::execution::{BackendExecutionOutput, ExecutionEnv, ExecutionStdin};
+use super::execution::BackendExecutionOutput;
 use super::host_platform;
 use super::plan::PlatformSandboxPlan;
 use super::process::spawn_local_command;
+use crate::execution::{ExecutionEnv, ExecutionStdin};
 use crate::policy::{BackendFeature, SandboxPolicy};
 use serde_json::Value;
 use std::io;
