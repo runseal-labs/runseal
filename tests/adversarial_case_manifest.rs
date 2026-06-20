@@ -557,6 +557,21 @@ fn validate_fixtures(fixtures: &Value, path: &Path) -> Result<()> {
             .and_then(Value::as_str)
             .context("case.fixtures entries must include kind")?;
         assert_member(kind, FIXTURE_KINDS, path)?;
+        for field in ["path", "target", "name", "value", "command", "body"] {
+            if let Some(value) = fixture.get(field) {
+                assert_string_value(value, &format!("case.fixtures[].{field}"), path)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn assert_string_value(value: &Value, label: &str, path: &Path) -> Result<()> {
+    let value = value
+        .as_str()
+        .with_context(|| format!("{label} must be a string in {}", path.display()))?;
+    if value.is_empty() {
+        bail!("{label} must not be empty in {}", path.display());
     }
     Ok(())
 }
