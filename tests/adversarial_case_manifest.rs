@@ -316,6 +316,10 @@ fn adversarial_result_schema_requires_public_skip_reason() -> Result<()> {
     });
     validate_result(&result)?;
 
+    result["backend_name"] = json!("   ");
+    assert!(validate_result(&result).is_err());
+    result["backend_name"] = json!("runseal-windows-reference");
+
     result["skipped"] = json!(true);
     result["status"] = json!("skipped");
     result["passed"] = json!(false);
@@ -331,6 +335,8 @@ fn adversarial_result_schema_requires_public_skip_reason() -> Result<()> {
     result["skipped"] = json!(true);
 
     result["skip_reason"] = json!("");
+    assert!(validate_result(&result).is_err());
+    result["skip_reason"] = json!("   ");
     assert!(validate_result(&result).is_err());
     result["skip_reason"] = json!("unsupported fixture kind");
 
@@ -536,7 +542,7 @@ fn case_id_class(case_id: &str) -> Result<&str> {
 }
 
 fn assert_non_empty_string(case: &Value, field: &str, path: &Path) -> Result<()> {
-    if required_string(case, field, path)?.is_empty() {
+    if required_string(case, field, path)?.trim().is_empty() {
         bail!("case.{field} must not be empty in {}", path.display());
     }
     Ok(())
@@ -714,7 +720,7 @@ fn validate_result(result: &Value) -> Result<()> {
     }
     if skipped {
         match result.get("skip_reason").and_then(Value::as_str) {
-            Some(reason) if !reason.is_empty() => {}
+            Some(reason) if !reason.trim().is_empty() => {}
             _ => bail!("skipped adversarial results must include skip_reason"),
         }
     }
