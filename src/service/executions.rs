@@ -141,6 +141,7 @@ fn execution_summary(result: &Value) -> Value {
         "backend",
         "support",
         "missing_features",
+        "setup_status",
         "audit_path",
         "started_at",
         "finished_at",
@@ -314,5 +315,9 @@ mod tests {
         let result = store.result("exec_a").expect("failed record must exist");
         assert_eq!(result["setup_status"]["setup"], "windows-sandbox");
         assert_eq!(result["setup_status"]["next_action"], "run_setup");
+
+        let summary = store.summaries().pop().expect("summary must exist");
+        assert_eq!(summary["setup_status"]["setup"], "windows-sandbox");
+        assert_eq!(summary["setup_status"]["next_action"], "run_setup");
     }
 }
