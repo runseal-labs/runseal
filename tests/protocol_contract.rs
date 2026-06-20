@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use std::env;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Output, Stdio};
 #[cfg(windows)]
 use std::sync::{Mutex, MutexGuard};
@@ -3881,6 +3881,62 @@ fn execute_rejects_file_stdin_outside_cwd() -> Result<()> {
             .contains("params.stdin.path must be under params.cwd")
     );
     Ok(())
+}
+
+#[test]
+fn execute_rejects_file_stdin_symlink_escape() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let workspace = tmp.path().join("workspace");
+    fs::create_dir_all(&workspace)?;
+    let outside = tmp.path().join("outside.txt");
+    let link = workspace.join("stdin-link.txt");
+    fs::write(&outside, b"outside-secret")?;
+    if let Err(err) = create_file_symlink(&outside, &link) {
+        if err.kind() == std::io::ErrorKind::PermissionDenied {
+            return Ok(());
+        }
+        return Err(err.into());
+    }
+
+    let output = run_rpc(&rpc_request(
+        "execute",
+        json!({
+            "command": [python_bin(), "-c", "print('must not run')"],
+            "cwd": workspace,
+            "policy": "danger-full-access",
+            "stdin": {
+                "mode": "file",
+                "path": link
+            }
+        }),
+    ))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = &messages[0];
+
+    assert_eq!(response["error"]["data"]["code"], "INVALID_REQUEST");
+    assert!(
+        response["error"]["data"]["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("params.stdin.path must be under params.cwd")
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+fn create_file_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+#[cfg(windows)]
+fn create_file_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::windows::fs::symlink_file(target, link)
 }
 
 #[test]
