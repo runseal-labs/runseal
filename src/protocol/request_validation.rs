@@ -33,6 +33,17 @@ pub(crate) fn explain_policy_from_params(params: &Value) -> Result<Value, RunSea
     Ok(commands::explain_policy::explain_policy_json(&policy, &cwd))
 }
 
+pub(crate) fn setup_status_cwd_from_params(params: &Value) -> Result<PathBuf, RunSealError> {
+    let params = params_object(params, "getSetupStatus")?;
+    validate_param_keys(params, "getSetupStatus", &["cwd"])?;
+    let cwd = params
+        .get("cwd")
+        .and_then(Value::as_str)
+        .map(PathBuf::from)
+        .unwrap_or_else(current_dir);
+    normalize_execution_cwd(&cwd)
+}
+
 pub(crate) fn execute_from_params(params: &Value) -> Result<(Vec<Value>, Value), RunSealError> {
     let params = params_object(params, "execute")?;
     validate_param_keys(

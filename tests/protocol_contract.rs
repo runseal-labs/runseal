@@ -610,6 +610,25 @@ fn get_capabilities_rpc_contract() -> Result<()> {
 }
 
 #[test]
+fn get_setup_status_rpc_contract() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let output = run_rpc(&rpc_request("getSetupStatus", json!({ "cwd": tmp.path() })))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let payload = &messages[0]["result"];
+    assert_eq!(payload["setup"], "windows-sandbox");
+    assert!(payload["platform_supported"].is_boolean());
+    assert!(payload["next_action"].as_str().is_some());
+    assert_no_private_windows_setup_terms(payload);
+    Ok(())
+}
+
+#[test]
 fn rpc_rejects_malformed_envelope() -> Result<()> {
     let cases = [
         (json!([]), "JSON-RPC request must be an object"),
