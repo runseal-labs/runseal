@@ -2037,6 +2037,53 @@ fn service_stdio_streams_events_before_execution_finishes() -> Result<()> {
 }
 
 #[test]
+fn service_stdio_rejects_empty_command_without_recording_execution() -> Result<()> {
+    #[cfg(windows)]
+    let _guard = windows_protocol_lock()?;
+
+    let tmp = TempDir::new()?;
+    let mut child = Command::new(require_runseal_bin()?)
+        .args(["service", "--stdio"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to spawn runseal service")?;
+    let mut stdin = child.stdin.take().context("stdin unavailable")?;
+    let stdout = child.stdout.take().context("stdout unavailable")?;
+    let mut stdout = BufReader::new(stdout);
+
+    stdin.write_all(
+        rpc_request_with_id(
+            1,
+            "execute",
+            json!({
+                "command": [],
+                "cwd": tmp.path(),
+                "policy": "danger-full-access",
+            }),
+        )
+        .as_bytes(),
+    )?;
+    let (_, execute_response) = read_rpc_response(&mut stdout, 1)?;
+    assert_eq!(execute_response["error"]["data"]["code"], "INVALID_REQUEST");
+    assert_eq!(
+        execute_response["error"]["data"]["reason"],
+        "params.command must not be empty"
+    );
+
+    stdin.write_all(rpc_request_with_id(2, "listExecutions", json!({})).as_bytes())?;
+    let (_, list_response) = read_rpc_response(&mut stdout, 2)?;
+    assert_eq!(list_response["result"]["count"], 0);
+    assert_eq!(list_response["result"]["executions"], json!([]));
+
+    drop(stdin);
+    let status = child.wait().context("failed to wait for runseal service")?;
+    assert!(status.success());
+    Ok(())
+}
+
+#[test]
 fn service_stdio_dispose_session_cancels_running_execution() -> Result<()> {
     #[cfg(windows)]
     let _guard = windows_protocol_lock()?;

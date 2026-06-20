@@ -82,6 +82,12 @@ pub(crate) fn execute_request_from_params(params: &Value) -> Result<ExecuteReque
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
+    if command.is_empty() {
+        return Err(RunSealError::new(
+            "INVALID_REQUEST",
+            "params.command must not be empty",
+        ));
+    }
     let cwd = params
         .get("cwd")
         .and_then(Value::as_str)
