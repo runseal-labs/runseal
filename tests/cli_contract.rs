@@ -225,8 +225,15 @@ fn assert_portable_capability_probe_contract(payload: &Value) {
     }
 
     let probes = &payload["capability_probes"];
-    assert_eq!(probes["sandboxed_execution"], "unsupported");
-    assert_eq!(probes["filesystem_enforcement"], "unsupported");
+    let expected_filesystem_probe = if cfg!(target_os = "linux")
+        && probes["runtime"]["bubblewrap_read_only_candidate"] == "available"
+    {
+        "experimental"
+    } else {
+        "unsupported"
+    };
+    assert_eq!(probes["sandboxed_execution"], expected_filesystem_probe);
+    assert_eq!(probes["filesystem_enforcement"], expected_filesystem_probe);
     assert_eq!(probes["network_enforcement"], "unsupported");
     let serialized = payload.to_string();
     assert!(!serialized.contains("/proc/"));

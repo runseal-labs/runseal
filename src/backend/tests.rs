@@ -572,11 +572,19 @@ fn linux_skeleton_reports_community_track_without_sandbox_features() {
     let capabilities = LinuxCommunityBackend.capabilities_json();
     assert_eq!(
         capabilities["capability_probes"]["sandboxed_execution"],
-        "unsupported"
+        if crate::linux::capability_probe::bubblewrap_read_only_candidate_available() {
+            "experimental"
+        } else {
+            "unsupported"
+        }
     );
     assert_eq!(
         capabilities["capability_probes"]["filesystem_enforcement"],
-        "unsupported"
+        if crate::linux::capability_probe::bubblewrap_read_only_candidate_available() {
+            "experimental"
+        } else {
+            "unsupported"
+        }
     );
     assert_eq!(
         capabilities["capability_probes"]["network_enforcement"],

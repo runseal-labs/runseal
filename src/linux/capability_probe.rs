@@ -4,9 +4,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub(crate) fn payload() -> Value {
+    let read_only_status = bubblewrap_read_only_status();
     json!({
-        "sandboxed_execution": "unsupported",
-        "filesystem_enforcement": "unsupported",
+        "sandboxed_execution": read_only_status,
+        "filesystem_enforcement": read_only_status,
         "network_enforcement": "unsupported",
         "runtime": {
             "user_namespace": file_status("/proc/self/ns/user"),
@@ -26,6 +27,14 @@ pub(crate) fn payload() -> Value {
             "unprivileged_user_namespace": unprivileged_user_namespace_status(),
         },
     })
+}
+
+fn bubblewrap_read_only_status() -> &'static str {
+    if bubblewrap_read_only_candidate_available() {
+        "experimental"
+    } else {
+        "unsupported"
+    }
 }
 
 fn file_status(path: &str) -> &'static str {
