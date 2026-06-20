@@ -161,13 +161,13 @@ Integrators should start with one of these surfaces:
 
 - CLI: call `runseal exec --json` or `runseal exec --events` and handle structured errors.
 - JSON-RPC stdio: launch `runseal rpc --stdio`, call `getVersion`, then `getCapabilities`, then `execute`.
+- Service stdio: launch `runseal service --stdio` when one local process should own completed execution state across JSON-RPC requests.
 - Conformance: set `RUNSEAL_BIN=/path/to/runseal` and run the black-box tests in `tests/`.
 
 Clients should gate sandboxed execution on `getCapabilities` and fail closed
-when a requested feature is unsupported or setup is unavailable. Active
-cancellation is reserved for a later daemon or named-pipe transport; the stdio
-MVP validates `cancelExecution` but cannot interrupt an in-flight synchronous
-`execute` request.
+when a requested feature is unsupported or setup is unavailable. The stdio
+service records completed executions for `getExecution`, event replay, session
+disposal, and stable not-cancellable responses for already-finished executions.
 
 ## Running tests
 
