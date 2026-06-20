@@ -116,6 +116,13 @@ pub(crate) fn audit_events_params(params: &Value) -> Result<(String, Vec<String>
     lookup_events_params(params, "getAuditEvents")
 }
 
+pub(crate) fn tail_audit_params(params: &Value) -> Result<Vec<String>, RunSealError> {
+    let params = params_object(params, "tailAudit")?;
+    validate_param_keys(params, "tailAudit", &["types"])?;
+    validate_optional_lookup_params(params)?;
+    Ok(types_from_params(params))
+}
+
 fn lookup_events_params(
     params: &Value,
     method: &'static str,
@@ -124,7 +131,11 @@ fn lookup_events_params(
     validate_param_keys(params, method, &["execution_id", "types"])?;
     validate_optional_lookup_params(params)?;
     let execution_id = required_prefixed_string_param(params, "execution_id", "exec_")?;
-    let types = params
+    Ok((execution_id, types_from_params(params)))
+}
+
+fn types_from_params(params: &Map<String, Value>) -> Vec<String> {
+    params
         .get("types")
         .and_then(Value::as_array)
         .map(|types| {
@@ -134,8 +145,7 @@ fn lookup_events_params(
                 .map(str::to_string)
                 .collect()
         })
-        .unwrap_or_default();
-    Ok((execution_id, types))
+        .unwrap_or_default()
 }
 
 fn validate_optional_lookup_params(params: &Map<String, Value>) -> Result<(), RunSealError> {
