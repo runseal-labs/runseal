@@ -385,6 +385,12 @@ fn manifest_paths() -> Result<Vec<PathBuf>> {
             .is_some_and(|extension| extension == "json")
     });
     paths.sort();
+    if paths.is_empty() {
+        bail!(
+            "no RFC-0016 adversarial case manifests found in {}",
+            root.display()
+        );
+    }
     Ok(paths)
 }
 
