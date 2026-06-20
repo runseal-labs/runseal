@@ -54,22 +54,21 @@ use {
     codex_utils_absolute_path::AbsolutePathBuf,
     std::collections::{HashMap, HashSet},
     std::os::windows::process::ExitStatusExt,
-    std::sync::{Mutex, OnceLock},
 };
 
-pub use capability::CapabilityStatus;
+#[cfg(test)]
+use capability::CapabilityStatus;
 use capability::capabilities_json_for;
 #[cfg(test)]
 use capability::missing_backend_features;
 pub use core::SandboxBackend;
 pub use error::BackendError;
 #[cfg(all(test, windows))]
+use error::POLICY_TRANSITION_BUSY_REASON;
+#[cfg(all(test, windows))]
 pub(crate) use error::policy_transition_busy_error_for_test;
 #[cfg(windows)]
-use error::{
-    BackendUnavailableError, POLICY_TRANSITION_BUSY_REASON, PolicyTransitionBusyError,
-    public_windows_setup_unavailable_reason,
-};
+use error::{BackendUnavailableError, public_windows_setup_unavailable_reason};
 pub(crate) use error::{backend_unavailable_reason, policy_transition_busy_reason};
 pub use execution::{BackendExecutionOutput, ExecutionEnv, ExecutionStdin};
 pub use plan::PlatformSandboxPlan;

@@ -1,4 +1,11 @@
-use super::*;
+#[cfg(windows)]
+use super::error::{POLICY_TRANSITION_BUSY_REASON, PolicyTransitionBusyError};
+#[cfg(windows)]
+use super::plan::PlatformSandboxPlan;
+#[cfg(windows)]
+use std::io;
+#[cfg(windows)]
+use std::sync::{Mutex, OnceLock};
 
 #[cfg(windows)]
 #[derive(Clone, Debug, Eq, PartialEq)]
