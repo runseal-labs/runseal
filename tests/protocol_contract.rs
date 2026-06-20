@@ -528,6 +528,64 @@ fn rpc_stdio_reports_parse_error_and_continues() -> Result<()> {
 }
 
 #[test]
+fn service_parse_error_does_not_mutate_execution_index() -> Result<()> {
+    #[cfg(windows)]
+    let _guard = windows_protocol_lock()?;
+
+    let tmp = TempDir::new()?;
+    let mut child = Command::new(require_runseal_bin()?)
+        .args(["service", "--stdio"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to spawn runseal service")?;
+    let mut stdin = child.stdin.take().context("stdin unavailable")?;
+    let stdout = child.stdout.take().context("stdout unavailable")?;
+    let mut stdout = BufReader::new(stdout);
+
+    stdin.write_all(
+        rpc_request_with_id(
+            1,
+            "execute",
+            json!({
+                "command": [python_bin(), "-c", "print('parse-state')"],
+                "cwd": tmp.path(),
+                "policy": "danger-full-access",
+            }),
+        )
+        .as_bytes(),
+    )?;
+    read_rpc_response(&mut stdout, 1)?;
+
+    stdin.write_all(rpc_request_with_id(2, "listExecutions", json!({})).as_bytes())?;
+    let (_, before_response) = read_rpc_response(&mut stdout, 2)?;
+    let before_executions = before_response["result"]["executions"].clone();
+
+    stdin.write_all(b"{not-json\n")?;
+    stdin.write_all(rpc_request_with_id(3, "listExecutions", json!({})).as_bytes())?;
+    stdin.flush()?;
+
+    let mut parse_line = String::new();
+    stdout
+        .read_line(&mut parse_line)
+        .context("failed to read parse error response")?;
+    let parse_response: Value =
+        serde_json::from_str(&parse_line).context("parse error response must be JSON")?;
+    assert_eq!(parse_response["id"], Value::Null);
+    assert_eq!(parse_response["error"]["code"], -32700);
+    assert_eq!(parse_response["error"]["data"]["code"], "INVALID_REQUEST");
+
+    let (_, after_response) = read_rpc_response(&mut stdout, 3)?;
+    assert_eq!(after_response["result"]["executions"], before_executions);
+
+    drop(stdin);
+    let status = child.wait().context("failed to wait for runseal service")?;
+    assert!(status.success());
+    Ok(())
+}
+
+#[test]
 fn rpc_stdio_ignores_client_notification_and_continues() -> Result<()> {
     for command in ["rpc", "service"] {
         let mut child = Command::new(require_runseal_bin()?)
