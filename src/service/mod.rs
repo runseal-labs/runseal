@@ -92,10 +92,7 @@ impl Service {
             "getAuditEvents" => self.get_audit_events(id, &params),
             "tailAudit" => self.tail_audit(id, &params),
             "disposeSession" => self.dispose_session(id, &params),
-            _ => vec![rpc::error(
-                id,
-                RunSealError::new("INVALID_REQUEST", format!("unknown method: {method}")),
-            )],
+            _ => vec![rpc::method_not_found(id, method)],
         }
     }
 
