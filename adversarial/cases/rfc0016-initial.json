@@ -1,6 +1,81 @@
 [
   {
     "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.filesystem.protected-subpath-write.v1",
+    "title": "Protected workspace subpaths must reject writes",
+    "primary_class": "filesystem",
+    "capabilities_under_test": ["filesystem_policy"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community"],
+    "sandbox_level": "workspace-write",
+    "network_mode": "disabled",
+    "fixtures": [{"kind": "directory", "path": ".git"}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "open('.git/blocked.txt','w').write('blocked')"],
+      "policy": "workspace-write"
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["file_not_exists"]
+    },
+    "public_report_labels": ["filesystem_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.filesystem.external-write-from-workspace-write.v1",
+    "title": "Workspace-write must not write outside the workspace",
+    "primary_class": "filesystem",
+    "capabilities_under_test": ["filesystem_policy"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community"],
+    "sandbox_level": "workspace-write",
+    "network_mode": "disabled",
+    "fixtures": [{"kind": "directory", "path": "outside"}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "open('../outside/escape.txt','w').write('escape')"],
+      "policy": "workspace-write"
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["file_not_exists"]
+    },
+    "public_report_labels": ["filesystem_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.filesystem.external-read-from-workspace-contained.v1",
+    "title": "Workspace-contained must not read outside the workspace",
+    "primary_class": "filesystem",
+    "capabilities_under_test": ["filesystem_policy"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community"],
+    "sandbox_level": "workspace-contained",
+    "network_mode": "disabled",
+    "fixtures": [{"kind": "file", "path": "outside/secret.txt"}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print(open('../outside/secret.txt').read())"],
+      "policy": "workspace-contained"
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["path_not_accessible"]
+    },
+    "public_report_labels": ["filesystem_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
     "case_id": "adv.policy.unknown-top-level-field.v1",
     "title": "Unknown policy fields must be rejected",
     "primary_class": "policy",
@@ -298,6 +373,32 @@
       "forbidden_side_effects": ["audit_not_contains_secret", "event_not_contains_private_detail"]
     },
     "public_report_labels": ["filesystem_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.network.direct-egress-disabled.v1",
+    "title": "Disabled network policy must block direct egress",
+    "primary_class": "network",
+    "capabilities_under_test": ["network_disabled", "direct_network_deny"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community"],
+    "sandbox_level": "workspace-write",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "import socket; socket.create_connection(('1.1.1.1', 53), timeout=0.5)"],
+      "policy": "workspace-write",
+      "network": "disabled"
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["network_connection_absent"]
+    },
+    "public_report_labels": ["network_conformance"]
   },
   {
     "schema_version": "runseal.adversarial-case/v1",
