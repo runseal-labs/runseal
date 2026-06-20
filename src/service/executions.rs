@@ -8,6 +8,7 @@ use super::event_bus::filter_events;
 #[derive(Default)]
 pub(super) struct ExecutionStore {
     records: BTreeMap<String, ExecutionRecord>,
+    record_order: Vec<String>,
 }
 
 struct ExecutionRecord {
@@ -23,8 +24,8 @@ impl ExecutionStore {
         ) else {
             return None;
         };
-        self.records.insert(
-            execution_id.to_string(),
+        self.insert_record(
+            execution_id,
             ExecutionRecord {
                 result: result.clone(),
                 events: events.to_vec(),
@@ -76,8 +77,7 @@ impl ExecutionStore {
                 result.insert("finished_at".to_string(), finished_at);
             }
         }
-        self.records
-            .insert(execution_id.to_string(), ExecutionRecord { result, events });
+        self.insert_record(execution_id, ExecutionRecord { result, events });
         Some(session_id.to_string())
     }
 
@@ -88,8 +88,9 @@ impl ExecutionStore {
     }
 
     pub(super) fn summaries(&self) -> Vec<Value> {
-        self.records
-            .values()
+        self.record_order
+            .iter()
+            .filter_map(|execution_id| self.records.get(execution_id))
             .map(|record| execution_summary(&record.result))
             .collect()
     }
@@ -101,10 +102,18 @@ impl ExecutionStore {
     }
 
     pub(super) fn all_events(&self, types: &[String]) -> Vec<Value> {
-        self.records
-            .values()
+        self.record_order
+            .iter()
+            .filter_map(|execution_id| self.records.get(execution_id))
             .flat_map(|record| filter_events(&record.events, types))
             .collect()
+    }
+
+    fn insert_record(&mut self, execution_id: &str, record: ExecutionRecord) {
+        if !self.records.contains_key(execution_id) {
+            self.record_order.push(execution_id.to_string());
+        }
+        self.records.insert(execution_id.to_string(), record);
     }
 }
 
@@ -211,4 +220,61 @@ fn error_event(execution_id: &str, session_id: &str, err: &RunSealError, details
         }
     }
     event
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn finished_result(execution_id: &str, session_id: &str) -> Value {
+        json!({
+            "execution_id": execution_id,
+            "session_id": session_id,
+            "status": "finished",
+        })
+    }
+
+    fn marked_event(execution_id: &str, marker: &str) -> Value {
+        json!({
+            "type": "policy.resolved",
+            "execution_id": execution_id,
+            "marker": marker,
+        })
+    }
+
+    #[test]
+    fn summaries_preserve_service_record_order() {
+        let mut store = ExecutionStore::default();
+        store.record_finished(&finished_result("exec_b", "sess_b"), &[]);
+        store.record_finished(&finished_result("exec_a", "sess_a"), &[]);
+
+        let execution_ids = store
+            .summaries()
+            .into_iter()
+            .map(|summary| summary["execution_id"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(execution_ids, ["exec_b", "exec_a"]);
+    }
+
+    #[test]
+    fn audit_tail_preserves_record_and_event_order() {
+        let mut store = ExecutionStore::default();
+        store.record_finished(
+            &finished_result("exec_b", "sess_b"),
+            &[marked_event("exec_b", "b1"), marked_event("exec_b", "b2")],
+        );
+        store.record_finished(
+            &finished_result("exec_a", "sess_a"),
+            &[marked_event("exec_a", "a1")],
+        );
+
+        let markers = store
+            .all_events(&[])
+            .into_iter()
+            .map(|event| event["marker"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(markers, ["b1", "b2", "a1"]);
+    }
 }

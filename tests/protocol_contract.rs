@@ -713,6 +713,84 @@ fn service_stdio_tails_retained_audit_events() -> Result<()> {
 }
 
 #[test]
+fn service_stdio_orders_retained_execution_snapshots_by_record_order() -> Result<()> {
+    #[cfg(windows)]
+    let _guard = windows_protocol_lock()?;
+
+    let tmp = TempDir::new()?;
+    let mut child = Command::new(require_runseal_bin()?)
+        .args(["service", "--stdio"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to spawn runseal service")?;
+    let mut stdin = child.stdin.take().context("stdin unavailable")?;
+    let stdout = child.stdout.take().context("stdout unavailable")?;
+    let mut stdout = BufReader::new(stdout);
+
+    let mut execution_ids = Vec::new();
+    for (id, marker) in [(1, "first"), (2, "second")] {
+        stdin.write_all(
+            rpc_request_with_id(
+                id,
+                "execute",
+                json!({
+                    "command": [python_bin(), "-c", format!("print('{marker}')")],
+                    "cwd": tmp.path(),
+                    "policy": "danger-full-access",
+                }),
+            )
+            .as_bytes(),
+        )?;
+        let (_, execute_response) = read_rpc_response(&mut stdout, id)?;
+        execution_ids.push(
+            execute_response["result"]["execution_id"]
+                .as_str()
+                .context("execute result must include execution_id")?
+                .to_string(),
+        );
+    }
+
+    stdin.write_all(rpc_request_with_id(3, "listExecutions", json!({})).as_bytes())?;
+    let (_, list_response) = read_rpc_response(&mut stdout, 3)?;
+    let listed_ids = list_response["result"]["executions"]
+        .as_array()
+        .context("executions must be an array")?
+        .iter()
+        .map(|execution| {
+            execution["execution_id"]
+                .as_str()
+                .context("summary must include execution_id")
+                .map(str::to_string)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    assert_eq!(listed_ids, execution_ids);
+
+    stdin.write_all(
+        rpc_request_with_id(4, "tailAudit", json!({ "types": ["execution.finished"] })).as_bytes(),
+    )?;
+    let (_, tail_response) = read_rpc_response(&mut stdout, 4)?;
+    let tailed_ids = tail_response["result"]["events"]
+        .as_array()
+        .context("events must be an array")?
+        .iter()
+        .map(|event| {
+            event["execution_id"]
+                .as_str()
+                .context("event must include execution_id")
+                .map(str::to_string)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    assert_eq!(tailed_ids, execution_ids);
+
+    drop(stdin);
+    let status = child.wait().context("failed to wait for runseal service")?;
+    assert!(status.success());
+    Ok(())
+}
+
+#[test]
 fn get_audit_events_rejects_path_lookup() -> Result<()> {
     let output = run_rpc(&rpc_request(
         "getAuditEvents",
