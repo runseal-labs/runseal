@@ -23,6 +23,7 @@ use super::process::{cleanup_child_after_setup_error, spawn_local_command};
 use super::runtime::RUNTIME_ROOT_MARKER;
 use super::skeleton::{LinuxCommunityBackend, MacosExperimentalBackend};
 use super::windows::WindowsReferenceBackend;
+use super::windows::has_single_user_setup_payload;
 #[cfg(all(test, windows))]
 use super::windows::*;
 use crate::policy::{BackendFeature, NetworkMode, normalize_policy};
@@ -1573,6 +1574,40 @@ fn sandbox_setup_rejects_missing_single_user_setup_payload_before_runtime_tree()
 
     let Err(err) = plan.prepare_sandbox_setup() else {
         panic!("missing single-user setup payload must fail sandbox setup");
+    };
+
+    assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    assert!(err.to_string().contains("setup identity artifacts"));
+    assert!(!runtime_root.exists());
+    Ok(())
+}
+
+#[test]
+fn sandbox_setup_rejects_legacy_dual_user_setup_payload_before_runtime_tree() -> io::Result<()> {
+    let tmp = TempDir::new()?;
+    let cwd = tmp.path().join("workspace");
+    fs::create_dir_all(&cwd)?;
+    let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+    let mut plan =
+        WindowsReferenceBackend.fail_closed_plan("exec_legacy_setup_payload", &cwd, &policy);
+    let runtime_root = PathBuf::from(plan.runtime_root.as_ref().unwrap());
+    plan.private_setup_payload = Some(
+        json!({
+            "sandbox_username": "RunSealSandbox",
+            "offline_username": "RunSealSandboxOffline",
+            "online_username": "RunSealSandboxOnline",
+            "codex_home": cwd,
+            "command_cwd": cwd,
+            "real_user": "User"
+        })
+        .to_string(),
+    );
+
+    assert!(!has_single_user_setup_payload(
+        plan.private_setup_payload.as_deref()
+    ));
+    let Err(err) = plan.prepare_sandbox_setup() else {
+        panic!("legacy dual-user setup payload must fail sandbox setup");
     };
 
     assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
