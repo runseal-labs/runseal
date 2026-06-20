@@ -924,6 +924,44 @@ fn workspace_write_accepts_file_stdin_when_supported_or_fails_closed() -> Result
 }
 
 #[test]
+fn read_only_accepts_file_stdin_when_supported_or_fails_closed() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let workspace = tmp.path().join("workspace");
+    fs::create_dir_all(&workspace)?;
+    let stdin_path = workspace.join("read-only-stdin-payload.txt");
+    let stdin_text = "runseal read-only stdin file";
+    fs::write(&stdin_path, stdin_text)?;
+    let response = execute_params(json!({
+        "command": stdin_echo_command(),
+        "cwd": workspace,
+        "policy": "read-only",
+        "network": {"mode": "disabled"},
+        "stdin": {
+            "mode": "file",
+            "path": stdin_path
+        }
+    }))?;
+
+    if is_backend_missing(&response) {
+        let expected_features = expected_missing_features(&["network_disabled"]);
+        assert_backend_missing_features(&response, &workspace, &expected_features)?;
+        return Ok(());
+    }
+    if is_backend_unavailable(&response) {
+        assert_backend_unavailable(&response, &workspace)?;
+        return Ok(());
+    }
+
+    assert_eq!(response["result"]["status"], "finished");
+    assert_eq!(response["result"]["exit_code"], 0);
+    assert_eq!(
+        response["result"]["stdout"].as_str().unwrap_or_default(),
+        stdin_text
+    );
+    Ok(())
+}
+
+#[test]
 fn network_disabled_blocks_direct_egress_when_supported_or_fails_closed() -> Result<()> {
     let tmp = TempDir::new()?;
     let workspace = tmp.path().join("workspace");
