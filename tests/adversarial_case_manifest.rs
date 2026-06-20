@@ -509,6 +509,14 @@ fn validate_case(case: &Value, path: &Path, case_ids: &mut HashSet<String>) -> R
             validate_string_map(values, &format!("case.request.{field}"), path)?;
         }
     }
+    if let Some(interactive) = request.get("interactive") {
+        if method != "execute" {
+            bail!("case.request.interactive is only valid for execute requests");
+        }
+        if !interactive.is_boolean() {
+            bail!("case.request.interactive must be a boolean");
+        }
+    }
     if let Some(timeout_ms) = request.get("timeout_ms") {
         assert_positive_u64(timeout_ms, "case.request.timeout_ms", path)?;
     }
