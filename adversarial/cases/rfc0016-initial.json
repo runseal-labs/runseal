@@ -51,6 +51,32 @@
   },
   {
     "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.audit.policy-hash-consistency.v1",
+    "title": "Policy hash values must stay consistent across result audit and events",
+    "primary_class": "audit",
+    "secondary_classes": ["policy"],
+    "capabilities_under_test": ["audit_jsonl", "policy_epoch"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "danger-full-access",
+    "network_mode": "proxy",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('policy hash')"],
+      "network": "proxy"
+    },
+    "oracle": {
+      "expected_result": "allow_no_side_effect_outside_policy",
+      "max_severity": "S0",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["policy_hash_consistent", "policy_epoch_consistent"]
+    },
+    "public_report_labels": ["protocol_contract"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
     "case_id": "adv.policy.malformed-json.v1",
     "title": "Malformed policy JSON must be rejected",
     "primary_class": "policy",
@@ -197,6 +223,31 @@
   },
   {
     "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.audit.backend-private-redaction.v1",
+    "title": "Backend-private details must stay out of public output",
+    "primary_class": "audit",
+    "capabilities_under_test": ["audit_jsonl"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "read-only",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('redaction')"],
+      "policy": "read-only"
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["event_not_contains_private_detail"]
+    },
+    "public_report_labels": ["protocol_contract", "cli_contract", "filesystem_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
     "case_id": "adv.audit.missing-deny-event.v1",
     "title": "Policy denials must be visible in audit and events",
     "primary_class": "audit",
@@ -220,6 +271,33 @@
       "forbidden_side_effects": ["audit_contains_event_type", "event_contains_type"]
     },
     "public_report_labels": ["protocol_contract"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.network.proxy-credential-redaction.v1",
+    "title": "Managed proxy credentials must be redacted",
+    "primary_class": "network",
+    "secondary_classes": ["audit"],
+    "capabilities_under_test": ["network_proxy", "managed_proxy", "audit_jsonl"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community"],
+    "sandbox_level": "read-only",
+    "network_mode": "proxy",
+    "fixtures": [{"kind": "network_listener", "name": "http target"}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('proxy redaction')"],
+      "policy": "read-only",
+      "network": "proxy"
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["audit_not_contains_secret", "event_not_contains_private_detail"]
+    },
+    "public_report_labels": ["filesystem_conformance"]
   },
   {
     "schema_version": "runseal.adversarial-case/v1",
