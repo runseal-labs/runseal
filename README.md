@@ -28,6 +28,33 @@ The design lives in the RFC repository:
 - https://github.com/runseal-labs/rfcs
 - Protocol draft: https://github.com/runseal-labs/rfcs/blob/main/rfcs/0006-stable-execution-protocol.md
 
+## Quickstart
+
+Download the Windows release archive and place the three executables in the
+same directory:
+
+- `runseal.exe`
+- `runseal-windows-sandbox-setup.exe`
+- `runseal-command-runner.exe`
+
+Install or repair the Windows sandbox from an elevated PowerShell session:
+
+```powershell
+.\runseal.exe setup windows-sandbox --cwd C:\path\to\workspace
+```
+
+Check host capabilities:
+
+```powershell
+.\runseal.exe capabilities
+```
+
+Run a sandboxed command:
+
+```powershell
+.\runseal.exe exec --json --policy workspace-write --network disabled --cwd C:\path\to\workspace -- whoami.exe
+```
+
 ## Development principle
 
 Tests first.
