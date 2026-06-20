@@ -283,11 +283,22 @@ fn adversarial_result_schema_requires_public_skip_reason() -> Result<()> {
 
     result["skipped"] = json!(true);
     result["status"] = json!("skipped");
+    result["passed"] = json!(false);
     assert!(validate_result(&result).is_err());
     result["skip_reason"] = json!("unsupported fixture kind");
     validate_result(&result)?;
 
     result["skip_reason"] = json!("mentions ACL detail");
+    assert!(validate_result(&result).is_err());
+
+    result["skip_reason"] = Value::Null;
+    result["skipped"] = json!(false);
+    result["status"] = json!("passed");
+    result["passed"] = json!(false);
+    assert!(validate_result(&result).is_err());
+
+    result["passed"] = json!(true);
+    result["status"] = json!("failed");
     assert!(validate_result(&result).is_err());
     Ok(())
 }
@@ -519,7 +530,16 @@ fn validate_result(result: &Value) -> Result<()> {
             .and_then(Value::as_bool)
             .with_context(|| format!("result.{field} must be a boolean"))?;
     }
-    if result["skipped"] == true && result.get("skip_reason").and_then(Value::as_str).is_none() {
+    let status = required_string(result, "status", path)?;
+    let passed = result["passed"] == true;
+    let skipped = result["skipped"] == true;
+    if status == "passed" && (!passed || skipped) {
+        bail!("passed adversarial results must set passed=true and skipped=false");
+    }
+    if status != "passed" && passed {
+        bail!("non-passed adversarial results must not set passed=true");
+    }
+    if skipped && result.get("skip_reason").and_then(Value::as_str).is_none() {
         bail!("skipped adversarial results must include skip_reason");
     }
     Ok(())
