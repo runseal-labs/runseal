@@ -371,6 +371,10 @@ fn adversarial_result_schema_requires_public_skip_reason() -> Result<()> {
     assert!(validate_result(&result).is_err());
     result["case_id"] = json!("adv.unknown.case.v1");
     assert!(validate_result(&result).is_err());
+    result["case_id"] = json!("adv.audit.audit-path-traversal.v1");
+
+    result["capabilities_under_test"] = json!(["audit_jsonl", "audit_jsonl"]);
+    assert!(validate_result(&result).is_err());
     Ok(())
 }
 
@@ -546,14 +550,15 @@ fn assert_members(case: &Value, field: &str, allowed: &[&str], path: &Path) -> R
     if values.is_empty() {
         bail!("case.{field} must not be empty in {}", path.display());
     }
+    let mut seen = HashSet::new();
     for value in values {
-        assert_member(
-            value
-                .as_str()
-                .with_context(|| format!("case.{field} entries must be strings"))?,
-            allowed,
-            path,
-        )?;
+        let value = value
+            .as_str()
+            .with_context(|| format!("case.{field} entries must be strings"))?;
+        if !seen.insert(value) {
+            bail!("case.{field} must not contain duplicate value {value}");
+        }
+        assert_member(value, allowed, path)?;
     }
     Ok(())
 }
@@ -562,14 +567,15 @@ fn assert_array_members(values: &Value, field: &str, allowed: &[&str], path: &Pa
     let values = values
         .as_array()
         .with_context(|| format!("{field} must be an array in {}", path.display()))?;
+    let mut seen = HashSet::new();
     for value in values {
-        assert_member(
-            value
-                .as_str()
-                .with_context(|| format!("{field} entries must be strings"))?,
-            allowed,
-            path,
-        )?;
+        let value = value
+            .as_str()
+            .with_context(|| format!("{field} entries must be strings"))?;
+        if !seen.insert(value) {
+            bail!("{field} must not contain duplicate value {value}");
+        }
+        assert_member(value, allowed, path)?;
     }
     Ok(())
 }
