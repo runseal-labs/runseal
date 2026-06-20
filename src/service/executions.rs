@@ -88,6 +88,13 @@ impl ExecutionStore {
         self.records.contains_key(execution_id)
     }
 
+    pub(super) fn summaries(&self) -> Vec<Value> {
+        self.records
+            .values()
+            .map(|record| execution_summary(&record.result))
+            .collect()
+    }
+
     pub(super) fn events(&self, execution_id: &str, types: &[String]) -> Option<Vec<Value>> {
         self.records
             .get(execution_id)
@@ -100,6 +107,34 @@ impl ExecutionStore {
             .retain(|_, record| record.session_id != session_id);
         before - self.records.len()
     }
+}
+
+fn execution_summary(result: &Value) -> Value {
+    let mut summary = serde_json::Map::new();
+    for key in [
+        "execution_id",
+        "session_id",
+        "seal_id",
+        "status",
+        "policy_id",
+        "policy_hash",
+        "policy_epoch",
+        "backend",
+        "audit_path",
+        "started_at",
+        "finished_at",
+        "exit_code",
+        "signal",
+        "stdout_bytes",
+        "stderr_bytes",
+        "output_truncated",
+        "error",
+    ] {
+        if let Some(value) = result.get(key) {
+            summary.insert(key.to_string(), value.clone());
+        }
+    }
+    Value::Object(summary)
 }
 
 fn failed_event(
