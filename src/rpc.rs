@@ -17,6 +17,10 @@ pub(crate) fn parse_error(reason: impl Into<String>) -> Value {
     )
 }
 
+pub(crate) fn invalid_request(id: Value, err: RunSealError) -> Value {
+    error_with_code(id, -32600, err)
+}
+
 pub(crate) fn method_not_found(id: Value, method: &str) -> Value {
     error_with_code(
         id,
