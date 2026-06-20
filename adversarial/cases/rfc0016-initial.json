@@ -285,6 +285,111 @@
   },
   {
     "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.process.orphan-child-after-cancel.v1",
+    "title": "Cancellation must not leave orphan child processes",
+    "primary_class": "process",
+    "capabilities_under_test": ["process_cleanup"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community"],
+    "sandbox_level": "workspace-contained",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "import subprocess,time; subprocess.Popen(['python','-c','import time; time.sleep(30)']); time.sleep(30)"],
+      "policy": "workspace-contained",
+      "cancel_after_ms": 100
+    },
+    "oracle": {
+      "expected_result": "cancelled",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["process_not_running"]
+    },
+    "public_report_labels": ["process_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.process.background-daemon-after-timeout.v1",
+    "title": "Timeout must not leave background processes",
+    "primary_class": "process",
+    "capabilities_under_test": ["process_cleanup"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community"],
+    "sandbox_level": "workspace-contained",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "timeout_ms": 100,
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "import subprocess,time; subprocess.Popen(['python','-c','import time; time.sleep(30)']); time.sleep(30)"],
+      "policy": "workspace-contained",
+      "timeout_ms": 100
+    },
+    "oracle": {
+      "expected_result": "timeout",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["process_not_running"]
+    },
+    "public_report_labels": ["process_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.process.shell-trampoline-child.v1",
+    "title": "Shell trampolines must remain inside process cleanup",
+    "primary_class": "process",
+    "secondary_classes": ["execution_injection"],
+    "capabilities_under_test": ["process_cleanup", "process_isolation"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community"],
+    "sandbox_level": "workspace-contained",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "timeout_ms": 100,
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "import subprocess,time; subprocess.Popen('python -c \"import time; time.sleep(30)\"', shell=True); time.sleep(30)"],
+      "policy": "workspace-contained",
+      "timeout_ms": 100
+    },
+    "oracle": {
+      "expected_result": "timeout",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["process_not_running"]
+    },
+    "public_report_labels": ["process_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.process.interactive-disabled.v1",
+    "title": "Interactive process requests must fail closed when unsupported",
+    "primary_class": "process",
+    "capabilities_under_test": ["process_isolation"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "danger-full-access",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('interactive')"],
+      "interactive": true
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true}
+    },
+    "public_report_labels": ["process_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
     "case_id": "adv.policy.unknown-top-level-field.v1",
     "title": "Unknown policy fields must be rejected",
     "primary_class": "policy",

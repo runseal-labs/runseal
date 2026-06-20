@@ -162,6 +162,7 @@ const REPORT_LABELS: &[&str] = &[
     "filesystem_conformance",
     "network_conformance",
     "runtime_conformance",
+    "process_conformance",
     "adversarial_case_manifest",
 ];
 
