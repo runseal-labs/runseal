@@ -595,16 +595,34 @@ fn linux_skeleton_reports_community_track_without_sandbox_features() {
     );
     assert_eq!(capabilities["network_modes"]["disabled"], "unsupported");
     assert_eq!(capabilities["network_modes"]["proxy"], "unsupported");
-    assert!(
-        capabilities["capability_probes"]["runtime"]["user_namespace"]
-            .as_str()
-            .is_some()
-    );
-    assert!(
-        capabilities["capability_probes"]["runtime"]["user_namespace_quota"]
-            .as_str()
-            .is_some()
-    );
+    for key in [
+        "user_namespace",
+        "mount_namespace",
+        "pid_namespace",
+        "network_namespace",
+        "cgroup_namespace",
+        "seccomp",
+        "landlock",
+        "bubblewrap",
+        "user_namespace_quota",
+        "max_user_namespaces",
+        "unprivileged_user_namespace",
+    ] {
+        assert!(
+            capabilities["capability_probes"]["runtime"][key]
+                .as_str()
+                .is_some(),
+            "{key}"
+        );
+    }
+    for key in ["landlock_abi", "seccomp_mode", "cgroup_version"] {
+        assert!(
+            capabilities["capability_probes"]["runtime"][key]["status"]
+                .as_str()
+                .is_some(),
+            "{key}"
+        );
+    }
     let serialized = capabilities.to_string();
     assert!(!serialized.contains("/proc/"));
     assert!(!serialized.contains("/sys/"));

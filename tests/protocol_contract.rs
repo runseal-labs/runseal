@@ -397,6 +397,7 @@ fn assert_portable_capability_probe_contract(payload: &Value) {
             "mount_namespace",
             "pid_namespace",
             "network_namespace",
+            "cgroup_namespace",
             "seccomp",
             "landlock",
             "bubblewrap",
@@ -413,6 +414,11 @@ fn assert_portable_capability_probe_contract(payload: &Value) {
         );
         assert!(
             probes["runtime"]["seccomp_mode"]["status"]
+                .as_str()
+                .is_some()
+        );
+        assert!(
+            probes["runtime"]["cgroup_version"]["status"]
                 .as_str()
                 .is_some()
         );

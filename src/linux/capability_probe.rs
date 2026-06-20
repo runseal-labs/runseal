@@ -13,11 +13,13 @@ pub(crate) fn payload() -> Value {
             "mount_namespace": file_status("/proc/self/ns/mnt"),
             "pid_namespace": file_status("/proc/self/ns/pid"),
             "network_namespace": file_status("/proc/self/ns/net"),
+            "cgroup_namespace": file_status("/proc/self/ns/cgroup"),
             "seccomp": seccomp_status(),
             "seccomp_mode": seccomp_mode(),
             "landlock": file_status("/sys/kernel/security/landlock"),
             "landlock_abi": landlock_abi(),
             "bubblewrap": path_status("bwrap"),
+            "cgroup_version": cgroup_version(),
             "user_namespace_quota": positive_sysctl_status("/proc/sys/user/max_user_namespaces"),
             "max_user_namespaces": positive_sysctl_status("/proc/sys/user/max_user_namespaces"),
             "unprivileged_user_namespace": unprivileged_user_namespace_status(),
@@ -106,6 +108,29 @@ fn landlock_abi() -> Value {
     })
 }
 
+fn cgroup_version() -> Value {
+    let version = fs::read_to_string("/proc/self/cgroup")
+        .ok()
+        .and_then(|raw| cgroup_version_from_proc_self_cgroup(&raw));
+
+    json!({
+        "status": version.map(|_| "available").unwrap_or("unavailable"),
+        "version": version,
+    })
+}
+
+fn cgroup_version_from_proc_self_cgroup(value: &str) -> Option<u64> {
+    value.lines().find_map(|line| {
+        if line.starts_with("0::") {
+            Some(2)
+        } else if line.split(':').count() >= 3 {
+            Some(1)
+        } else {
+            None
+        }
+    })
+}
+
 fn unprivileged_user_namespace_status() -> &'static str {
     let quota_allows = positive_sysctl("/proc/sys/user/max_user_namespaces");
     let clone_allows = fs::read_to_string("/proc/sys/kernel/unprivileged_userns_clone")
@@ -143,8 +168,8 @@ fn positive_sysctl(path: &str) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::{
-        binary_status_in_paths, seccomp_mode_value_from_status,
-        unprivileged_user_namespace_status_for,
+        binary_status_in_paths, cgroup_version_from_proc_self_cgroup,
+        seccomp_mode_value_from_status, unprivileged_user_namespace_status_for,
     };
     use std::fs;
     use tempfile::TempDir;
@@ -189,6 +214,19 @@ mod tests {
             Some(2)
         );
         assert_eq!(seccomp_mode_value_from_status("Name:\ttest\n"), None);
+    }
+
+    #[test]
+    fn cgroup_version_probe_parses_proc_self_cgroup() {
+        assert_eq!(
+            cgroup_version_from_proc_self_cgroup("0::/user.slice\n"),
+            Some(2)
+        );
+        assert_eq!(
+            cgroup_version_from_proc_self_cgroup("5:memory:/user.slice\n"),
+            Some(1)
+        );
+        assert_eq!(cgroup_version_from_proc_self_cgroup("bad\n"), None);
     }
 
     #[cfg(unix)]
