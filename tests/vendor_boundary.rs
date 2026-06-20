@@ -41,6 +41,7 @@ const WINDOWS_SANDBOX_SETUP_MAIN: &str =
     include_str!("../vendor/codex-windows-sandbox/upstream/bin/setup_main/main.rs");
 const WINDOWS_SANDBOX_RUNNER_MAIN: &str =
     include_str!("../vendor/codex-windows-sandbox/upstream/bin/command_runner/main.rs");
+const RUNSEAL_BACKEND_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/backend");
 
 const VENDOR_TIMEOUT_SOURCES: &[(&str, &str)] = &[
     (
@@ -56,6 +57,25 @@ const VENDOR_TIMEOUT_SOURCES: &[(&str, &str)] = &[
         include_str!("../vendor/codex-windows-sandbox/upstream/bin/command_runner/win.rs"),
     ),
 ];
+
+#[test]
+fn backend_modules_do_not_depend_on_service_modules() {
+    for entry in std::fs::read_dir(RUNSEAL_BACKEND_DIR).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
+            continue;
+        }
+
+        let source = std::fs::read_to_string(&path).unwrap();
+        for forbidden in ["crate::service", "super::service"] {
+            assert!(
+                !source.contains(forbidden),
+                "{} must not depend on service module token {forbidden}",
+                path.display()
+            );
+        }
+    }
+}
 
 #[test]
 fn vendored_windows_sandbox_notes_capture_runseal_divergence() {
