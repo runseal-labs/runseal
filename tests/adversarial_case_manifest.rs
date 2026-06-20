@@ -231,6 +231,12 @@ fn adversarial_case_manifests_match_rfc0016_shape() -> Result<()> {
         assert_public_safe(&manifest, &path)?;
         let cases: Vec<Value> = serde_json::from_str(&manifest)
             .with_context(|| format!("manifest must be a JSON array: {}", path.display()))?;
+        if cases.is_empty() {
+            bail!(
+                "manifest must include at least one adversarial case: {}",
+                path.display()
+            );
+        }
         for case in cases {
             validate_case(&case, &path, &mut case_ids)?;
         }
