@@ -1156,6 +1156,37 @@ fn rpc_rejects_malformed_envelope() -> Result<()> {
 }
 
 #[test]
+fn rpc_rejects_invalid_request_id_with_null_response_id() -> Result<()> {
+    let output = run_rpc(
+        &(json!({
+            "jsonrpc": "2.0",
+            "id": {"not": "valid"},
+            "method": "getVersion",
+            "params": {}
+        })
+        .to_string()
+            + "\n"),
+    )?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = &messages[0];
+
+    assert_eq!(response["id"], Value::Null);
+    assert_eq!(response["error"]["code"], -32600);
+    assert_eq!(response["error"]["data"]["code"], "INVALID_REQUEST");
+    assert_eq!(
+        response["error"]["data"]["reason"],
+        "request.id must be a string, number, or null"
+    );
+    Ok(())
+}
+
+#[test]
 fn rpc_rejects_unknown_method_as_method_not_found() -> Result<()> {
     let output = run_rpc(&rpc_request("missingMethod", json!({})))?;
 
