@@ -3987,6 +3987,16 @@ fn create_file_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
     std::os::windows::fs::symlink_file(target, link)
 }
 
+#[cfg(unix)]
+fn create_dir_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+#[cfg(windows)]
+fn create_dir_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::windows::fs::symlink_dir(target, link)
+}
+
 #[test]
 fn execute_rejects_invalid_bytes_stdin() -> Result<()> {
     let tmp = TempDir::new()?;
@@ -4749,6 +4759,49 @@ fn execute_rejects_missing_cwd_without_creating_it() -> Result<()> {
             .contains("params.cwd must be an existing directory")
     );
     assert!(!missing_cwd.exists());
+    Ok(())
+}
+
+#[test]
+fn execute_rejects_symlink_cwd() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let real_cwd = tmp.path().join("workspace");
+    let linked_cwd = tmp.path().join("workspace-link");
+    fs::create_dir_all(&real_cwd)?;
+    if let Err(err) = create_dir_symlink(&real_cwd, &linked_cwd) {
+        if err.kind() == std::io::ErrorKind::PermissionDenied {
+            return Ok(());
+        }
+        return Err(err.into());
+    }
+
+    let output = run_rpc(&rpc_request(
+        "execute",
+        json!({
+            "command": [python_bin(), "-c", "print('must not run')"],
+            "cwd": linked_cwd,
+            "policy": "danger-full-access"
+        }),
+    ))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = messages
+        .iter()
+        .find(|message| message.get("id") == Some(&json!(1)))
+        .unwrap();
+
+    assert_eq!(response["error"]["data"]["code"], "INVALID_REQUEST");
+    assert!(
+        response["error"]["data"]["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("params.cwd must be an existing directory")
+    );
     Ok(())
 }
 
