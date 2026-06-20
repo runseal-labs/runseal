@@ -1,10 +1,7 @@
 use crate::policy::{
     BackendFeature, SandboxLevel, SandboxPolicy, matches_environment_scrub_pattern,
 };
-use crate::windows::policy::{
-    WindowsFilesystemAclPlan, WindowsFilesystemAclTransactionPlan, WindowsFilesystemRule,
-    WindowsHostRoots, WindowsPolicyPlan, WindowsRuntimeRoots,
-};
+use crate::windows::policy::{WindowsHostRoots, WindowsPolicyPlan, WindowsRuntimeRoots};
 use crate::windows::vendor_adapter::WindowsVendorSandboxProfile;
 mod capability;
 mod core;
@@ -23,11 +20,6 @@ mod skeleton;
 mod windows;
 #[cfg(windows)]
 use crate::events::timestamp_now;
-use filesystem::{
-    WindowsFilesystemAclDriver, WindowsFilesystemAclSubject,
-    apply_private_filesystem_acl_transaction, new_windows_filesystem_acl_driver,
-    validate_private_filesystem_acl_entries, validate_private_filesystem_acl_transaction,
-};
 #[cfg(windows)]
 use managed_proxy::ManagedSandboxProxy;
 #[cfg(all(test, windows))]
@@ -38,19 +30,15 @@ use process::cleanup_child_after_setup_error;
 use process::minimal_environment;
 use process::spawn_local_command;
 use runtime::{
-    RUNTIME_ROOT_MARKER, normalize_lexical, prepare_unique_runtime_root,
-    runtime_marker_is_regular_file, validate_runtime_root_ancestors,
-    validate_runtime_root_not_symlink, validate_runtime_tree_has_no_symlinks,
+    normalize_lexical, validate_runtime_root_ancestors, validate_runtime_tree_has_no_symlinks,
 };
-use serde_json::Map;
 use serde_json::{Value, json};
 use std::fs;
 use std::io;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::process::Output;
 #[cfg(windows)]
 use {
-    codex_protocol::models::PermissionProfile,
     codex_utils_absolute_path::AbsolutePathBuf,
     std::collections::{HashMap, HashSet},
     std::os::windows::process::ExitStatusExt,
@@ -84,7 +72,6 @@ pub use registry::active_backend;
 use skeleton::{LinuxCommunityBackend, MacosExperimentalBackend};
 #[cfg(test)]
 use windows::WindowsReferenceBackend;
-use windows::has_single_user_setup_payload;
 #[cfg(windows)]
 pub(crate) use windows::windows_sandbox_home;
 #[cfg(all(test, windows))]
@@ -108,6 +95,11 @@ fn runtime_environment_value_is_path(key: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::filesystem::{
+        WindowsFilesystemAclDriver, WindowsFilesystemAclSubject,
+        apply_private_filesystem_acl_transaction,
+    };
+    use super::runtime::RUNTIME_ROOT_MARKER;
     use super::*;
     use crate::policy::{NetworkMode, normalize_policy};
     use crate::windows::policy::{

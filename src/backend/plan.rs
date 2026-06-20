@@ -1,4 +1,26 @@
-use super::*;
+use super::core::SandboxBackend;
+use super::filesystem::{
+    WindowsFilesystemAclDriver, WindowsFilesystemAclSubject,
+    apply_private_filesystem_acl_transaction, new_windows_filesystem_acl_driver,
+    validate_private_filesystem_acl_entries, validate_private_filesystem_acl_transaction,
+};
+use super::runtime::{
+    RUNTIME_ROOT_MARKER, normalize_lexical, prepare_unique_runtime_root,
+    runtime_marker_is_regular_file, validate_runtime_root_ancestors,
+    validate_runtime_root_not_symlink, validate_runtime_tree_has_no_symlinks,
+};
+use super::windows::has_single_user_setup_payload;
+use super::{path_string, runtime_environment_value_is_path};
+use crate::policy::{SandboxLevel, SandboxPolicy};
+use crate::windows::policy::{
+    WindowsFilesystemAclPlan, WindowsFilesystemAclTransactionPlan, WindowsFilesystemRule,
+};
+#[cfg(windows)]
+use codex_protocol::models::PermissionProfile;
+use serde_json::{Map, Value, json};
+use std::fs;
+use std::io;
+use std::path::{Component, Path, PathBuf};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PlatformSandboxPlan {
