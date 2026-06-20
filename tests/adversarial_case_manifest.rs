@@ -414,6 +414,9 @@ fn validate_case(case: &Value, path: &Path, case_ids: &mut HashSet<String>) -> R
     case.get("request")
         .and_then(Value::as_object)
         .context("case.request must be an object")?;
+    if let Some(timeout_ms) = case.get("timeout_ms") {
+        assert_positive_u64(timeout_ms, "case.timeout_ms", path)?;
+    }
     if let Some(fixtures) = case.get("fixtures") {
         validate_fixtures(fixtures, path)?;
     }
@@ -524,6 +527,16 @@ fn validate_fixtures(fixtures: &Value, path: &Path) -> Result<()> {
             .and_then(Value::as_str)
             .context("case.fixtures entries must include kind")?;
         assert_member(kind, FIXTURE_KINDS, path)?;
+    }
+    Ok(())
+}
+
+fn assert_positive_u64(value: &Value, label: &str, path: &Path) -> Result<()> {
+    let value = value
+        .as_u64()
+        .with_context(|| format!("{label} must be an integer in {}", path.display()))?;
+    if value == 0 {
+        bail!("{label} must be greater than zero in {}", path.display());
     }
     Ok(())
 }
