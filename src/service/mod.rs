@@ -264,6 +264,12 @@ fn execution_not_cancellable(result: &Value) -> RunSealError {
 }
 
 fn rpc_request_parts(request: &Value) -> Result<(Option<Value>, &str, Value), RunSealError> {
+    if request.is_array() {
+        return Err(RunSealError::new(
+            "INVALID_REQUEST",
+            "batch requests are not supported",
+        ));
+    }
     let request = request.as_object().ok_or_else(|| {
         RunSealError::new("INVALID_REQUEST", "JSON-RPC request must be an object")
     })?;

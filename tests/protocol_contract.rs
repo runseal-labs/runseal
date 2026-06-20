@@ -1166,7 +1166,7 @@ fn get_setup_status_rpc_contract() -> Result<()> {
 #[test]
 fn rpc_rejects_malformed_envelope() -> Result<()> {
     let cases = [
-        (json!([]), "JSON-RPC request must be an object"),
+        (json!([]), "batch requests are not supported"),
         (
             json!({"jsonrpc": "1.0", "id": 1, "method": "getVersion", "params": {}}),
             "request.jsonrpc must be 2.0",
