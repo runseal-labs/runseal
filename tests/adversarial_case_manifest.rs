@@ -43,6 +43,23 @@ const EXPECTED_RESULTS: &[&str] = &[
 ];
 const SEVERITIES: &[&str] = &["S0", "S1", "S2", "S3", "S4"];
 const PROMOTION_SEVERITIES: &[&str] = &["S0", "S1"];
+const CAPABILITIES: &[&str] = &[
+    "filesystem_policy",
+    "runtime_roots",
+    "runtime_environment",
+    "process_isolation",
+    "process_cleanup",
+    "direct_network_deny",
+    "network_disabled",
+    "network_proxy",
+    "managed_proxy",
+    "policy_epoch",
+    "setup_readiness",
+    "stdin_bytes",
+    "stdin_file",
+    "audit_jsonl",
+    "resource_limits",
+];
 const FIXTURE_KINDS: &[&str] = &[
     "file",
     "directory",
@@ -140,7 +157,7 @@ fn validate_case(case: &Value, path: &Path, case_ids: &mut HashSet<String>) -> R
         assert_array_members(secondary_classes, "case.secondary_classes", CLASSES, path)?;
     }
     assert_non_empty_string(case, "title", path)?;
-    assert_string_array(case, "capabilities_under_test", path)?;
+    assert_members(case, "capabilities_under_test", CAPABILITIES, path)?;
     assert_members(case, "platforms", PLATFORMS, path)?;
     assert_members(case, "backend_status", BACKEND_STATUS, path)?;
     assert_member(
@@ -202,20 +219,6 @@ fn required_string<'a>(case: &'a Value, field: &str, path: &Path) -> Result<&'a 
 fn assert_non_empty_string(case: &Value, field: &str, path: &Path) -> Result<()> {
     if required_string(case, field, path)?.is_empty() {
         bail!("case.{field} must not be empty in {}", path.display());
-    }
-    Ok(())
-}
-
-fn assert_string_array(case: &Value, field: &str, path: &Path) -> Result<()> {
-    let values = case
-        .get(field)
-        .and_then(Value::as_array)
-        .with_context(|| format!("case.{field} must be an array in {}", path.display()))?;
-    if values.is_empty() || !values.iter().all(Value::is_string) {
-        bail!(
-            "case.{field} must include at least one string in {}",
-            path.display()
-        );
     }
     Ok(())
 }
