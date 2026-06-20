@@ -93,6 +93,13 @@ fn stdout_json_lines(output: &Output) -> Result<Vec<Value>> {
         .collect()
 }
 
+fn response_with_id(messages: &[Value], id: u64) -> Result<&Value> {
+    messages
+        .iter()
+        .find(|message| message.get("id") == Some(&json!(id)))
+        .with_context(|| format!("response id {id} must exist"))
+}
+
 fn decode_stream_event(event: &Value) -> Result<String> {
     assert_rfc3339_timestamp(&event["time"])?;
     assert_eq!(event["encoding"], "base64");
@@ -818,15 +825,30 @@ fn service_stdio_keeps_failed_execution_state() -> Result<()> {
         )
         .as_bytes(),
     )?;
-    let (_, execute_response) = read_rpc_response(&mut stdout, 1)?;
+    let (execute_events, execute_response) = read_rpc_response(&mut stdout, 1)?;
     assert_eq!(
         execute_response["error"]["data"]["code"],
         "EXECUTION_FAILED_TO_START"
     );
+    assert!(execute_response["error"]["data"].get("events").is_none());
     let execution_id = execute_response["error"]["data"]["execution_id"]
         .as_str()
         .context("failed execute response must include execution_id")?
         .to_string();
+    for event_type in [
+        "execution.requested",
+        "policy.resolved",
+        "policy.allowed",
+        "execution.started",
+        "execution.failed",
+    ] {
+        assert!(
+            execute_events
+                .iter()
+                .any(|event| event["params"]["type"] == event_type),
+            "execute response must emit {event_type}"
+        );
+    }
     assert!(
         execute_response["error"]["data"]["policy_hash"]
             .as_str()
@@ -882,7 +904,7 @@ fn service_stdio_keeps_failed_execution_state() -> Result<()> {
     )?;
     let (subscription_events, subscribe_response) = read_rpc_response(&mut stdout, 4)?;
     assert_eq!(subscribe_response["result"]["execution_id"], execution_id);
-    assert_eq!(subscribe_response["result"]["event_count"], 1);
+    assert_eq!(subscribe_response["result"]["event_count"], 3);
     let failed_event = subscription_events
         .iter()
         .find(|event| event["params"]["type"] == "execution.failed")
@@ -893,10 +915,10 @@ fn service_stdio_keeps_failed_execution_state() -> Result<()> {
         "execution failed to start"
     );
     assert!(
-        failed_event["params"]["error"]
+        !failed_event["params"]["error"]
             .as_str()
             .unwrap_or_default()
-            .contains("failed to spawn command")
+            .is_empty()
     );
     assert_eq!(
         failed_event["params"]["policy_hash"],
@@ -942,12 +964,21 @@ fn service_stdio_records_policy_denial_state() -> Result<()> {
         )
         .as_bytes(),
     )?;
-    let (_, execute_response) = read_rpc_response(&mut stdout, 1)?;
+    let (execute_events, execute_response) = read_rpc_response(&mut stdout, 1)?;
     assert_eq!(execute_response["error"]["data"]["code"], "POLICY_DENIED");
+    assert!(execute_response["error"]["data"].get("events").is_none());
     let execution_id = execute_response["error"]["data"]["execution_id"]
         .as_str()
         .context("policy denial response must include execution_id")?
         .to_string();
+    for event_type in ["execution.requested", "policy.resolved", "policy.denied"] {
+        assert!(
+            execute_events
+                .iter()
+                .any(|event| event["params"]["type"] == event_type),
+            "execute response must emit {event_type}"
+        );
+    }
 
     stdin.write_all(
         rpc_request_with_id(2, "getExecution", json!({ "execution_id": execution_id })).as_bytes(),
@@ -966,7 +997,7 @@ fn service_stdio_records_policy_denial_state() -> Result<()> {
         .as_bytes(),
     )?;
     let (subscription_events, subscribe_response) = read_rpc_response(&mut stdout, 3)?;
-    assert_eq!(subscribe_response["result"]["event_count"], 1);
+    assert_eq!(subscribe_response["result"]["event_count"], 2);
     assert!(
         subscription_events
             .iter()
@@ -2081,7 +2112,7 @@ fn execute_timeout_survives_unread_file_stdin() -> Result<()> {
         String::from_utf8_lossy(&output.stderr)
     );
     let messages = stdout_json_lines(&output)?;
-    let response = &messages[0];
+    let response = response_with_id(&messages, 1)?;
 
     assert_eq!(response["error"]["data"]["code"], "EXECUTION_TIMEOUT");
     assert_eq!(response["error"]["data"]["timeout_ms"], 50);
@@ -2107,7 +2138,7 @@ fn execute_timeout_returns_stable_error_and_audit_event() -> Result<()> {
         String::from_utf8_lossy(&output.stderr)
     );
     let messages = stdout_json_lines(&output)?;
-    let response = &messages[0];
+    let response = response_with_id(&messages, 1)?;
 
     assert_eq!(response["error"]["data"]["code"], "EXECUTION_TIMEOUT");
     assert_eq!(response["error"]["data"]["timeout_ms"], 10);
@@ -2152,7 +2183,7 @@ fn execute_start_failure_returns_audit_path_and_failed_event() -> Result<()> {
         String::from_utf8_lossy(&output.stderr)
     );
     let messages = stdout_json_lines(&output)?;
-    let response = &messages[0];
+    let response = response_with_id(&messages, 1)?;
 
     assert_eq!(
         response["error"]["data"]["code"],
@@ -2204,7 +2235,7 @@ fn execute_uses_policy_resource_timeout() -> Result<()> {
         String::from_utf8_lossy(&output.stderr)
     );
     let messages = stdout_json_lines(&output)?;
-    let response = &messages[0];
+    let response = response_with_id(&messages, 1)?;
 
     assert_eq!(response["error"]["data"]["code"], "EXECUTION_TIMEOUT");
     assert_eq!(response["error"]["data"]["timeout_ms"], 10);

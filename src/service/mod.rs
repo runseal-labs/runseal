@@ -68,8 +68,14 @@ impl Service {
                 messages
             }
             Err(err) => {
+                let events = err.events.clone();
                 self.state.record_failed_execution(&err);
-                vec![rpc::error(id, err)]
+                let mut messages: Vec<Value> = events
+                    .into_iter()
+                    .map(|event| json!({"jsonrpc": "2.0", "method": "event", "params": event}))
+                    .collect();
+                messages.push(rpc::error(id, err));
+                messages
             }
         }
     }

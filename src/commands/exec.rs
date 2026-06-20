@@ -60,7 +60,14 @@ pub(crate) fn run(args: &[String]) -> Result<(), String> {
         request.timeout,
     ) {
         Ok(result) => result,
-        Err(err) if request.json || request.events => {
+        Err(err) if request.events => {
+            for event in &err.events {
+                println!("{event}");
+            }
+            println!("{}", cli_error_payload(err));
+            return Err(String::new());
+        }
+        Err(err) if request.json => {
             println!("{}", cli_error_payload(err));
             return Err(String::new());
         }

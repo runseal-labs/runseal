@@ -92,6 +92,8 @@ pub(crate) fn execute_command(
             &event_context,
         );
         write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
+        let mut error_events = events.clone();
+        error_events.push(event);
 
         return Err(RunSealError::with_details(
             "APPROVAL_REQUIRED",
@@ -106,7 +108,8 @@ pub(crate) fn execute_command(
                 "audit_path": audit_path,
                 "backend": event_context.backend,
             }),
-        ));
+        )
+        .with_events(error_events));
     }
 
     if policy.denies_execution_without_backend() {
@@ -135,6 +138,8 @@ pub(crate) fn execute_command(
             &event_context,
         );
         write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
+        let mut error_events = events.clone();
+        error_events.push(event);
 
         return Err(RunSealError::with_details(
             if requires_approval {
@@ -153,7 +158,8 @@ pub(crate) fn execute_command(
                 "audit_path": audit_path,
                 "backend": event_context.backend,
             }),
-        ));
+        )
+        .with_events(error_events));
     }
 
     let plan = match backend.compile_plan(&ids.execution_id, cwd, policy) {
@@ -178,6 +184,7 @@ pub(crate) fn execute_command(
                             &event_context,
                         );
                         write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
+                        events.push(event);
                         prepared_setup = Some(setup);
                     }
                     Err(setup_err) => {
@@ -195,6 +202,7 @@ pub(crate) fn execute_command(
                             &event_context,
                         );
                         write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
+                        events.push(event);
 
                         let mut details = details;
                         if let Some(details) = details.as_object_mut() {
@@ -209,7 +217,8 @@ pub(crate) fn execute_command(
                             "INTERNAL_ERROR",
                             "failed to prepare sandbox setup",
                             details,
-                        ));
+                        )
+                        .with_events(events));
                     }
                 }
             }
@@ -231,6 +240,7 @@ pub(crate) fn execute_command(
                 &event_context,
             );
             write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
+            events.push(event);
 
             if let (Some(plan), Some(setup)) = (err.plan.as_deref(), prepared_setup) {
                 match setup.cleanup(plan) {
@@ -249,6 +259,7 @@ pub(crate) fn execute_command(
                             &event_context,
                         );
                         write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
+                        events.push(event);
                     }
                     Err(cleanup_err) => {
                         let event = execution_event_now(
@@ -265,6 +276,7 @@ pub(crate) fn execute_command(
                             &event_context,
                         );
                         write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
+                        events.push(event);
 
                         let mut details = details;
                         if let Some(details) = details.as_object_mut() {
@@ -282,7 +294,8 @@ pub(crate) fn execute_command(
                             "INTERNAL_ERROR",
                             "failed to clean sandbox runtime roots",
                             details,
-                        ));
+                        )
+                        .with_events(events));
                     }
                 }
             }
@@ -295,7 +308,9 @@ pub(crate) fn execute_command(
                 details.insert("audit_path".to_string(), json!(audit_path));
             }
 
-            return Err(RunSealError::with_details(err.code, err.reason, details));
+            return Err(
+                RunSealError::with_details(err.code, err.reason, details).with_events(events)
+            );
         }
     };
 
@@ -373,6 +388,7 @@ pub(crate) fn execute_command(
             }
             let failed = execution_event_now(failed_payload, &event_context);
             write_audit_event_with_metadata(&mut audit, &failed, &metadata)?;
+            events.push(failed);
 
             if let Some((code, reason, setup_status)) = backend_error {
                 let mut details = json!({
@@ -394,7 +410,7 @@ pub(crate) fn execute_command(
                 {
                     details.insert("setup_status".to_string(), setup_status);
                 }
-                return Err(RunSealError::with_details(code, reason, details));
+                return Err(RunSealError::with_details(code, reason, details).with_events(events));
             }
 
             return Err(RunSealError::with_details(
@@ -415,7 +431,8 @@ pub(crate) fn execute_command(
                     },
                     "platform_plan": plan.json(),
                 }),
-            ));
+            )
+            .with_events(events));
         }
     };
     let backend_events = execution_output
@@ -426,6 +443,7 @@ pub(crate) fn execute_command(
     for event in &backend_events {
         write_audit_event_with_metadata(&mut audit, event, &metadata)?;
     }
+    events.extend(backend_events);
     let mut output = execution_output.output;
     let original_stdout_bytes = output.stdout.len();
     let original_stderr_bytes = output.stderr.len();
@@ -444,6 +462,7 @@ pub(crate) fn execute_command(
             &event_context,
         );
         write_audit_event_with_metadata(&mut audit, &limit_exceeded, &metadata)?;
+        events.push(limit_exceeded);
         let failed = execution_event_now(
             json!({
                 "type": "execution.failed",
@@ -459,6 +478,7 @@ pub(crate) fn execute_command(
             &event_context,
         );
         write_audit_event_with_metadata(&mut audit, &failed, &metadata)?;
+        events.push(failed);
 
         return Err(RunSealError::with_details(
             "EXECUTION_TIMEOUT",
@@ -472,9 +492,9 @@ pub(crate) fn execute_command(
                 "stdout_bytes": output.stdout.len(),
                 "stderr_bytes": output.stderr.len(),
             }),
-        ));
+        )
+        .with_events(events));
     }
-    events.extend(backend_events);
     if !output.stdout.is_empty() {
         let event = stream_event("execution.stdout", &event_context, &output.stdout, 0);
         let audit_event = audit_stream_event_metadata(&event);
@@ -541,6 +561,7 @@ pub(crate) fn execute_command(
             &event_context,
         );
         write_audit_event_with_metadata(&mut audit, &limit_exceeded, &metadata)?;
+        events.push(limit_exceeded);
         let failed = execution_event_at(
             json!({
                 "type": "execution.failed",
@@ -558,6 +579,7 @@ pub(crate) fn execute_command(
             &event_context,
         );
         write_audit_event_with_metadata(&mut audit, &failed, &metadata)?;
+        events.push(failed);
 
         return Err(RunSealError::with_details(
             "OUTPUT_LIMIT_EXCEEDED",
@@ -573,7 +595,8 @@ pub(crate) fn execute_command(
                 "retained_stdout_bytes": output.stdout.len(),
                 "retained_stderr_bytes": output.stderr.len(),
             }),
-        ));
+        )
+        .with_events(events));
     }
     let finished = execution_event_at(
         json!({

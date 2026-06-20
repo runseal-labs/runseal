@@ -8,6 +8,7 @@ pub(crate) struct RunSealError {
     pub(crate) message: String,
     pub(crate) reason: String,
     pub(crate) details: Option<Value>,
+    pub(crate) events: Vec<Value>,
 }
 
 impl RunSealError {
@@ -19,6 +20,7 @@ impl RunSealError {
             code,
             reason,
             details: None,
+            events: Vec::new(),
         }
     }
 
@@ -34,7 +36,13 @@ impl RunSealError {
             code,
             reason,
             details: Some(details),
+            events: Vec::new(),
         }
+    }
+
+    pub(crate) fn with_events(mut self, events: Vec<Value>) -> Self {
+        self.events = events;
+        self
     }
 }
 

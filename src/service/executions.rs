@@ -72,7 +72,11 @@ impl ExecutionStore {
             ExecutionRecord {
                 session_id: session_id.to_string(),
                 result,
-                events: vec![error_event(execution_id, session_id, err, details)],
+                events: if err.events.is_empty() {
+                    vec![error_event(execution_id, session_id, err, details)]
+                } else {
+                    err.events.clone()
+                },
             },
         );
         Some(session_id.to_string())
