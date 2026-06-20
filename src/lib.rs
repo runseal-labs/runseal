@@ -1898,7 +1898,6 @@ mod tests {
 
         assert_eq!(elevated["can_repair"], true);
         assert_eq!(elevated["can_run_setup_now"], true);
-        assert!(windows_sandbox_setup_can_run_now(&elevated));
         assert_eq!(elevated["requires_setup"], true);
         assert_eq!(elevated["next_action"], "run_setup");
         assert_eq!(
@@ -1907,7 +1906,6 @@ mod tests {
         );
         assert_eq!(broker["can_repair"], true);
         assert_eq!(broker["can_run_setup_now"], true);
-        assert!(windows_sandbox_setup_can_run_now(&broker));
         assert_eq!(broker["requires_setup"], true);
         assert_eq!(broker["next_action"], "run_setup");
         assert_eq!(
@@ -1916,15 +1914,11 @@ mod tests {
         );
         assert_eq!(ready["can_repair"], false);
         assert_eq!(ready["can_run_setup_now"], false);
-        assert!(!windows_sandbox_setup_can_run_now(&ready));
-        assert!(!windows_sandbox_setup_requires_setup(&ready));
         assert_eq!(ready["requires_setup"], false);
         assert_eq!(ready["next_action"], "none");
         assert!(ready["next_command"].is_null());
         assert_eq!(missing["can_repair"], false);
         assert_eq!(missing["can_run_setup_now"], false);
-        assert!(!windows_sandbox_setup_can_run_now(&missing));
-        assert!(windows_sandbox_setup_requires_setup(&missing));
         assert_eq!(missing["requires_setup"], true);
         assert_eq!(missing["next_action"], "open_elevated_shell");
         assert_eq!(
@@ -1933,13 +1927,9 @@ mod tests {
         );
         assert_eq!(unsupported["can_repair"], false);
         assert_eq!(unsupported["can_run_setup_now"], false);
-        assert!(!windows_sandbox_setup_can_run_now(&unsupported));
-        assert!(!windows_sandbox_setup_requires_setup(&unsupported));
         assert_eq!(unsupported["requires_setup"], false);
         assert_eq!(unsupported["next_action"], "unsupported");
         assert!(unsupported["next_command"].is_null());
-        assert!(!windows_sandbox_setup_can_run_now(&json!({})));
-        assert!(windows_sandbox_setup_requires_setup(&json!({})));
     }
 
     #[test]

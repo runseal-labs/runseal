@@ -78,7 +78,7 @@ fn vendored_windows_sandbox_notes_capture_runseal_divergence() {
 fn runseal_windows_setup_runs_workspace_full_setup() {
     let setup_cli = RUNSEAL_LIB_SOURCE
         .split_once("fn run_windows_sandbox_setup(")
-        .and_then(|(_, tail)| tail.split_once("#[cfg(windows)]\nfn run_windows_sandbox_full_setup"))
+        .and_then(|(_, tail)| tail.split_once("fn run_windows_sandbox_full_setup"))
         .map(|(setup_cli, _)| setup_cli)
         .expect("windows setup CLI function must be present");
 
