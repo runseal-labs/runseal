@@ -150,17 +150,12 @@ impl Service {
             Ok(execution_id) => execution_id,
             Err(err) => return vec![rpc::error(id, err)],
         };
-        if self.state.has_execution(&execution_id) {
-            vec![rpc::result(
+        match self.state.execution_status(&execution_id) {
+            Some(status) => vec![rpc::error(
                 id,
-                json!({
-                    "execution_id": execution_id,
-                    "status": "not_cancellable",
-                    "reason": "execution is already finished",
-                }),
-            )]
-        } else {
-            vec![rpc::error(id, execution_not_found(&execution_id))]
+                execution_not_cancellable(&execution_id, status),
+            )],
+            None => vec![rpc::error(id, execution_not_found(&execution_id))],
         }
     }
 
@@ -243,6 +238,17 @@ fn execution_not_found(execution_id: &str) -> RunSealError {
         "EXECUTION_NOT_FOUND",
         format!("execution not found: {execution_id}"),
         json!({ "execution_id": execution_id }),
+    )
+}
+
+fn execution_not_cancellable(execution_id: &str, status: &str) -> RunSealError {
+    RunSealError::with_details(
+        "EXECUTION_NOT_CANCELLABLE",
+        format!("execution is not cancellable: {execution_id}"),
+        json!({
+            "execution_id": execution_id,
+            "status": status,
+        }),
     )
 }
 

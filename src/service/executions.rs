@@ -85,8 +85,14 @@ impl ExecutionStore {
             .map(|record| record.result.clone())
     }
 
-    pub(super) fn contains(&self, execution_id: &str) -> bool {
-        self.records.contains_key(execution_id)
+    pub(super) fn status(&self, execution_id: &str) -> Option<&str> {
+        self.records.get(execution_id).map(|record| {
+            record
+                .result
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+        })
     }
 
     pub(super) fn summaries(&self) -> Vec<Value> {
