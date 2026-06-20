@@ -12,6 +12,7 @@ mod process_output;
 mod protocol;
 mod rpc;
 mod service;
+mod setup;
 mod stdin;
 mod windows;
 
@@ -72,16 +73,14 @@ fn run() -> Result<(), String> {
 mod tests {
     use super::*;
     #[cfg(not(windows))]
-    use crate::commands::setup::{
-        windows_sandbox_setup_failed_error, windows_sandbox_setup_status_payload,
-    };
+    use crate::commands::setup::windows_sandbox_setup_failed_error;
     #[cfg(windows)]
     use crate::commands::setup::{
-        windows_sandbox_setup_failed_error, windows_sandbox_setup_status_payload,
-        windows_sandbox_setup_success_payload,
+        windows_sandbox_setup_failed_error, windows_sandbox_setup_success_payload,
     };
     use crate::events::new_execution_ids;
     use crate::protocol::request_validation::duration_millis_u64;
+    use crate::setup::windows_sandbox_setup_status_payload;
     use std::collections::HashSet;
     use std::time::Duration;
 

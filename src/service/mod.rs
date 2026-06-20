@@ -8,6 +8,7 @@ use crate::protocol::request_validation::{
     validate_empty_params,
 };
 use crate::rpc;
+use crate::setup::windows_sandbox_setup_status_for_cwd;
 use serde_json::{Value, json};
 use state::ServiceState;
 
@@ -83,7 +84,7 @@ impl Service {
                     Ok(cwd) => cwd,
                     Err(err) => return vec![rpc::error(id, err)],
                 };
-                match commands::setup::windows_sandbox_setup_status_for_cwd(&cwd) {
+                match windows_sandbox_setup_status_for_cwd(&cwd) {
                     Ok(result) => vec![rpc::result(id, result)],
                     Err(err) => vec![rpc::error(id, RunSealError::new("INTERNAL_ERROR", err))],
                 }

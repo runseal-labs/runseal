@@ -1,8 +1,8 @@
 use crate::backend::{SandboxBackend, active_backend};
 use crate::cli::parse_policy_args;
-use crate::commands::setup::windows_sandbox_setup_status_for_cwd;
 use crate::execution::normalize_execution_cwd;
 use crate::policy::{SandboxPolicy, normalize_policy};
+use crate::setup::windows_sandbox_setup_status_for_cwd;
 use serde_json::{Value, json};
 use std::path::Path;
 

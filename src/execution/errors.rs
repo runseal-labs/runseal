@@ -39,7 +39,7 @@ fn backend_unavailable_setup_status(reason: &str, cwd: &Path) -> Option<Value> {
     #[cfg(windows)]
     {
         if reason.starts_with("windows sandbox setup unavailable") {
-            return crate::commands::setup::windows_sandbox_setup_status_for_cwd(cwd).ok();
+            return crate::setup::windows_sandbox_setup_status_for_cwd(cwd).ok();
         }
     }
 
