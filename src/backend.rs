@@ -12,6 +12,7 @@ mod managed_proxy;
 mod process;
 mod runtime;
 
+#[cfg(windows)]
 use crate::events::timestamp_now;
 use filesystem::{
     WindowsFilesystemAclDriver, WindowsFilesystemAclSubject,
@@ -1583,9 +1584,8 @@ pub(crate) fn windows_sandbox_home(cwd: &Path) -> PathBuf {
     cwd.join(".runseal").join("sandbox")
 }
 
-#[cfg(windows)]
 fn vendor_sandbox_home(cwd: &Path) -> PathBuf {
-    windows_sandbox_home(cwd)
+    cwd.join(".runseal").join("sandbox")
 }
 
 #[cfg(windows)]
@@ -1898,6 +1898,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     #[cfg(windows)]
     use std::sync::{MutexGuard, OnceLock};
+    #[cfg(windows)]
     use std::time::{Duration, Instant};
     use tempfile::TempDir;
 

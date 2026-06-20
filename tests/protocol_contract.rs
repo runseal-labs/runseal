@@ -1891,12 +1891,20 @@ fn explain_policy_returns_effective_hash_and_network_mode() -> Result<()> {
             payload["required_backend_features"].clone()
         }
     );
+    let expected_workspace = tmp.path().to_string_lossy();
     assert!(
         payload["filesystem"]["write"]
             .as_array()
             .expect("filesystem.write must be an array")
             .iter()
-            .any(|path| path == tmp.path().to_string_lossy().as_ref())
+            .filter_map(Value::as_str)
+            .any(|path| {
+                if cfg!(windows) {
+                    path.eq_ignore_ascii_case(expected_workspace.as_ref())
+                } else {
+                    path == expected_workspace.as_ref()
+                }
+            })
     );
     assert_no_private_windows_setup_terms(payload);
     assert!(
