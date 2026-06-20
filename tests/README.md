@@ -5,7 +5,7 @@ These Rust integration tests define the initial public behavior expected from a 
 They are black-box protocol tests. `cargo test` builds and runs the local binary; use `RUNSEAL_BIN` to point the suite at another candidate implementation:
 
 ```bash
-RUNSEAL_BIN=/path/to/runseal cargo test --test cli_contract --test protocol_contract --test filesystem_conformance
+RUNSEAL_BIN=/path/to/runseal cargo test --test cli_contract --test protocol_contract --test filesystem_conformance --test adversarial_case_manifest
 ```
 
 On Windows, the tests serialize shared sandbox setup state internally, so the default `cargo test` path is supported.
@@ -55,3 +55,6 @@ Adversarial conformance follows RFC-0015's escape taxonomy: filesystem,
 runtime, process, network, policy, execution injection, and audit. Backend
 capabilities may be promoted only when the relevant adversarial cases produce
 S0 or S1 outcomes, and public output remains platform-neutral.
+RFC-0016 adversarial case manifests live under `adversarial/cases/`; their
+public shape and promotion-gate severity rules are validated by
+`adversarial_case_manifest`.
