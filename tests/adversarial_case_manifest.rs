@@ -226,32 +226,50 @@ fn adversarial_case_manifests_match_rfc0016_shape() -> Result<()> {
 
 #[test]
 fn adversarial_result_gate_rejects_non_promotable_results() {
-    assert!(promotion_gate_allows("passed", "S0", "S0", true, false));
-    assert!(promotion_gate_allows("passed", "S1", "S1", true, false));
-    assert!(!promotion_gate_allows("passed", "S2", "S1", true, false));
-    assert!(!promotion_gate_allows("failed", "S0", "S1", false, false));
-    assert!(!promotion_gate_allows("skipped", "S0", "S1", true, true));
-    assert!(!promotion_gate_allows("xfailed", "S0", "S1", true, false));
+    assert!(promotion_gate_allows(
+        "passed", "S0", "S0", true, false, true
+    ));
+    assert!(promotion_gate_allows(
+        "passed", "S1", "S1", true, false, true
+    ));
+    assert!(!promotion_gate_allows(
+        "passed", "S2", "S1", true, false, true
+    ));
+    assert!(!promotion_gate_allows(
+        "failed", "S0", "S1", false, false, true
+    ));
+    assert!(!promotion_gate_allows(
+        "skipped", "S0", "S1", true, true, true
+    ));
+    assert!(!promotion_gate_allows(
+        "xfailed", "S0", "S1", true, false, true
+    ));
+    assert!(!promotion_gate_allows(
+        "passed", "S0", "S0", true, false, false
+    ));
     assert!(!promotion_gate_allows(
         "invalid_case",
         "S0",
         "S1",
         true,
-        false
+        false,
+        true
     ));
     assert!(!promotion_gate_allows(
         "unsupported_fixture",
         "S0",
         "S1",
         true,
-        false
+        false,
+        true
     ));
     assert!(!promotion_gate_allows(
         "harness_error",
         "S0",
         "S1",
         true,
-        false
+        false,
+        true
     ));
 }
 
@@ -307,6 +325,11 @@ fn adversarial_result_schema_requires_public_skip_reason() -> Result<()> {
     result["passed"] = json!(true);
     result["status"] = json!("failed");
     assert!(validate_result(&result).is_err());
+
+    result["status"] = json!("passed");
+    result["public_safe_output"] = json!(false);
+    assert!(validate_result(&result).is_err());
+    result["public_safe_output"] = json!(true);
 
     result["passed"] = json!(false);
     result["status"] = json!("xfailed");
@@ -555,6 +578,9 @@ fn validate_result(result: &Value) -> Result<()> {
     if status == "passed" && (!passed || skipped) {
         bail!("passed adversarial results must set passed=true and skipped=false");
     }
+    if passed && result["public_safe_output"] != true {
+        bail!("passed adversarial results must set public_safe_output=true");
+    }
     if status != "passed" && passed {
         bail!("non-passed adversarial results must not set passed=true");
     }
@@ -620,10 +646,12 @@ fn promotion_gate_allows(
     max_severity: &str,
     passed: bool,
     skipped: bool,
+    public_safe_output: bool,
 ) -> bool {
     status == "passed"
         && passed
         && !skipped
+        && public_safe_output
         && severity_rank(observed_severity).is_some_and(|observed| {
             severity_rank(max_severity).is_some_and(|maximum| observed <= maximum)
         })
