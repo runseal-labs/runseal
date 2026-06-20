@@ -584,6 +584,144 @@ fn service_stdio_lists_execution_summaries() -> Result<()> {
 }
 
 #[test]
+fn service_stdio_returns_audit_events_by_execution() -> Result<()> {
+    #[cfg(windows)]
+    let _guard = windows_protocol_lock()?;
+
+    let tmp = TempDir::new()?;
+    let mut child = Command::new(require_runseal_bin()?)
+        .args(["service", "--stdio"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to spawn runseal service")?;
+    let mut stdin = child.stdin.take().context("stdin unavailable")?;
+    let stdout = child.stdout.take().context("stdout unavailable")?;
+    let mut stdout = BufReader::new(stdout);
+
+    stdin.write_all(
+        rpc_request_with_id(
+            1,
+            "execute",
+            json!({
+                "command": [python_bin(), "-c", "print('audit-query')"],
+                "cwd": tmp.path(),
+                "policy": "danger-full-access",
+            }),
+        )
+        .as_bytes(),
+    )?;
+    let (_, execute_response) = read_rpc_response(&mut stdout, 1)?;
+    let execution_id = execute_response["result"]["execution_id"]
+        .as_str()
+        .context("execute result must include execution_id")?
+        .to_string();
+
+    stdin.write_all(
+        rpc_request_with_id(
+            2,
+            "getAuditEvents",
+            json!({ "execution_id": execution_id, "types": ["policy.*"] }),
+        )
+        .as_bytes(),
+    )?;
+    let (_, audit_response) = read_rpc_response(&mut stdout, 2)?;
+    assert_eq!(audit_response["result"]["execution_id"], execution_id);
+    assert_eq!(audit_response["result"]["count"], 2);
+    let events = audit_response["result"]["events"]
+        .as_array()
+        .context("events must be an array")?;
+    assert!(events.iter().all(|event| {
+        event["type"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("policy.")
+    }));
+    assert!(
+        events
+            .iter()
+            .any(|event| event["type"] == "policy.resolved")
+    );
+    assert!(events.iter().any(|event| event["type"] == "policy.allowed"));
+    assert!(!audit_response["result"].to_string().contains("audit-query"));
+
+    drop(stdin);
+    let status = child.wait().context("failed to wait for runseal service")?;
+    assert!(status.success());
+    Ok(())
+}
+
+#[test]
+fn get_audit_events_rejects_path_lookup() -> Result<()> {
+    let output = run_rpc(&rpc_request(
+        "getAuditEvents",
+        json!({ "audit_path": ".runseal/audit/fake.jsonl" }),
+    ))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = &messages[0];
+    assert_eq!(response["error"]["data"]["code"], "INVALID_REQUEST");
+    assert!(
+        response["error"]["data"]["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("params.audit_path is not supported")
+    );
+    Ok(())
+}
+
+#[test]
+fn rpc_stdio_returns_no_cross_request_audit_events() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let mut child = Command::new(require_runseal_bin()?)
+        .args(["rpc", "--stdio"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to spawn runseal rpc")?;
+    let mut stdin = child.stdin.take().context("stdin unavailable")?;
+    let stdout = child.stdout.take().context("stdout unavailable")?;
+    let mut stdout = BufReader::new(stdout);
+
+    stdin.write_all(
+        rpc_request_with_id(
+            1,
+            "execute",
+            json!({
+                "command": [python_bin(), "-c", "print('direct-audit')"],
+                "cwd": tmp.path(),
+                "policy": "danger-full-access",
+            }),
+        )
+        .as_bytes(),
+    )?;
+    let (_, execute_response) = read_rpc_response(&mut stdout, 1)?;
+    let execution_id = execute_response["result"]["execution_id"]
+        .as_str()
+        .context("execute result must include execution_id")?
+        .to_string();
+
+    stdin.write_all(
+        rpc_request_with_id(2, "getAuditEvents", json!({ "execution_id": execution_id }))
+            .as_bytes(),
+    )?;
+    let (_, response) = read_rpc_response(&mut stdout, 2)?;
+    assert_eq!(response["error"]["data"]["code"], "EXECUTION_NOT_FOUND");
+
+    drop(stdin);
+    let status = child.wait().context("failed to wait for runseal rpc")?;
+    assert!(status.success());
+    Ok(())
+}
+
+#[test]
 fn rpc_stdio_lists_no_cross_request_executions() -> Result<()> {
     let tmp = TempDir::new()?;
     let output = run_rpc(&format!(
