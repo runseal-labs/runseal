@@ -91,6 +91,15 @@ fn adversarial_case_manifests_match_rfc0016_shape() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn adversarial_result_gate_rejects_non_promotable_results() {
+    assert!(promotion_gate_allows("S0", "S0", true, false));
+    assert!(promotion_gate_allows("S1", "S1", true, false));
+    assert!(!promotion_gate_allows("S2", "S1", true, false));
+    assert!(!promotion_gate_allows("S0", "S1", false, false));
+    assert!(!promotion_gate_allows("S0", "S1", true, true));
+}
+
 fn manifest_paths() -> Result<Vec<PathBuf>> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("adversarial/cases");
     let mut paths = fs::read_dir(&root)
@@ -285,4 +294,23 @@ fn assert_public_safe(manifest: &str, path: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn promotion_gate_allows(
+    observed_severity: &str,
+    max_severity: &str,
+    passed: bool,
+    skipped: bool,
+) -> bool {
+    passed
+        && !skipped
+        && severity_rank(observed_severity).is_some_and(|observed| {
+            severity_rank(max_severity).is_some_and(|maximum| observed <= maximum)
+        })
+}
+
+fn severity_rank(severity: &str) -> Option<usize> {
+    SEVERITIES
+        .iter()
+        .position(|candidate| *candidate == severity)
 }
