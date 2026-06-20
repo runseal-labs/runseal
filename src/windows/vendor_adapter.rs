@@ -277,7 +277,13 @@ fn extend_entries(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    #[cfg(windows)]
+    use super::{AbsolutePathBuf, FileSystemAccessMode, NetworkSandboxPolicy, PermissionProfile};
+    use super::{
+        SETUP_PAYLOAD_VERSION, WindowsVendorFilesystemAccess, WindowsVendorFilesystemEntry,
+        WindowsVendorFilesystemPolicy, WindowsVendorNetworkPolicy, WindowsVendorSandboxProfile,
+        WindowsVendorSandboxUserModel, WindowsVendorTokenMode,
+    };
     use crate::policy::normalize_policy;
     use serde_json::json;
     use std::path::PathBuf;
