@@ -501,6 +501,7 @@ pub(crate) fn execute_command(
                 "timeout_ms": timeout_ms,
                 "stdout_bytes": output.stdout.len(),
                 "stderr_bytes": output.stderr.len(),
+                "output_truncated": output_truncated,
             }),
         )
         .with_events(events));
@@ -613,6 +614,7 @@ pub(crate) fn execute_command(
                 "stderr_bytes": original_stderr_bytes,
                 "retained_stdout_bytes": output.stdout.len(),
                 "retained_stderr_bytes": output.stderr.len(),
+                "output_truncated": output_truncated,
             }),
         )
         .with_events(events));

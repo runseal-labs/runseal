@@ -74,6 +74,7 @@ impl ExecutionStore {
                 "max_output_bytes",
                 "stdout_bytes",
                 "stderr_bytes",
+                "output_truncated",
                 "retained_stdout_bytes",
                 "retained_stderr_bytes",
             ] {

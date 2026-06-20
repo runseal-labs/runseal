@@ -1706,6 +1706,7 @@ fn service_stdio_preserves_structured_failure_fields() -> Result<()> {
         execute_response["error"]["data"]["code"],
         "OUTPUT_LIMIT_EXCEEDED"
     );
+    assert_eq!(execute_response["error"]["data"]["output_truncated"], true);
     let execution_id = execute_response["error"]["data"]["execution_id"]
         .as_str()
         .context("output limit response must include execution_id")?
@@ -1722,6 +1723,7 @@ fn service_stdio_preserves_structured_failure_fields() -> Result<()> {
     assert_eq!(result["max_output_bytes"], 3);
     assert_eq!(result["stdout_bytes"], 6);
     assert_eq!(result["retained_stdout_bytes"], 3);
+    assert_eq!(result["output_truncated"], true);
     assert_eq!(
         result["policy_hash"],
         execute_response["error"]["data"]["policy_hash"]
@@ -1736,6 +1738,19 @@ fn service_stdio_preserves_structured_failure_fields() -> Result<()> {
     );
     assert!(result.get("stdout").is_none());
     assert!(result.get("stderr").is_none());
+
+    stdin.write_all(rpc_request_with_id(3, "listExecutions", json!({})).as_bytes())?;
+    let (_, list_response) = read_rpc_response(&mut stdout, 3)?;
+    let summaries = list_response["result"]["executions"]
+        .as_array()
+        .context("executions must be an array")?;
+    let summary = summaries
+        .iter()
+        .find(|summary| summary["execution_id"] == execution_id)
+        .context("output limit summary must exist")?;
+    assert_eq!(summary["output_truncated"], true);
+    assert!(summary.get("stdout").is_none());
+    assert!(summary.get("stderr").is_none());
 
     drop(stdin);
     let status = child.wait().context("failed to wait for runseal service")?;
