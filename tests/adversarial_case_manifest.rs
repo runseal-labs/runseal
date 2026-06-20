@@ -264,6 +264,9 @@ fn adversarial_result_schema_requires_public_skip_reason() -> Result<()> {
     assert!(validate_result(&result).is_err());
     result["skip_reason"] = json!("unsupported fixture kind");
     validate_result(&result)?;
+
+    result["skip_reason"] = json!("mentions ACL detail");
+    assert!(validate_result(&result).is_err());
     Ok(())
 }
 
@@ -441,6 +444,7 @@ fn validate_fixtures(fixtures: &Value, path: &Path) -> Result<()> {
 
 fn validate_result(result: &Value) -> Result<()> {
     let path = Path::new("adversarial-result");
+    assert_public_safe(&serde_json::to_string(result)?, path)?;
     assert_allowed_fields(result, "result", RESULT_FIELDS, path)?;
     assert_eq!(
         required_string(result, "schema_version", path)?,
