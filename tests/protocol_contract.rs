@@ -3128,6 +3128,7 @@ fn policy_denial_uses_stable_error_code() -> Result<()> {
         .iter()
         .find(|message| message.get("id") == Some(&json!(1)))
         .unwrap();
+    assert_eq!(response["error"]["code"], -32000);
     assert_eq!(response["error"]["data"]["code"], "POLICY_DENIED");
     assert_error_execution_binding(&response["error"]["data"]);
     assert!(response["error"]["data"]["reason"].as_str().is_some());
