@@ -1594,8 +1594,8 @@ fn sandbox_setup_rejects_legacy_dual_user_setup_payload_before_runtime_tree() ->
     plan.private_setup_payload = Some(
         json!({
             "sandbox_username": "RunSealSandbox",
-            "offline_username": "RunSealSandboxOffline",
-            "online_username": "RunSealSandboxOnline",
+            "offline_username": "legacy-offline-user",
+            "online_username": "legacy-online-user",
             "codex_home": cwd,
             "command_cwd": cwd,
             "real_user": "User"
