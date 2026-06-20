@@ -1251,7 +1251,12 @@ fn rpc_rejects_unknown_method_as_method_not_found() -> Result<()> {
 
 #[test]
 fn no_param_methods_reject_unsupported_params() -> Result<()> {
-    for method in ["getVersion", "getCapabilities"] {
+    for method in [
+        "getVersion",
+        "getCapabilities",
+        "getServiceStatus",
+        "listExecutions",
+    ] {
         let output = run_rpc(&rpc_request(method, json!({"extra": true})))?;
 
         assert!(
@@ -1274,7 +1279,12 @@ fn no_param_methods_reject_unsupported_params() -> Result<()> {
 
 #[test]
 fn no_param_methods_require_object_params() -> Result<()> {
-    for method in ["getVersion", "getCapabilities"] {
+    for method in [
+        "getVersion",
+        "getCapabilities",
+        "getServiceStatus",
+        "listExecutions",
+    ] {
         let output = run_rpc(&rpc_request(method, json!(null)))?;
 
         assert!(
