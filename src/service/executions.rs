@@ -108,6 +108,13 @@ impl ExecutionStore {
             .map(|record| filter_events(&record.events, types))
     }
 
+    pub(super) fn all_events(&self, types: &[String]) -> Vec<Value> {
+        self.records
+            .values()
+            .flat_map(|record| filter_events(&record.events, types))
+            .collect()
+    }
+
     pub(super) fn remove_session(&mut self, session_id: &str) -> usize {
         let before = self.records.len();
         self.records
