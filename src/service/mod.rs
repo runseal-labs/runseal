@@ -127,7 +127,7 @@ impl Service {
         json!({
             "status": "running",
             "mode": if stateful { "service" } else { "direct" },
-            "transport": "stdio",
+            "transport": if stateful { "stdio" } else { "none" },
             "stateful": stateful,
             "local_only": true,
             "remote_listener": false,

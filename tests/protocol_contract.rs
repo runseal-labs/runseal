@@ -1190,9 +1190,10 @@ fn rpc_stdio_lists_no_cross_request_executions() -> Result<()> {
 
 #[test]
 fn rpc_and_service_report_current_control_plane_mode() -> Result<()> {
-    for (command, expected_mode, expected_stateful) in
-        [("rpc", "direct", false), ("service", "service", true)]
-    {
+    for (command, expected_mode, expected_transport, expected_stateful) in [
+        ("rpc", "direct", "none", false),
+        ("service", "service", "stdio", true),
+    ] {
         let mut child = Command::new(require_runseal_bin()?)
             .args([command, "--stdio"])
             .stdin(Stdio::piped())
@@ -1208,7 +1209,7 @@ fn rpc_and_service_report_current_control_plane_mode() -> Result<()> {
         let (_, response) = read_rpc_response(&mut stdout, 1)?;
         assert_eq!(response["result"]["status"], "running");
         assert_eq!(response["result"]["mode"], expected_mode);
-        assert_eq!(response["result"]["transport"], "stdio");
+        assert_eq!(response["result"]["transport"], expected_transport);
         assert_eq!(response["result"]["stateful"], expected_stateful);
         assert_eq!(response["result"]["local_only"], true);
         assert_eq!(response["result"]["remote_listener"], false);
