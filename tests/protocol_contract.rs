@@ -157,6 +157,31 @@ fn assert_event_envelope(event: &Value) -> Result<()> {
     Ok(())
 }
 
+fn assert_error_execution_binding(error: &Value) {
+    assert!(
+        error["execution_id"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("exec_")
+    );
+    assert!(
+        error["session_id"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("sess_")
+    );
+    assert!(error["policy_id"].as_str().is_some());
+    assert!(
+        error["policy_hash"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("sha256:")
+    );
+    assert_eq!(error["policy_epoch"], error["policy_hash"]);
+    assert_eq!(error["backend"]["name"], expected_backend_name());
+    assert_eq!(error["backend"]["status"], expected_backend_status());
+}
+
 fn read_audit_events(root: &std::path::Path, audit_path: &str) -> Result<Vec<Value>> {
     let audit_file = root.join(audit_path);
     let audit_jsonl = fs::read_to_string(&audit_file)
@@ -2304,6 +2329,7 @@ fn policy_denial_uses_stable_error_code() -> Result<()> {
         .find(|message| message.get("id") == Some(&json!(1)))
         .unwrap();
     assert_eq!(response["error"]["data"]["code"], "POLICY_DENIED");
+    assert_error_execution_binding(&response["error"]["data"]);
     assert!(response["error"]["data"]["reason"].as_str().is_some());
     let audit_path = response["error"]["data"]["audit_path"]
         .as_str()
@@ -2347,6 +2373,7 @@ fn policy_request_uses_approval_required_error_code() -> Result<()> {
         .find(|message| message.get("id") == Some(&json!(1)))
         .unwrap();
     assert_eq!(response["error"]["data"]["code"], "APPROVAL_REQUIRED");
+    assert_error_execution_binding(&response["error"]["data"]);
     let audit_path = response["error"]["data"]["audit_path"]
         .as_str()
         .expect("approval required error must return audit_path");
@@ -2388,6 +2415,7 @@ fn broad_write_request_uses_approval_required_error_code() -> Result<()> {
         .find(|message| message.get("id") == Some(&json!(1)))
         .unwrap();
     assert_eq!(response["error"]["data"]["code"], "APPROVAL_REQUIRED");
+    assert_error_execution_binding(&response["error"]["data"]);
     assert!(
         response["error"]["data"]["reason"]
             .as_str()

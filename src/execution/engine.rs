@@ -98,7 +98,11 @@ pub(crate) fn execute_command(
                 "execution_id": ids.execution_id,
                 "session_id": ids.session_id,
                 "seal_id": ids.seal_id,
+                "policy_id": policy_id,
+                "policy_hash": policy_hash,
+                "policy_epoch": policy_epoch,
                 "audit_path": audit_path,
+                "backend": event_context.backend,
             }),
         ));
     }
@@ -141,7 +145,11 @@ pub(crate) fn execute_command(
                 "execution_id": ids.execution_id,
                 "session_id": ids.session_id,
                 "seal_id": ids.seal_id,
+                "policy_id": policy_id,
+                "policy_hash": policy_hash,
+                "policy_epoch": policy_epoch,
                 "audit_path": audit_path,
+                "backend": event_context.backend,
             }),
         ));
     }
