@@ -43,6 +43,10 @@ impl ServiceState {
         self.executions.events(execution_id, types)
     }
 
+    pub(super) fn audit_events(&self, execution_id: &str, types: &[String]) -> Option<Vec<Value>> {
+        self.executions.audit_events(execution_id, types)
+    }
+
     pub(super) fn dispose_session(&mut self, session_id: &str) -> usize {
         if self.sessions.dispose(session_id) {
             self.executions.remove_session(session_id)
