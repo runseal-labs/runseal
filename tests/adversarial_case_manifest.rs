@@ -541,6 +541,20 @@ fn validate_case(case: &Value, path: &Path, case_ids: &mut HashSet<String>) -> R
             .context("case.request.network must be a string")?;
         assert_member(network, NETWORK_MODES, path)?;
     }
+    for field in ["policy_epoch", "execution_id"] {
+        if let Some(value) = request.get(field) {
+            if method != "execute" {
+                bail!("case.request.{field} is only valid for execute requests");
+            }
+            assert_string_value(value, &format!("case.request.{field}"), path)?;
+        }
+    }
+    if let Some(audit_path) = request.get("audit_path") {
+        if method != "getAuditEvents" {
+            bail!("case.request.audit_path is only valid for getAuditEvents requests");
+        }
+        assert_string_value(audit_path, "case.request.audit_path", path)?;
+    }
     if let Some(timeout_ms) = request.get("timeout_ms") {
         assert_positive_u64(timeout_ms, "case.request.timeout_ms", path)?;
     }
