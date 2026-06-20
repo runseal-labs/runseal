@@ -81,10 +81,7 @@ impl Service {
                 };
                 match commands::setup::windows_sandbox_setup_status_for_cwd(&cwd) {
                     Ok(result) => vec![rpc::result(id, result)],
-                    Err(err) => vec![rpc::error(
-                        id,
-                        RunSealError::new("SETUP_STATUS_FAILED", err),
-                    )],
+                    Err(err) => vec![rpc::error(id, RunSealError::new("INTERNAL_ERROR", err))],
                 }
             }
             "execute" => self.execute(id, &params),

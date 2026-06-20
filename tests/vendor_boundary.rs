@@ -37,6 +37,7 @@ const WINDOWS_SANDBOX_VENDOR_NOTES: &str =
     include_str!("../vendor/codex-windows-sandbox/VENDOR.md");
 const RUNSEAL_BACKEND_SOURCE: &str = include_str!("../src/backend/windows.rs");
 const RUNSEAL_SETUP_COMMAND_SOURCE: &str = include_str!("../src/commands/setup.rs");
+const RUNSEAL_SERVICE_SOURCE: &str = include_str!("../src/service/mod.rs");
 const WINDOWS_SANDBOX_SETUP_MAIN: &str =
     include_str!("../vendor/codex-windows-sandbox/upstream/bin/setup_main/main.rs");
 const WINDOWS_SANDBOX_RUNNER_MAIN: &str =
@@ -93,6 +94,11 @@ fn protocol_modules_do_not_depend_on_backend_modules() {
             path.display()
         );
     }
+}
+
+#[test]
+fn service_uses_stable_setup_status_error_code() {
+    assert!(!RUNSEAL_SERVICE_SOURCE.contains("SETUP_STATUS_FAILED"));
 }
 
 #[test]
