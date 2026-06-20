@@ -404,6 +404,14 @@ fn validate_case(case: &Value, path: &Path, case_ids: &mut HashSet<String>) -> R
     }
     if let Some(secondary_classes) = case.get("secondary_classes") {
         assert_array_members(secondary_classes, "case.secondary_classes", CLASSES, path)?;
+        for secondary_class in secondary_classes
+            .as_array()
+            .context("case.secondary_classes must be an array")?
+        {
+            if secondary_class == primary_class {
+                bail!("case.secondary_classes must not repeat primary_class {primary_class}");
+            }
+        }
     }
     if let Some(labels) = case.get("public_report_labels") {
         assert_array_members(labels, "case.public_report_labels", REPORT_LABELS, path)?;
