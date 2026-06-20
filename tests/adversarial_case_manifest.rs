@@ -124,6 +124,7 @@ const ORACLE_FIELDS: &[&str] = &[
     "audit",
     "events",
 ];
+const ORACLE_FLAG_FIELDS: &[&str] = &["required"];
 const FIXTURE_FIELDS: &[&str] = &["kind", "path", "target", "name", "value", "command", "body"];
 const RESULT_FIELDS: &[&str] = &[
     "schema_version",
@@ -458,6 +459,8 @@ fn validate_case(case: &Value, path: &Path, case_ids: &mut HashSet<String>) -> R
             path,
         )?;
     }
+    validate_oracle_flag(oracle.get("audit"), "case.oracle.audit", path)?;
+    validate_oracle_flag(oracle.get("events"), "case.oracle.events", path)?;
     Ok(())
 }
 
@@ -522,6 +525,16 @@ fn validate_fixtures(fixtures: &Value, path: &Path) -> Result<()> {
             .context("case.fixtures entries must include kind")?;
         assert_member(kind, FIXTURE_KINDS, path)?;
     }
+    Ok(())
+}
+
+fn validate_oracle_flag(value: Option<&Value>, label: &str, path: &Path) -> Result<()> {
+    let value = value.with_context(|| format!("{label} must be present in {}", path.display()))?;
+    assert_allowed_fields(value, label, ORACLE_FLAG_FIELDS, path)?;
+    value
+        .get("required")
+        .and_then(Value::as_bool)
+        .with_context(|| format!("{label}.required must be a boolean in {}", path.display()))?;
     Ok(())
 }
 
