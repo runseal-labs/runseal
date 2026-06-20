@@ -84,7 +84,7 @@ fn event_matches_types(event: &Value, types: &[String]) -> bool {
         filter == event_type
             || filter == "*"
             || filter
-                .strip_suffix('*')
+                .strip_suffix(".*")
                 .is_some_and(|prefix| event_type.starts_with(prefix))
     })
 }

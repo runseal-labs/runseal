@@ -1090,6 +1090,16 @@ fn event_lookup_methods_reject_invalid_type_filters() -> Result<()> {
             "params.types entries must be non-empty strings",
         ),
         (
+            "subscribeEvents",
+            json!({ "execution_id": "exec_missing", "types": ["../audit"] }),
+            "params.types entries must be event names, *, or namespace.* filters",
+        ),
+        (
+            "subscribeEvents",
+            json!({ "execution_id": "exec_missing", "types": ["execution*"] }),
+            "params.types entries must be event names, *, or namespace.* filters",
+        ),
+        (
             "getAuditEvents",
             json!({ "execution_id": "exec_missing", "types": "execution.*" }),
             "params.types must be an array",
@@ -1105,6 +1115,11 @@ fn event_lookup_methods_reject_invalid_type_filters() -> Result<()> {
             "params.types entries must be non-empty strings",
         ),
         (
+            "getAuditEvents",
+            json!({ "execution_id": "exec_missing", "types": ["execution..started"] }),
+            "params.types entries must be event names, *, or namespace.* filters",
+        ),
+        (
             "tailAudit",
             json!({ "types": "execution.*" }),
             "params.types must be an array",
@@ -1118,6 +1133,11 @@ fn event_lookup_methods_reject_invalid_type_filters() -> Result<()> {
             "tailAudit",
             json!({ "types": [42] }),
             "params.types entries must be non-empty strings",
+        ),
+        (
+            "tailAudit",
+            json!({ "types": ["sandbox/../../audit"] }),
+            "params.types entries must be event names, *, or namespace.* filters",
         ),
     ];
 

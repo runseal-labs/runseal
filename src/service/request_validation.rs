@@ -187,7 +187,7 @@ fn validate_optional_lookup_params(params: &Map<String, Value>) -> Result<(), Ru
             .as_array()
             .ok_or_else(|| RunSealError::new("INVALID_REQUEST", "params.types must be an array"))?;
         for event_type in types {
-            event_type
+            let event_type = event_type
                 .as_str()
                 .filter(|value| !value.is_empty())
                 .ok_or_else(|| {
@@ -196,9 +196,30 @@ fn validate_optional_lookup_params(params: &Map<String, Value>) -> Result<(), Ru
                         "params.types entries must be non-empty strings",
                     )
                 })?;
+            if !is_valid_event_type_filter(event_type) {
+                return Err(RunSealError::new(
+                    "INVALID_REQUEST",
+                    "params.types entries must be event names, *, or namespace.* filters",
+                ));
+            }
         }
     }
     Ok(())
+}
+
+fn is_valid_event_type_filter(value: &str) -> bool {
+    if value == "*" {
+        return true;
+    }
+    let value = value.strip_suffix(".*").unwrap_or(value);
+    value.split('.').all(is_valid_event_type_segment)
+}
+
+fn is_valid_event_type_segment(segment: &str) -> bool {
+    !segment.is_empty()
+        && segment
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
 }
 
 pub(crate) fn session_id_from_params(params: &Value) -> Result<String, RunSealError> {
