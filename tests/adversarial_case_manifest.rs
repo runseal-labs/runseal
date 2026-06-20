@@ -365,6 +365,8 @@ fn adversarial_result_schema_requires_public_skip_reason() -> Result<()> {
 
     result["case_id"] = json!("adv.audit.v1");
     assert!(validate_result(&result).is_err());
+    result["case_id"] = json!("adv.unknown.case.v1");
+    assert!(validate_result(&result).is_err());
     Ok(())
 }
 
@@ -620,7 +622,11 @@ fn validate_result(result: &Value) -> Result<()> {
         required_string(result, "schema_version", path)?,
         "runseal.adversarial-result/v1"
     );
-    case_id_class(required_string(result, "case_id", path)?)?;
+    assert_member(
+        case_id_class(required_string(result, "case_id", path)?)?,
+        CLASSES,
+        path,
+    )?;
     assert_non_empty_string(result, "backend_name", path)?;
     assert_member(
         required_string(result, "backend_status", path)?,
