@@ -125,6 +125,22 @@ const ORACLE_FIELDS: &[&str] = &[
     "events",
 ];
 const ORACLE_FLAG_FIELDS: &[&str] = &["required"];
+const REQUEST_FIELDS: &[&str] = &[
+    "method",
+    "command",
+    "policy",
+    "timeout_ms",
+    "cancel_after_ms",
+    "stdin",
+    "env",
+    "metadata",
+    "interactive",
+    "network",
+    "policy_epoch",
+    "execution_id",
+    "audit_path",
+];
+const REQUEST_METHODS: &[&str] = &["execute", "getAuditEvents"];
 const FIXTURE_FIELDS: &[&str] = &["kind", "path", "target", "name", "value", "command", "body"];
 const RESULT_FIELDS: &[&str] = &[
     "schema_version",
@@ -411,9 +427,23 @@ fn validate_case(case: &Value, path: &Path, case_ids: &mut HashSet<String>) -> R
     if (malformed_sandbox || malformed_network) && primary_class != "policy" {
         bail!("malformed sandbox/network values are only valid for policy cases");
     }
-    case.get("request")
+    let request = case
+        .get("request")
         .and_then(Value::as_object)
         .context("case.request must be an object")?;
+    let request = Value::Object(request.clone());
+    assert_allowed_fields(&request, "case.request", REQUEST_FIELDS, path)?;
+    assert_member(
+        required_string(&request, "method", path)?,
+        REQUEST_METHODS,
+        path,
+    )?;
+    if let Some(timeout_ms) = request.get("timeout_ms") {
+        assert_positive_u64(timeout_ms, "case.request.timeout_ms", path)?;
+    }
+    if let Some(cancel_after_ms) = request.get("cancel_after_ms") {
+        assert_positive_u64(cancel_after_ms, "case.request.cancel_after_ms", path)?;
+    }
     if let Some(timeout_ms) = case.get("timeout_ms") {
         assert_positive_u64(timeout_ms, "case.timeout_ms", path)?;
     }
