@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -205,6 +205,46 @@ fn assert_no_private_windows_setup_terms(text: &str) {
             !text.contains(private_term),
             "CLI output must not expose private Windows setup term {private_term}"
         );
+    }
+}
+
+fn assert_portable_capability_probe_contract(payload: &Value) {
+    if cfg!(windows) {
+        assert!(payload.get("capability_probes").is_none());
+        return;
+    }
+
+    let probes = &payload["capability_probes"];
+    assert_eq!(probes["sandboxed_execution"], "unsupported");
+    assert_eq!(probes["filesystem_enforcement"], "unsupported");
+    assert_eq!(probes["network_enforcement"], "unsupported");
+    let serialized = payload.to_string();
+    assert!(!serialized.contains("/proc/"));
+    assert!(!serialized.contains("/sys/"));
+    assert!(!serialized.contains("/usr/bin"));
+
+    if cfg!(target_os = "linux") {
+        for key in [
+            "user_namespace",
+            "mount_namespace",
+            "pid_namespace",
+            "network_namespace",
+            "seccomp",
+            "landlock",
+            "bubblewrap",
+            "unprivileged_user_namespace",
+        ] {
+            assert!(probes["runtime"][key].as_str().is_some(), "{key}");
+        }
+        assert!(
+            probes["runtime"]["landlock_abi"]["status"]
+                .as_str()
+                .is_some()
+        );
+    }
+
+    if cfg!(target_os = "macos") {
+        assert!(probes["runtime"]["sandbox_exec"].as_str().is_some());
     }
 }
 
@@ -501,6 +541,16 @@ fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
     assert_eq!(payload["backend"], expected_backend_name());
     assert_eq!(payload["backend_status"], expected_backend_status());
     assert!(payload["platform"].as_str().is_some());
+    assert_eq!(
+        payload["capability_statuses"],
+        json!([
+            "supported",
+            "experimental",
+            "unsupported",
+            "unavailable",
+            "requires_setup"
+        ])
+    );
     assert_eq!(payload["features"]["local_execution"], true);
     assert_eq!(
         payload["features"]["filesystem_policy"],
@@ -539,6 +589,13 @@ fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
         expected_windows_sandbox_supported()
     );
     assert_eq!(
+        payload["features"]["policy_epoch"],
+        expected_windows_sandbox_supported()
+    );
+    assert_eq!(payload["features"]["setup_readiness"], true);
+    assert_eq!(payload["features"]["stdin_bytes"], true);
+    assert_eq!(payload["features"]["stdin_file"], true);
+    assert_eq!(
         payload["features"]["resource_limits"],
         expected_resource_limits_supported()
     );
@@ -559,6 +616,7 @@ fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
     );
     assert_eq!(payload["setup_status"]["setup"], "windows-sandbox");
     assert!(payload["setup_status"]["next_action"].as_str().is_some());
+    assert_portable_capability_probe_contract(&payload);
     assert_no_private_windows_setup_terms(&payload.to_string());
     Ok(())
 }

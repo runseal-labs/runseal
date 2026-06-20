@@ -410,6 +410,7 @@ mod tests {
                 BackendFeature::NetworkDisabled,
                 BackendFeature::NetworkProxy,
                 BackendFeature::ManagedProxy,
+                BackendFeature::PolicyEpoch,
             ]
         } else {
             &[
@@ -435,6 +436,21 @@ mod tests {
                 BackendFeature::DirectNetworkDeny,
                 BackendFeature::NetworkProxy,
                 BackendFeature::ManagedProxy,
+            ]
+        );
+    }
+
+    #[test]
+    fn capability_status_words_match_public_contract() {
+        let statuses = CapabilityStatus::ALL.map(CapabilityStatus::as_str);
+        assert_eq!(
+            statuses,
+            [
+                "supported",
+                "experimental",
+                "unsupported",
+                "unavailable",
+                "requires_setup"
             ]
         );
     }
@@ -531,6 +547,28 @@ mod tests {
         assert_eq!(LinuxCommunityBackend.name(), "runseal-linux-community");
         assert_eq!(LinuxCommunityBackend.status(), "future-community");
         assert!(LinuxCommunityBackend.supported_features().is_empty());
+        let capabilities = LinuxCommunityBackend.capabilities_json();
+        assert_eq!(
+            capabilities["capability_probes"]["sandboxed_execution"],
+            "unsupported"
+        );
+        assert_eq!(
+            capabilities["capability_probes"]["filesystem_enforcement"],
+            "unsupported"
+        );
+        assert_eq!(
+            capabilities["capability_probes"]["network_enforcement"],
+            "unsupported"
+        );
+        assert_eq!(capabilities["features"]["process_isolation"], false);
+        assert!(
+            capabilities["capability_probes"]["runtime"]["user_namespace"]
+                .as_str()
+                .is_some()
+        );
+        let serialized = capabilities.to_string();
+        assert!(!serialized.contains("/proc/"));
+        assert!(!serialized.contains("/sys/"));
     }
 
     #[test]
@@ -541,6 +579,26 @@ mod tests {
         );
         assert_eq!(MacosExperimentalBackend.status(), "experimental");
         assert!(MacosExperimentalBackend.supported_features().is_empty());
+        let capabilities = MacosExperimentalBackend.capabilities_json();
+        assert_eq!(
+            capabilities["capability_probes"]["sandboxed_execution"],
+            "unsupported"
+        );
+        assert_eq!(
+            capabilities["capability_probes"]["filesystem_enforcement"],
+            "unsupported"
+        );
+        assert_eq!(
+            capabilities["capability_probes"]["network_enforcement"],
+            "unsupported"
+        );
+        assert_eq!(capabilities["features"]["process_isolation"], false);
+        assert!(
+            capabilities["capability_probes"]["runtime"]["sandbox_exec"]
+                .as_str()
+                .is_some()
+        );
+        assert!(!capabilities.to_string().contains("/usr/bin"));
     }
 
     #[test]

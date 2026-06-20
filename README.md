@@ -18,7 +18,7 @@ On Windows, sandbox requests include a `PlatformSandboxPlan` for runtime root, s
 
 The Windows enforcement baseline lives behind a dedicated Windows sandbox implementation. RunSeal-specific code should stay at the adapter layer: policy normalization, `PlatformSandboxPlan` mapping, audit events, capability reporting, and conformance gates. Low-level OS boundary, setup-helper, and command-runner code should not be reimplemented in the RunSeal adapter.
 
-On macOS and Linux, RunSeal reports explicit experimental/community skeleton backends. They support only explicit `danger-full-access` local execution until contributed backend implementations pass the shared conformance gates.
+On macOS and Linux, RunSeal reports explicit experimental/community skeleton backends. They support only explicit `danger-full-access` local execution until contributed backend implementations pass the shared conformance gates, and capability probes are diagnostic only.
 
 The protocol and policy version strings are `runseal.protocol/v1` and
 `runseal.policy/v1`. The Rust package version remains pre-`1.0`; breaking
