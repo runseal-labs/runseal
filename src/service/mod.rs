@@ -41,6 +41,12 @@ impl Service {
     }
 
     pub(crate) fn handle_rpc_request(&mut self, request: &Value) -> Vec<Value> {
+        if request
+            .as_object()
+            .is_some_and(|object| !object.contains_key("id"))
+        {
+            return Vec::new();
+        }
         let (id, method, params) = match rpc_request_parts(request) {
             Ok(parts) => parts,
             Err(err) => {

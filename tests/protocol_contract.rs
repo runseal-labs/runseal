@@ -544,6 +544,8 @@ fn rpc_stdio_ignores_client_notification_and_continues() -> Result<()> {
     .to_string()
         + "\n";
     stdin.write_all(notification.as_bytes())?;
+    stdin.write_all(br#"{"jsonrpc":"2.0","params":{}}"#)?;
+    stdin.write_all(b"\n")?;
     stdin.write_all(rpc_request_with_id(1, "getVersion", json!({})).as_bytes())?;
     stdin.flush()?;
 
