@@ -591,7 +591,7 @@ pub(crate) fn sandbox_proxy_settings_from_env(
         .get(ALLOW_LOCAL_BINDING_ENV_KEY)
         .is_some_and(|value| value == "1");
     SandboxProxySettings {
-        // ponytail: RunSeal has one managed proxy listener; keep firewall state static.
+        // RunSeal has one managed proxy listener; keep firewall state static.
         proxy_ports: if allow_local_binding {
             vec![]
         } else {

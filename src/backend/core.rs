@@ -33,7 +33,7 @@ pub trait SandboxBackend {
     ) -> Result<PlatformSandboxPlan, BackendError>;
     #[expect(
         clippy::too_many_arguments,
-        reason = "ponytail: cancellation is one control bit; add a request struct when more arrive"
+        reason = "RunSeal keeps cancellation as one control bit until more fields arrive"
     )]
     fn execute_plan(
         &self,

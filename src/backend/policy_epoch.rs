@@ -54,7 +54,7 @@ pub(super) fn windows_sandbox_execution_gate_for_key(
         .state
         .lock()
         .map_err(|_| io::Error::other("windows sandbox execution gate poisoned"))?;
-    // ponytail: one global Windows sandbox cohort; split by identity if multi-tenant throughput matters.
+    // RunSeal MVP uses one global Windows sandbox cohort; split by identity if multi-tenant throughput matters.
     if state
         .active_key
         .as_ref()

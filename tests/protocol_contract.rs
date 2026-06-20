@@ -89,7 +89,7 @@ fn wait_child_success(child: &mut std::process::Child, timeout: Duration) -> Res
 #[cfg(windows)]
 fn windows_protocol_lock() -> Result<MutexGuard<'static, ()>> {
     static LOCK: Mutex<()> = Mutex::new(());
-    // ponytail: global Windows sandbox state; split by policy if protocol test time matters.
+    // RunSeal tests share global Windows sandbox state; split by policy if protocol test time matters.
     LOCK.lock()
         .map_err(|_| anyhow::anyhow!("windows protocol lock poisoned"))
 }

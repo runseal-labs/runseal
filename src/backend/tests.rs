@@ -1299,6 +1299,7 @@ fn sandbox_execution_cleans_runtime_tree_after_vendor_home_prepare_failure() -> 
         ExecutionStdin::Empty,
         &ExecutionEnv::default(),
         None,
+        None,
     )
     .expect_err("vendor sandbox home preparation must fail");
 

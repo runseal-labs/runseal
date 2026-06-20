@@ -28,8 +28,12 @@ impl ServiceState {
         }
     }
 
-    pub(super) fn record_failed_execution(&mut self, err: &RunSealError) {
-        if let Some(session_id) = self.executions.record_failed(err) {
+    pub(super) fn record_failed_execution(
+        &mut self,
+        err: &RunSealError,
+        active_execution_id: Option<&str>,
+    ) {
+        if let Some(session_id) = self.executions.record_failed(err, active_execution_id) {
             self.sessions.record(session_id);
         }
     }

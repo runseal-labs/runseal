@@ -267,7 +267,15 @@ impl SandboxBackend for WindowsReferenceBackend {
         cancellation: Option<ExecutionCancellation>,
     ) -> io::Result<BackendExecutionOutput> {
         if plan.is_sandbox_enforced() {
-            return execute_windows_sandbox_plan(plan, command, cwd, stdin, env, timeout);
+            return execute_windows_sandbox_plan(
+                plan,
+                command,
+                cwd,
+                stdin,
+                env,
+                timeout,
+                cancellation,
+            );
         }
         spawn_local_command(plan, command, cwd, stdin, env, timeout, cancellation)
     }
@@ -295,6 +303,7 @@ pub(super) fn execute_windows_sandbox_plan(
     stdin: ExecutionStdin,
     env: &ExecutionEnv,
     timeout: Option<Duration>,
+    cancellation: Option<ExecutionCancellation>,
 ) -> io::Result<BackendExecutionOutput> {
     let _execution_guard = windows_sandbox_execution_gate(plan)?;
     let _runtime_root = required_plan_path(plan.runtime_root.as_deref(), "runtime_root")?;
@@ -340,6 +349,12 @@ pub(super) fn execute_windows_sandbox_plan(
             windows_sandbox_deny_read_paths(&workspace_roots, plan, &env_map, workspace_contained)?;
         let sandbox_command = windows_sandbox_command(command, &env_map);
 
+        let vendor_cancellation = cancellation.map(|token| {
+            codex_windows_sandbox::WindowsSandboxCancellationToken::new(move || {
+                token.is_cancelled()
+            })
+        });
+
         let capture =
             codex_windows_sandbox::run_windows_sandbox_capture_for_permission_profile_elevated(
                 codex_windows_sandbox::ElevatedSandboxProfileCaptureRequest {
@@ -351,7 +366,7 @@ pub(super) fn execute_windows_sandbox_plan(
                     env_map,
                     stdin_bytes,
                     timeout_ms: timeout.map(duration_millis_u64),
-                    cancellation: None,
+                    cancellation: vendor_cancellation,
                     use_private_desktop: false,
                     proxy_enforced: plan.network_managed_proxy == "required",
                     read_roots_override: None,
@@ -723,8 +738,9 @@ fn execute_windows_sandbox_plan(
     stdin: ExecutionStdin,
     env: &ExecutionEnv,
     timeout: Option<Duration>,
+    cancellation: Option<ExecutionCancellation>,
 ) -> io::Result<BackendExecutionOutput> {
-    spawn_local_command(plan, command, cwd, stdin, env, timeout, None)
+    spawn_local_command(plan, command, cwd, stdin, env, timeout, cancellation)
 }
 
 #[cfg(windows)]

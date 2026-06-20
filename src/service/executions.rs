@@ -76,13 +76,32 @@ impl ExecutionStore {
         Some(session_id.to_string())
     }
 
-    pub(super) fn record_failed(&mut self, err: &RunSealError) -> Option<String> {
-        let details = err.details.as_ref()?;
+    pub(super) fn record_failed(
+        &mut self,
+        err: &RunSealError,
+        active_execution_id: Option<&str>,
+    ) -> Option<String> {
+        let details = err.details.as_ref();
         let (Some(execution_id), Some(session_id)) = (
-            details.get("execution_id").and_then(Value::as_str),
-            details.get("session_id").and_then(Value::as_str),
+            details
+                .and_then(|details| details.get("execution_id"))
+                .and_then(Value::as_str)
+                .or(active_execution_id),
+            details
+                .and_then(|details| details.get("session_id"))
+                .and_then(Value::as_str)
+                .or_else(|| active_result_field(&self.active, active_execution_id?, "session_id")),
         ) else {
             return None;
+        };
+        let execution_id = execution_id.to_string();
+        let session_id = session_id.to_string();
+        let active_result = if details.is_none() {
+            self.active
+                .get(&execution_id)
+                .map(|active| active.result.clone())
+        } else {
+            None
         };
         let mut result = json!({
             "execution_id": execution_id,
@@ -94,11 +113,34 @@ impl ExecutionStore {
             },
         });
         let events = if err.events.is_empty() {
-            vec![error_event(execution_id, session_id, err, details)]
+            details
+                .map(|details| vec![error_event(&execution_id, &session_id, err, details)])
+                .unwrap_or_default()
         } else {
             err.events.clone()
         };
-        if let (Some(result), Some(details)) = (result.as_object_mut(), details.as_object()) {
+        if let (Some(result), Some(active_result)) = (
+            result.as_object_mut(),
+            active_result.as_ref().and_then(Value::as_object),
+        ) {
+            for key in [
+                "seal_id",
+                "policy_id",
+                "policy_hash",
+                "policy_epoch",
+                "audit_path",
+                "backend",
+                "platform_plan",
+                "started_at",
+            ] {
+                if let Some(value) = active_result.get(key) {
+                    result.insert(key.to_string(), value.clone());
+                }
+            }
+        }
+        if let (Some(result), Some(details)) =
+            (result.as_object_mut(), details.and_then(Value::as_object))
+        {
             for key in [
                 "seal_id",
                 "policy_id",
@@ -131,9 +173,9 @@ impl ExecutionStore {
                 result.insert("finished_at".to_string(), finished_at);
             }
         }
-        self.insert_record(execution_id, ExecutionRecord { result, events });
-        self.active.remove(execution_id);
-        Some(session_id.to_string())
+        self.insert_record(&execution_id, ExecutionRecord { result, events });
+        self.active.remove(&execution_id);
+        Some(session_id)
     }
 
     pub(super) fn result(&self, execution_id: &str) -> Option<Value> {
@@ -238,6 +280,17 @@ impl ExecutionStore {
         }
         self.records.insert(execution_id.to_string(), record);
     }
+}
+
+fn active_result_field<'a>(
+    active: &'a BTreeMap<String, ActiveExecution>,
+    execution_id: &str,
+    field: &str,
+) -> Option<&'a str> {
+    active
+        .get(execution_id)
+        .and_then(|active| active.result.get(field))
+        .and_then(Value::as_str)
 }
 
 fn execution_summary(result: &Value) -> Value {
@@ -470,7 +523,7 @@ mod tests {
             }),
         );
 
-        store.record_failed(&err);
+        store.record_failed(&err, None);
 
         let result = store.result("exec_a").expect("failed record must exist");
         assert_eq!(result["setup_status"]["setup"], "windows-sandbox");
@@ -479,5 +532,32 @@ mod tests {
         let summary = store.summaries().pop().expect("summary must exist");
         assert_eq!(summary["setup_status"]["setup"], "windows-sandbox");
         assert_eq!(summary["setup_status"]["next_action"], "run_setup");
+    }
+
+    #[test]
+    fn detail_less_failures_clear_active_execution() {
+        let mut store = ExecutionStore::default();
+        store.record_running(
+            json!({
+                "execution_id": "exec_a",
+                "session_id": "sess_a",
+                "seal_id": "seal_a",
+                "status": "running",
+                "policy_id": "danger-full-access",
+                "policy_hash": "sha256:test",
+                "policy_epoch": "sha256:test",
+                "audit_path": ".runseal/audit/sess_a.jsonl",
+                "backend": {"name": "runseal-local", "status": "local-baseline", "platform": "test"}
+            }),
+            Default::default(),
+        );
+
+        let err = RunSealError::new("INTERNAL_ERROR", "audit writer failed");
+        store.record_failed(&err, Some("exec_a"));
+
+        let result = store.result("exec_a").expect("failed record must exist");
+        assert_eq!(result["status"], "failed");
+        assert_eq!(result["error"]["code"], "INTERNAL_ERROR");
+        assert_eq!(result["session_id"], "sess_a");
     }
 }

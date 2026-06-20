@@ -183,7 +183,7 @@ fn execute_messages_unlocked(params: Value) -> Result<Vec<Value>> {
 #[cfg(windows)]
 fn windows_conformance_lock() -> Result<MutexGuard<'static, ()>> {
     static LOCK: Mutex<()> = Mutex::new(());
-    // ponytail: global Windows sandbox state; use narrower locks if test throughput matters.
+    // RunSeal tests share global Windows sandbox state; use narrower locks if test throughput matters.
     LOCK.lock()
         .map_err(|_| anyhow::anyhow!("windows conformance lock poisoned"))
 }
