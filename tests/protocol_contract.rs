@@ -3219,6 +3219,34 @@ fn execute_rejects_unknown_inline_policy_fields() -> Result<()> {
 }
 
 #[test]
+fn execute_rejects_malformed_policy_json() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let output = run_rpc(&rpc_request(
+        "execute",
+        json!({
+            "command": [python_bin(), "-c", "print('must not run')"],
+            "cwd": tmp.path(),
+            "policy": null
+        }),
+    ))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = &messages[0];
+
+    assert_eq!(response["error"]["data"]["code"], "POLICY_INVALID");
+    assert_eq!(
+        response["error"]["data"]["reason"],
+        "policy must be a profile name or object"
+    );
+    Ok(())
+}
+
+#[test]
 fn execute_rejects_direct_allow_hosts_policy() -> Result<()> {
     let tmp = TempDir::new()?;
     let output = run_rpc(&rpc_request(
