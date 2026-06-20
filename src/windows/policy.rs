@@ -737,10 +737,20 @@ fn env_path(key: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::policy::{NetworkMode, normalize_policy};
+    use crate::windows::vendor_adapter::WindowsVendorSandboxUserModel;
     use serde_json::json;
     use std::path::PathBuf;
+
+    use super::{
+        WindowsDirectEgress, WindowsFilesystemAccess, WindowsFilesystemAclEffect,
+        WindowsFilesystemAclPlan, WindowsFilesystemAclRights, WindowsFilesystemAclTransactionPlan,
+        WindowsFilesystemMode, WindowsFilesystemPlan, WindowsFilesystemRule,
+        WindowsFilesystemRuleSource, WindowsHostRoots, WindowsManagedProxy, WindowsNetworkGuard,
+        WindowsPolicyPlan, WindowsProcessBoundary, WindowsProcessCleanup, WindowsProcessIdentity,
+        WindowsProcessJob, WindowsProcessToken, WindowsRuntimeRoots, join_runtime_path,
+        same_windows_root,
+    };
 
     #[test]
     fn read_only_policy_uses_read_only_capability_plan() {

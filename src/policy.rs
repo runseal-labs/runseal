@@ -1166,8 +1166,9 @@ fn reject_non_empty_section(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use std::path::PathBuf;
+    use super::{NetworkMode, POLICY_VERSION, SandboxLevel, normalize_policy};
+    use serde_json::{Value, json};
+    use std::path::{Path, PathBuf};
 
     fn assert_policy_invalid(input: Value, expected_reason: &str) {
         let cwd = PathBuf::from("/workspace");
