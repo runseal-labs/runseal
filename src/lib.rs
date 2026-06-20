@@ -3,6 +3,7 @@ mod backend;
 mod cli;
 mod commands;
 mod control;
+mod duration;
 mod error;
 mod events;
 mod execution;
@@ -78,8 +79,8 @@ mod tests {
     use crate::commands::setup::{
         windows_sandbox_setup_failed_error, windows_sandbox_setup_success_payload,
     };
+    use crate::duration::duration_millis_u64;
     use crate::events::new_execution_ids;
-    use crate::protocol::request_validation::duration_millis_u64;
     use crate::setup::windows_sandbox_setup_status_payload;
     use crate::{WINDOWS_SANDBOX_SETUP_FAILED, WINDOWS_SANDBOX_UNSUPPORTED};
     use std::collections::HashSet;

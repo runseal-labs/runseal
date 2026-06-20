@@ -328,10 +328,6 @@ fn timeout_from_params(
     Ok(timeout_ms.map(Duration::from_millis))
 }
 
-pub(crate) fn duration_millis_u64(duration: Duration) -> u64 {
-    duration.as_millis().min(u128::from(u64::MAX)) as u64
-}
-
 fn metadata_from_params(params: &Map<String, Value>) -> Result<Option<Value>, RunSealError> {
     let Some(metadata) = params.get("metadata") else {
         return Ok(None);

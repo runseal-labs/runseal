@@ -18,6 +18,8 @@ use super::runtime::{
     normalize_lexical, validate_runtime_root_ancestors, validate_runtime_tree_has_no_symlinks,
 };
 #[cfg(windows)]
+use crate::duration::duration_millis_u64;
+#[cfg(windows)]
 use crate::events::timestamp_now;
 use crate::execution::{ExecutionEnv, ExecutionStdin};
 #[cfg(windows)]
@@ -763,9 +765,4 @@ fn sandbox_environment(
         }
     }
     result
-}
-
-#[cfg(windows)]
-fn duration_millis_u64(duration: Duration) -> u64 {
-    duration.as_millis().min(u128::from(u64::MAX)) as u64
 }

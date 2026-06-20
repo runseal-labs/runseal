@@ -3,6 +3,7 @@ use super::output::{audit_stream_event_metadata, truncate_output};
 use super::paths::validate_execution_cwd;
 use crate::audit::{create_audit_writer, write_audit_event_with_metadata};
 use crate::backend::{SandboxBackend, active_backend};
+use crate::duration::duration_millis_u64;
 use crate::error::RunSealError;
 use crate::events::{
     ExecutionEventContext, backend_event_json, execution_event_at, execution_event_now,
@@ -11,7 +12,6 @@ use crate::events::{
 use crate::execution::{ExecutionEnv, ExecutionStdin};
 use crate::policy::SandboxPolicy;
 use crate::process_output::decode_process_output;
-use crate::protocol::request_validation::duration_millis_u64;
 use crate::stdin::stdin_audit_json;
 use serde_json::{Value, json};
 use std::path::Path;
