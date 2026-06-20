@@ -7,6 +7,7 @@ use crate::execution::{
 };
 use crate::rpc;
 use crate::setup::windows_sandbox_setup_status_for_cwd;
+use event_bus::{notification as event_notification, notifications as event_notifications};
 use request_validation::{
     ExecuteRequest, audit_events_params, cancel_execution_id_from_params,
     execute_request_from_params, explain_policy_request_from_params, get_execution_id_from_params,
@@ -388,18 +389,6 @@ fn audit_event_metadata(events: Vec<Value>) -> Vec<Value> {
             event
         })
         .collect()
-}
-
-fn event_notifications(events: Vec<Value>, emit_events: bool) -> Vec<Value> {
-    if emit_events {
-        events.into_iter().map(event_notification).collect()
-    } else {
-        Vec::new()
-    }
-}
-
-fn event_notification(event: Value) -> Value {
-    json!({"jsonrpc": "2.0", "method": "event", "params": event})
 }
 
 fn execution_not_cancellable(result: &Value) -> RunSealError {

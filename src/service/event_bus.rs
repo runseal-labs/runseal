@@ -1,4 +1,16 @@
-use serde_json::Value;
+use serde_json::{Value, json};
+
+pub(super) fn notifications(events: Vec<Value>, emit_events: bool) -> Vec<Value> {
+    if emit_events {
+        events.into_iter().map(notification).collect()
+    } else {
+        Vec::new()
+    }
+}
+
+pub(super) fn notification(event: Value) -> Value {
+    json!({"jsonrpc": "2.0", "method": "event", "params": event})
+}
 
 pub(super) fn filter_events(events: &[Value], types: &[String]) -> Vec<Value> {
     events
