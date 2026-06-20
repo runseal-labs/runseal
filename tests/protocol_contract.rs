@@ -866,6 +866,8 @@ fn service_stdio_keeps_failed_execution_state() -> Result<()> {
     let (_, get_response) = read_rpc_response(&mut stdout, 2)?;
     assert_eq!(get_response["result"]["execution_id"], execution_id);
     assert_eq!(get_response["result"]["status"], "failed");
+    assert_rfc3339_timestamp(&get_response["result"]["started_at"])?;
+    assert_rfc3339_timestamp(&get_response["result"]["finished_at"])?;
     assert_eq!(
         get_response["result"]["error"]["code"],
         "EXECUTION_FAILED_TO_START"
@@ -986,6 +988,8 @@ fn service_stdio_records_policy_denial_state() -> Result<()> {
     let (_, get_response) = read_rpc_response(&mut stdout, 2)?;
     assert_eq!(get_response["result"]["execution_id"], execution_id);
     assert_eq!(get_response["result"]["status"], "denied");
+    assert!(get_response["result"].get("started_at").is_none());
+    assert_rfc3339_timestamp(&get_response["result"]["finished_at"])?;
     assert_eq!(get_response["result"]["error"]["code"], "POLICY_DENIED");
 
     stdin.write_all(

@@ -52,6 +52,11 @@ impl ExecutionStore {
                 "reason": err.reason,
             },
         });
+        let events = if err.events.is_empty() {
+            vec![error_event(execution_id, session_id, err, details)]
+        } else {
+            err.events.clone()
+        };
         if let (Some(result), Some(details)) = (result.as_object_mut(), details.as_object()) {
             for key in [
                 "seal_id",
@@ -66,17 +71,19 @@ impl ExecutionStore {
                     result.insert(key.to_string(), value.clone());
                 }
             }
+            if let Some(started_at) = event_time(&events, "execution.started") {
+                result.insert("started_at".to_string(), started_at);
+            }
+            if let Some(finished_at) = terminal_time(&events) {
+                result.insert("finished_at".to_string(), finished_at);
+            }
         }
         self.records.insert(
             execution_id.to_string(),
             ExecutionRecord {
                 session_id: session_id.to_string(),
                 result,
-                events: if err.events.is_empty() {
-                    vec![error_event(execution_id, session_id, err, details)]
-                } else {
-                    err.events.clone()
-                },
+                events,
             },
         );
         Some(session_id.to_string())
@@ -100,6 +107,36 @@ impl ExecutionStore {
             .retain(|_, record| record.session_id != session_id);
         before - self.records.len()
     }
+}
+
+fn event_time(events: &[Value], event_type: &str) -> Option<Value> {
+    events
+        .iter()
+        .find(|event| event.get("type").and_then(Value::as_str) == Some(event_type))
+        .and_then(|event| event.get("time"))
+        .cloned()
+}
+
+fn terminal_time(events: &[Value]) -> Option<Value> {
+    events
+        .iter()
+        .rev()
+        .find(|event| {
+            matches!(
+                event.get("type").and_then(Value::as_str),
+                Some(
+                    "execution.finished"
+                        | "execution.failed"
+                        | "policy.denied"
+                        | "policy.requires_approval"
+                        | "sandbox.backend_capability"
+                        | "sandbox.setup_failed"
+                )
+            ) || event.get("type").and_then(Value::as_str) == Some("sandbox.cleanup")
+                && event.get("decision").and_then(Value::as_str) == Some("failed")
+        })
+        .and_then(|event| event.get("time"))
+        .cloned()
 }
 
 fn error_status(err: &RunSealError) -> &'static str {
