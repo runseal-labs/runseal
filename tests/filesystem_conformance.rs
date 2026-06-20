@@ -501,6 +501,44 @@ fn workspace_write_denies_external_write_when_supported_or_fails_closed() -> Res
 }
 
 #[test]
+fn read_only_allows_workspace_read_when_supported_or_fails_closed() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let workspace = tmp.path().join("workspace");
+    fs::create_dir_all(&workspace)?;
+    let target = workspace.join("readable.txt");
+    fs::write(&target, "workspace-readable")?;
+    let code = format!("from pathlib import Path; print(Path({target:?}).read_text())");
+    let response = execute_platform_script(
+        "read-only",
+        &workspace,
+        None,
+        code,
+        format!("Get-Content -Raw -LiteralPath {}", ps_path(&target)),
+    )?;
+
+    if is_backend_missing(&response) {
+        assert_backend_missing(&response, &workspace)?;
+        assert_eq!(fs::read_to_string(target)?, "workspace-readable");
+        return Ok(());
+    }
+    if is_backend_unavailable(&response) {
+        assert_backend_unavailable(&response, &workspace)?;
+        assert_eq!(fs::read_to_string(target)?, "workspace-readable");
+        return Ok(());
+    }
+
+    assert_eq!(response["result"]["status"], "finished");
+    assert_eq!(response["result"]["exit_code"], 0);
+    assert!(
+        response["result"]["stdout"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("workspace-readable")
+    );
+    Ok(())
+}
+
+#[test]
 fn read_only_denies_workspace_write_when_supported_or_fails_closed() -> Result<()> {
     let tmp = TempDir::new()?;
     let workspace = tmp.path().join("workspace");
