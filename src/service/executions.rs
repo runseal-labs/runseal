@@ -65,7 +65,17 @@ impl ExecutionStore {
                 "audit_path",
                 "backend",
                 "platform_plan",
+                "support",
+                "missing_features",
                 "setup_status",
+                "setup_error",
+                "cleanup_error",
+                "timeout_ms",
+                "max_output_bytes",
+                "stdout_bytes",
+                "stderr_bytes",
+                "retained_stdout_bytes",
+                "retained_stderr_bytes",
             ] {
                 if let Some(value) = details.get(key) {
                     result.insert(key.to_string(), value.clone());
