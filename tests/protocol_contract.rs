@@ -3199,6 +3199,43 @@ fn execute_rejects_unknown_inline_policy_fields() -> Result<()> {
 }
 
 #[test]
+fn execute_rejects_direct_allow_hosts_policy() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let output = run_rpc(&rpc_request(
+        "execute",
+        json!({
+            "command": [python_bin(), "-c", "print('must not run')"],
+            "cwd": tmp.path(),
+            "policy": {
+                "version": "runseal.policy/v1",
+                "sandbox_level": "danger-full-access",
+                "network": {
+                    "mode": "proxy",
+                    "direct_allow_hosts": ["example.com"]
+                }
+            }
+        }),
+    ))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = &messages[0];
+
+    assert_eq!(response["error"]["data"]["code"], "POLICY_INVALID");
+    assert!(
+        response["error"]["data"]["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("network.direct_allow_hosts is not supported")
+    );
+    Ok(())
+}
+
+#[test]
 fn execute_accepts_non_secret_env_and_audits_keys_only() -> Result<()> {
     let tmp = TempDir::new()?;
     let output = run_rpc(&rpc_request(
