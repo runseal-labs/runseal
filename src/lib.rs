@@ -15,23 +15,7 @@ mod service;
 mod stdin;
 mod windows;
 
-#[cfg(windows)]
-use crate::windows::vendor_adapter::WindowsVendorSandboxProfile;
-use backend::{SandboxBackend, active_backend};
-use cli::{parse_exec_args, parse_policy_args};
-#[cfg(all(test, not(windows)))]
-use commands::setup::{windows_sandbox_setup_failed_error, windows_sandbox_setup_status_payload};
-#[cfg(all(test, windows))]
-use commands::setup::{
-    windows_sandbox_setup_failed_error, windows_sandbox_setup_status_payload,
-    windows_sandbox_setup_success_payload,
-};
-use error::RunSealError;
-use execution::{ExecutionEnv, ExecutionStdin};
-use policy::{POLICY_VERSION, SandboxPolicy, normalize_policy};
-use serde_json::{Value, json};
 use std::env;
-use std::path::{Path, PathBuf};
 
 const PROTOCOL_VERSION: &str = "runseal.protocol/v1";
 const MAX_METADATA_BYTES: usize = 4096;
@@ -87,6 +71,15 @@ fn run() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(windows))]
+    use crate::commands::setup::{
+        windows_sandbox_setup_failed_error, windows_sandbox_setup_status_payload,
+    };
+    #[cfg(windows)]
+    use crate::commands::setup::{
+        windows_sandbox_setup_failed_error, windows_sandbox_setup_status_payload,
+        windows_sandbox_setup_success_payload,
+    };
     use crate::events::new_execution_ids;
     use crate::protocol::request_validation::duration_millis_u64;
     use std::collections::HashSet;

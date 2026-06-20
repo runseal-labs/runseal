@@ -1,4 +1,9 @@
-use super::*;
+use crate::cli::parse_exec_args;
+use crate::error::RunSealError;
+use crate::execution::{ExecutionEnv, ExecutionStdin, execute_command, normalize_execution_cwd};
+use crate::policy::normalize_policy;
+use crate::protocol::error_payload::cli_error_payload;
+use serde_json::Value;
 
 const EXEC_HELP_TEXT: &str = "\
 Usage: runseal exec [--json|--events] [--policy <policy>] [--network <mode>] [--cwd <path>] [--timeout-ms <ms>] -- <command> [args...]

@@ -1,4 +1,6 @@
-use super::*;
+use crate::PROTOCOL_VERSION;
+use crate::policy::POLICY_VERSION;
+use serde_json::{Value, json};
 
 pub(crate) fn payload() -> Value {
     json!({

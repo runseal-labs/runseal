@@ -1,8 +1,17 @@
-use super::*;
+#[cfg(windows)]
+use crate::backend;
+use crate::error::RunSealError;
 #[cfg(not(windows))]
 use crate::execution::validate_execution_cwd;
+use crate::execution::{current_dir, normalize_execution_cwd};
 #[cfg(windows)]
-use crate::policy::NetworkMode;
+use crate::policy::{NetworkMode, normalize_policy};
+use crate::protocol::error_payload::cli_error_payload;
+#[cfg(windows)]
+use crate::windows::vendor_adapter::WindowsVendorSandboxProfile;
+use crate::{WINDOWS_SANDBOX_SETUP_FAILED, WINDOWS_SANDBOX_UNSUPPORTED};
+use serde_json::{Value, json};
+use std::path::{Path, PathBuf};
 
 const SETUP_HELP_TEXT: &str = "\
 Usage: runseal setup windows-sandbox [--cwd <path>] [--status] [--json]

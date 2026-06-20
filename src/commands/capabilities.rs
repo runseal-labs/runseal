@@ -1,4 +1,7 @@
-use super::*;
+use crate::backend::{SandboxBackend, active_backend};
+use crate::commands::setup::windows_sandbox_setup_status_for_cwd;
+use crate::execution::current_dir;
+use serde_json::Value;
 
 pub(crate) fn payload() -> Value {
     let mut payload = active_backend().capabilities_json();
