@@ -1,19 +1,20 @@
 use crate::control;
 use crate::error::RunSealError;
 use crate::execution::{audit_stream_event_metadata, execute_command};
-use crate::protocol::request_validation::{
+use crate::rpc;
+use crate::setup::windows_sandbox_setup_status_for_cwd;
+use request_validation::{
     audit_events_params, cancel_execution_id_from_params, execute_request_from_params,
     explain_policy_request_from_params, get_execution_id_from_params, session_id_from_params,
     setup_status_cwd_from_params, subscribe_events_params, tail_audit_params,
     validate_empty_params,
 };
-use crate::rpc;
-use crate::setup::windows_sandbox_setup_status_for_cwd;
 use serde_json::{Value, json};
 use state::ServiceState;
 
 mod event_bus;
 mod executions;
+mod request_validation;
 mod sessions;
 mod state;
 
