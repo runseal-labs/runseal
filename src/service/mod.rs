@@ -49,10 +49,7 @@ impl Service {
             "cancelExecution" => self.cancel_execution(id, &params),
             "subscribeEvents" => self.subscribe_events(id, &params),
             "disposeSession" => self.dispose_session(id, &params),
-            _ => vec![rpc::error(
-                id,
-                RunSealError::new("INVALID_REQUEST", format!("unknown method: {method}")),
-            )],
+            _ => vec![rpc::method_not_found(id, method)],
         }
     }
 

@@ -618,6 +618,27 @@ fn rpc_rejects_malformed_envelope() -> Result<()> {
 }
 
 #[test]
+fn rpc_rejects_unknown_method_as_method_not_found() -> Result<()> {
+    let output = run_rpc(&rpc_request("missingMethod", json!({})))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = &messages[0];
+
+    assert_eq!(response["error"]["code"], -32601);
+    assert_eq!(response["error"]["data"]["code"], "METHOD_NOT_FOUND");
+    assert_eq!(
+        response["error"]["data"]["reason"],
+        "method not found: missingMethod"
+    );
+    Ok(())
+}
+
+#[test]
 fn no_param_methods_reject_unsupported_params() -> Result<()> {
     for method in ["getVersion", "getCapabilities"] {
         let output = run_rpc(&rpc_request(method, json!({"extra": true})))?;
