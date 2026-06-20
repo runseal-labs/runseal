@@ -169,8 +169,9 @@ when a requested feature is unsupported or setup is unavailable. `getSetupStatus
 reports setup readiness without changing setup state. `getServiceStatus` reports
 whether the current stdio control plane is direct or stateful service mode. The
 stdio service records completed executions for `getExecution`, event replay,
-summary listing through `listExecutions`, session disposal, and RFC-0006
-not-found responses for already-finished cancellation.
+summary listing through `listExecutions`, audit queries through `getAuditEvents`
+and `tailAudit`, session disposal without deleting retained audit results, and
+`EXECUTION_NOT_CANCELLABLE` for already-finished cancellation.
 
 ## Running tests
 
