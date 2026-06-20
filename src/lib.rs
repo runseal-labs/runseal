@@ -1875,6 +1875,7 @@ mod tests {
         assert!(details["setup_status"]["next_action"].as_str().is_some());
     }
 
+    #[cfg(windows)]
     #[test]
     fn windows_setup_success_payload_hides_internal_paths() {
         let tmp = tempfile::tempdir().expect("tempdir");
