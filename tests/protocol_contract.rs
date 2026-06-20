@@ -1787,6 +1787,104 @@ fn service_stdio_records_policy_denial_state() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn service_stdio_retains_backend_capability_failure_events() -> Result<()> {
+    #[cfg(windows)]
+    let _guard = windows_protocol_lock()?;
+
+    let tmp = TempDir::new()?;
+    let mut child = Command::new(require_runseal_bin()?)
+        .args(["service", "--stdio"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to spawn runseal service")?;
+    let mut stdin = child.stdin.take().context("stdin unavailable")?;
+    let stdout = child.stdout.take().context("stdout unavailable")?;
+    let mut stdout = BufReader::new(stdout);
+
+    stdin.write_all(
+        rpc_request_with_id(
+            1,
+            "execute",
+            json!({
+                "command": [python_bin(), "-c", "print('must not run')"],
+                "cwd": tmp.path(),
+                "policy": {
+                    "version": "runseal.policy/v1",
+                    "sandbox_level": "workspace-write",
+                    "filesystem": {"write": [tmp.path()]},
+                    "network": {"mode": "disabled"},
+                    "resources": {"memory_bytes": 4096}
+                }
+            }),
+        )
+        .as_bytes(),
+    )?;
+    let (execute_events, execute_response) = read_rpc_response(&mut stdout, 1)?;
+    assert_eq!(
+        execute_response["error"]["data"]["code"],
+        "BACKEND_CAPABILITY_MISSING"
+    );
+    assert!(
+        execute_response["error"]["data"]["missing_features"]
+            .as_array()
+            .context("missing_features must be an array")?
+            .iter()
+            .any(|feature| feature == "resource_limits")
+    );
+    let execution_id = execute_response["error"]["data"]["execution_id"]
+        .as_str()
+        .context("backend capability response must include execution_id")?
+        .to_string();
+    assert!(execute_events.iter().any(|event| {
+        event["params"]["type"] == "sandbox.backend_capability"
+            && event["params"]["decision"] == "unsupported"
+    }));
+
+    stdin.write_all(
+        rpc_request_with_id(
+            2,
+            "getAuditEvents",
+            json!({ "execution_id": execution_id, "types": ["sandbox.*"] }),
+        )
+        .as_bytes(),
+    )?;
+    let (_, audit_response) = read_rpc_response(&mut stdout, 2)?;
+    assert_eq!(audit_response["result"]["execution_id"], execution_id);
+    assert!(
+        audit_response["result"]["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| event["type"] == "sandbox.backend_capability"
+                && event["missing_features"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|feature| feature == "resource_limits"))
+    );
+
+    stdin.write_all(
+        rpc_request_with_id(3, "tailAudit", json!({ "types": ["sandbox.*"] })).as_bytes(),
+    )?;
+    let (_, tail_response) = read_rpc_response(&mut stdout, 3)?;
+    assert!(
+        tail_response["result"]["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| event["type"] == "sandbox.backend_capability"
+                && event["execution_id"] == execution_id)
+    );
+
+    drop(stdin);
+    let status = child.wait().context("failed to wait for runseal service")?;
+    assert!(status.success());
+    Ok(())
+}
+
 fn read_rpc_response(
     stdout: &mut BufReader<impl std::io::Read>,
     id: u64,
