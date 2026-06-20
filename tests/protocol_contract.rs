@@ -3093,6 +3093,31 @@ fn lookup_and_session_methods_reject_overlong_ids() -> Result<()> {
 }
 
 #[test]
+fn cancel_execution_rejects_overlong_reason() -> Result<()> {
+    let output = run_rpc(&rpc_request(
+        "cancelExecution",
+        json!({"execution_id": "exec_missing", "reason": "a".repeat(129)}),
+    ))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = &messages[0];
+
+    assert_eq!(response["error"]["data"]["code"], "INVALID_REQUEST");
+    assert!(
+        response["error"]["data"]["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("params.reason must be at most 128 bytes")
+    );
+    Ok(())
+}
+
+#[test]
 fn dispose_session_is_idempotent_for_unknown_session() -> Result<()> {
     let output = run_rpc(&rpc_request(
         "disposeSession",

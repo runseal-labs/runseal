@@ -172,7 +172,7 @@ fn types_from_params(params: &Map<String, Value>) -> Vec<String> {
 
 fn validate_optional_lookup_params(params: &Map<String, Value>) -> Result<(), RunSealError> {
     if let Some(reason) = params.get("reason") {
-        reason
+        let reason = reason
             .as_str()
             .filter(|value| !value.is_empty())
             .ok_or_else(|| {
@@ -181,6 +181,12 @@ fn validate_optional_lookup_params(params: &Map<String, Value>) -> Result<(), Ru
                     "params.reason must be a non-empty string",
                 )
             })?;
+        if reason.len() > MAX_PROTOCOL_ID_BYTES {
+            return Err(RunSealError::new(
+                "INVALID_REQUEST",
+                format!("params.reason must be at most {MAX_PROTOCOL_ID_BYTES} bytes"),
+            ));
+        }
     }
     if let Some(types) = params.get("types") {
         let types = types
