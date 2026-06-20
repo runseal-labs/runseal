@@ -9,6 +9,7 @@ mod policy;
 mod process_output;
 mod protocol;
 mod rpc;
+mod service;
 mod stdin;
 mod windows;
 
@@ -24,14 +25,10 @@ use commands::setup::{
     windows_sandbox_setup_success_payload,
 };
 use error::RunSealError;
-use policy::{
-    NetworkMode, POLICY_VERSION, SandboxPolicy, matches_environment_scrub_pattern, normalize_policy,
-};
-use serde_json::{Map, Value, json};
+use policy::{POLICY_VERSION, SandboxPolicy, normalize_policy};
+use serde_json::{Value, json};
 use std::env;
-use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
-use stdin::stdin_from_params;
 
 const PROTOCOL_VERSION: &str = "runseal.protocol/v1";
 const MAX_METADATA_BYTES: usize = 4096;
@@ -66,6 +63,9 @@ fn run() -> Result<(), String> {
         [command] if command == "version" => commands::version::print_plain(),
         [command] if command == "capabilities" => commands::capabilities::run(),
         [command, flag] if command == "rpc" && flag == "--stdio" => {
+            protocol::rpc_handler::run_rpc_stdio()
+        }
+        [command, flag] if command == "service" && flag == "--stdio" => {
             protocol::rpc_handler::run_rpc_stdio()
         }
         [command, flag, ..] if command == "service" && (flag == "--pipe" || flag == "--socket") => {

@@ -367,6 +367,9 @@ pub(crate) fn execute_command(
                     "execution_id": ids.execution_id,
                     "session_id": ids.session_id,
                     "seal_id": ids.seal_id,
+                    "policy_id": policy_id,
+                    "policy_hash": policy_hash,
+                    "policy_epoch": policy_epoch,
                     "audit_path": audit_path,
                     "backend": {
                         "name": plan.backend,
@@ -389,7 +392,16 @@ pub(crate) fn execute_command(
                     "execution_id": ids.execution_id,
                     "session_id": ids.session_id,
                     "seal_id": ids.seal_id,
+                    "policy_id": policy_id,
+                    "policy_hash": policy_hash,
+                    "policy_epoch": policy_epoch,
                     "audit_path": audit_path,
+                    "backend": {
+                        "name": plan.backend,
+                        "status": plan.backend_status,
+                        "platform": plan.platform,
+                    },
+                    "platform_plan": plan.json(),
                 }),
             ));
         }

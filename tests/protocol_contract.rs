@@ -40,6 +40,10 @@ fn rpc_request(method: &str, params: Value) -> String {
     json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).to_string() + "\n"
 }
 
+fn rpc_request_with_id(id: u64, method: &str, params: Value) -> String {
+    json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}).to_string() + "\n"
+}
+
 fn run_rpc(message: &str) -> Result<Output> {
     run_rpc_with_env(message, &[])
 }
@@ -571,6 +575,252 @@ fn execution_lookup_methods_return_stable_not_found() -> Result<()> {
         assert_eq!(response["error"]["data"]["execution_id"], "exec_missing");
     }
     Ok(())
+}
+
+#[test]
+fn service_stdio_keeps_completed_execution_state() -> Result<()> {
+    #[cfg(windows)]
+    let _guard = windows_protocol_lock()?;
+
+    let tmp = TempDir::new()?;
+    let mut child = Command::new(require_runseal_bin()?)
+        .args(["service", "--stdio"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to spawn runseal service")?;
+    let mut stdin = child.stdin.take().context("stdin unavailable")?;
+    let stdout = child.stdout.take().context("stdout unavailable")?;
+    let mut stdout = BufReader::new(stdout);
+
+    stdin.write_all(
+        rpc_request_with_id(
+            1,
+            "execute",
+            json!({
+                "command": [python_bin(), "-c", "print('service-ok')"],
+                "cwd": tmp.path(),
+                "policy": "danger-full-access",
+            }),
+        )
+        .as_bytes(),
+    )?;
+    let (execute_events, execute_response) = read_rpc_response(&mut stdout, 1)?;
+    let execution_id = execute_response["result"]["execution_id"]
+        .as_str()
+        .context("execute result must include execution_id")?
+        .to_string();
+    let session_id = execute_response["result"]["session_id"]
+        .as_str()
+        .context("execute result must include session_id")?
+        .to_string();
+    assert!(
+        execute_events
+            .iter()
+            .any(|event| event["params"]["type"] == "execution.finished")
+    );
+
+    stdin.write_all(
+        rpc_request_with_id(2, "getExecution", json!({ "execution_id": execution_id })).as_bytes(),
+    )?;
+    let (_, get_response) = read_rpc_response(&mut stdout, 2)?;
+    assert_eq!(get_response["result"]["execution_id"], execution_id);
+    assert_eq!(get_response["result"]["status"], "finished");
+
+    stdin.write_all(
+        rpc_request_with_id(
+            3,
+            "subscribeEvents",
+            json!({ "execution_id": execution_id, "types": ["execution.*"] }),
+        )
+        .as_bytes(),
+    )?;
+    let (subscription_events, subscribe_response) = read_rpc_response(&mut stdout, 3)?;
+    assert_eq!(subscribe_response["result"]["execution_id"], execution_id);
+    assert!(subscription_events.iter().all(|event| {
+        event["params"]["type"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("execution.")
+    }));
+    assert!(
+        subscription_events
+            .iter()
+            .any(|event| event["params"]["type"] == "execution.finished")
+    );
+
+    stdin.write_all(
+        rpc_request_with_id(
+            4,
+            "cancelExecution",
+            json!({ "execution_id": execution_id, "reason": "test" }),
+        )
+        .as_bytes(),
+    )?;
+    let (_, cancel_response) = read_rpc_response(&mut stdout, 4)?;
+    assert_eq!(cancel_response["result"]["execution_id"], execution_id);
+    assert_eq!(cancel_response["result"]["status"], "not_cancellable");
+
+    stdin.write_all(
+        rpc_request_with_id(5, "disposeSession", json!({ "session_id": session_id })).as_bytes(),
+    )?;
+    let (_, dispose_response) = read_rpc_response(&mut stdout, 5)?;
+    assert_eq!(dispose_response["result"]["status"], "disposed");
+    assert_eq!(dispose_response["result"]["released_executions"], 1);
+
+    stdin.write_all(
+        rpc_request_with_id(6, "getExecution", json!({ "execution_id": execution_id })).as_bytes(),
+    )?;
+    let (_, missing_response) = read_rpc_response(&mut stdout, 6)?;
+    assert_eq!(
+        missing_response["error"]["data"]["code"],
+        "EXECUTION_NOT_FOUND"
+    );
+
+    drop(stdin);
+    let status = child.wait().context("failed to wait for runseal service")?;
+    assert!(status.success());
+    Ok(())
+}
+
+#[test]
+fn service_stdio_keeps_failed_execution_state() -> Result<()> {
+    #[cfg(windows)]
+    let _guard = windows_protocol_lock()?;
+
+    let tmp = TempDir::new()?;
+    let mut child = Command::new(require_runseal_bin()?)
+        .args(["service", "--stdio"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to spawn runseal service")?;
+    let mut stdin = child.stdin.take().context("stdin unavailable")?;
+    let stdout = child.stdout.take().context("stdout unavailable")?;
+    let mut stdout = BufReader::new(stdout);
+
+    stdin.write_all(
+        rpc_request_with_id(
+            1,
+            "execute",
+            json!({
+                "command": ["runseal-command-that-does-not-exist"],
+                "cwd": tmp.path(),
+                "policy": "danger-full-access",
+            }),
+        )
+        .as_bytes(),
+    )?;
+    let (_, execute_response) = read_rpc_response(&mut stdout, 1)?;
+    assert_eq!(
+        execute_response["error"]["data"]["code"],
+        "EXECUTION_FAILED_TO_START"
+    );
+    let execution_id = execute_response["error"]["data"]["execution_id"]
+        .as_str()
+        .context("failed execute response must include execution_id")?
+        .to_string();
+    assert!(
+        execute_response["error"]["data"]["policy_hash"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("sha256:")
+    );
+    assert_eq!(
+        execute_response["error"]["data"]["policy_epoch"],
+        execute_response["error"]["data"]["policy_hash"]
+    );
+
+    stdin.write_all(
+        rpc_request_with_id(2, "getExecution", json!({ "execution_id": execution_id })).as_bytes(),
+    )?;
+    let (_, get_response) = read_rpc_response(&mut stdout, 2)?;
+    assert_eq!(get_response["result"]["execution_id"], execution_id);
+    assert_eq!(get_response["result"]["status"], "failed");
+    assert_eq!(
+        get_response["result"]["error"]["code"],
+        "EXECUTION_FAILED_TO_START"
+    );
+    assert_eq!(get_response["result"]["policy_id"], "danger-full-access");
+    assert_eq!(
+        get_response["result"]["policy_hash"],
+        execute_response["error"]["data"]["policy_hash"]
+    );
+    assert_eq!(
+        get_response["result"]["policy_epoch"],
+        execute_response["error"]["data"]["policy_epoch"]
+    );
+
+    stdin.write_all(
+        rpc_request_with_id(
+            3,
+            "cancelExecution",
+            json!({ "execution_id": execution_id }),
+        )
+        .as_bytes(),
+    )?;
+    let (_, cancel_response) = read_rpc_response(&mut stdout, 3)?;
+    assert_eq!(cancel_response["result"]["execution_id"], execution_id);
+    assert_eq!(cancel_response["result"]["status"], "not_cancellable");
+
+    stdin.write_all(
+        rpc_request_with_id(
+            4,
+            "subscribeEvents",
+            json!({ "execution_id": execution_id, "types": ["execution.*"] }),
+        )
+        .as_bytes(),
+    )?;
+    let (subscription_events, subscribe_response) = read_rpc_response(&mut stdout, 4)?;
+    assert_eq!(subscribe_response["result"]["execution_id"], execution_id);
+    assert_eq!(subscribe_response["result"]["event_count"], 1);
+    let failed_event = subscription_events
+        .iter()
+        .find(|event| event["params"]["type"] == "execution.failed")
+        .context("failed execution subscription must replay execution.failed")?;
+    assert_eq!(failed_event["params"]["execution_id"], execution_id);
+    assert_eq!(
+        failed_event["params"]["reason"],
+        "execution failed to start"
+    );
+    assert!(
+        failed_event["params"]["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("failed to spawn command")
+    );
+    assert_eq!(
+        failed_event["params"]["policy_hash"],
+        execute_response["error"]["data"]["policy_hash"]
+    );
+
+    drop(stdin);
+    let status = child.wait().context("failed to wait for runseal service")?;
+    assert!(status.success());
+    Ok(())
+}
+
+fn read_rpc_response(
+    stdout: &mut BufReader<impl std::io::Read>,
+    id: u64,
+) -> Result<(Vec<Value>, Value)> {
+    let mut notifications = Vec::new();
+    loop {
+        let mut line = String::new();
+        stdout
+            .read_line(&mut line)
+            .context("failed to read service stdout")?;
+        if line.is_empty() {
+            bail!("service stdout closed before response id {id}");
+        }
+        let message: Value = serde_json::from_str(&line).context("stdout line was not JSON")?;
+        if message.get("id").and_then(Value::as_u64) == Some(id) {
+            return Ok((notifications, message));
+        }
+        notifications.push(message);
+    }
 }
 
 #[test]
@@ -1730,6 +1980,17 @@ fn execute_start_failure_returns_audit_path_and_failed_event() -> Result<()> {
     assert_eq!(
         response["error"]["data"]["code"],
         "EXECUTION_FAILED_TO_START"
+    );
+    assert_eq!(response["error"]["data"]["policy_id"], "danger-full-access");
+    assert!(
+        response["error"]["data"]["policy_hash"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("sha256:")
+    );
+    assert_eq!(
+        response["error"]["data"]["policy_epoch"],
+        response["error"]["data"]["policy_hash"]
     );
     let audit_path = response["error"]["data"]["audit_path"]
         .as_str()

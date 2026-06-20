@@ -1,7 +1,20 @@
-use super::*;
+use crate::backend::ExecutionEnv;
+use crate::commands;
+use crate::error::RunSealError;
+use crate::execution::{current_dir, execute_command, normalize_execution_cwd};
+use crate::policy::{
+    NetworkMode, SandboxPolicy, matches_environment_scrub_pattern, normalize_policy,
+};
+use crate::stdin::stdin_from_params;
+use crate::{
+    MAX_ENV_ENTRIES, MAX_ENV_KEY_BYTES, MAX_ENV_VALUE_BYTES, MAX_METADATA_BYTES,
+    MAX_PROTOCOL_ID_BYTES,
+};
+use serde_json::{Map, Value, json};
+use std::path::PathBuf;
 use std::time::Duration;
 
-pub(super) fn explain_policy_from_params(params: &Value) -> Result<Value, RunSealError> {
+pub(crate) fn explain_policy_from_params(params: &Value) -> Result<Value, RunSealError> {
     let params = params_object(params, "explainPolicy")?;
     validate_param_keys(params, "explainPolicy", &["policy", "cwd", "network"])?;
     let cwd = params
@@ -20,7 +33,7 @@ pub(super) fn explain_policy_from_params(params: &Value) -> Result<Value, RunSea
     Ok(commands::explain_policy::explain_policy_json(&policy, &cwd))
 }
 
-pub(super) fn execute_from_params(params: &Value) -> Result<(Vec<Value>, Value), RunSealError> {
+pub(crate) fn execute_from_params(params: &Value) -> Result<(Vec<Value>, Value), RunSealError> {
     let params = params_object(params, "execute")?;
     validate_param_keys(
         params,
@@ -67,25 +80,38 @@ pub(super) fn execute_from_params(params: &Value) -> Result<(Vec<Value>, Value),
     execute_command(&command, &cwd, &policy, stdin, env, metadata, timeout)
 }
 
-pub(super) fn execution_not_found_from_params(
-    params: &Value,
-    method: &'static str,
-    optional_keys: &[&'static str],
-) -> Result<Value, RunSealError> {
-    let params = params_object(params, method)?;
-    let mut allowed_keys = vec!["execution_id"];
-    allowed_keys.extend_from_slice(optional_keys);
-    validate_param_keys(params, method, &allowed_keys)?;
-    let execution_id = required_prefixed_string_param(params, "execution_id", "exec_")?;
-    validate_optional_lookup_params(params)?;
+pub(crate) fn get_execution_id_from_params(params: &Value) -> Result<String, RunSealError> {
+    let params = params_object(params, "getExecution")?;
+    validate_param_keys(params, "getExecution", &["execution_id"])?;
+    required_prefixed_string_param(params, "execution_id", "exec_")
+}
 
-    Err(RunSealError::with_details(
-        "EXECUTION_NOT_FOUND",
-        format!("execution not found: {execution_id}"),
-        json!({
-            "execution_id": execution_id,
-        }),
-    ))
+pub(crate) fn cancel_execution_id_from_params(params: &Value) -> Result<String, RunSealError> {
+    let params = params_object(params, "cancelExecution")?;
+    validate_param_keys(params, "cancelExecution", &["execution_id", "reason"])?;
+    validate_optional_lookup_params(params)?;
+    required_prefixed_string_param(params, "execution_id", "exec_")
+}
+
+pub(crate) fn subscribe_events_params(
+    params: &Value,
+) -> Result<(String, Vec<String>), RunSealError> {
+    let params = params_object(params, "subscribeEvents")?;
+    validate_param_keys(params, "subscribeEvents", &["execution_id", "types"])?;
+    validate_optional_lookup_params(params)?;
+    let execution_id = required_prefixed_string_param(params, "execution_id", "exec_")?;
+    let types = params
+        .get("types")
+        .and_then(Value::as_array)
+        .map(|types| {
+            types
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok((execution_id, types))
 }
 
 fn validate_optional_lookup_params(params: &Map<String, Value>) -> Result<(), RunSealError> {
@@ -119,18 +145,13 @@ fn validate_optional_lookup_params(params: &Map<String, Value>) -> Result<(), Ru
     Ok(())
 }
 
-pub(super) fn dispose_session_from_params(params: &Value) -> Result<Value, RunSealError> {
+pub(crate) fn session_id_from_params(params: &Value) -> Result<String, RunSealError> {
     let params = params_object(params, "disposeSession")?;
     validate_param_keys(params, "disposeSession", &["session_id"])?;
-    let session_id = required_prefixed_string_param(params, "session_id", "sess_")?;
-
-    Ok(json!({
-        "session_id": session_id,
-        "status": "disposed",
-    }))
+    required_prefixed_string_param(params, "session_id", "sess_")
 }
 
-pub(super) fn validate_empty_params(
+pub(crate) fn validate_empty_params(
     params: &Value,
     method: &'static str,
 ) -> Result<(), RunSealError> {
