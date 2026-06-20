@@ -56,7 +56,9 @@ fn error_with_code(id: Value, code: i64, err: RunSealError) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::error;
+    use crate::error::RunSealError;
+    use serde_json::json;
 
     #[test]
     fn internal_error_uses_json_rpc_internal_error_code() {

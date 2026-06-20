@@ -145,7 +145,9 @@ fn decode_windows_code_page(bytes: &[u8], code_page: u32) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::decode_process_output;
+    #[cfg(windows)]
+    use super::{decode_utf16le_if_likely, decode_windows_process_output_with_code_pages};
 
     #[test]
     fn decode_process_output_preserves_utf8() {

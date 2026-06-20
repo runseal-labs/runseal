@@ -53,7 +53,8 @@ fn backend_unavailable_setup_status(reason: &str, cwd: &Path) -> Option<Value> {
 
 #[cfg(all(test, windows))]
 mod tests {
-    use super::*;
+    use super::backend_execution_error;
+    use std::path::Path;
 
     #[cfg(windows)]
     #[test]

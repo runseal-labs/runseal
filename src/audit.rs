@@ -148,8 +148,9 @@ fn is_sensitive_audit_key(key: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{AuditWriter, MAX_AUDIT_SESSION_ID_BYTES, REDACTED, redact_audit_value};
     use serde_json::json;
+    use std::{fs, io};
     use tempfile::TempDir;
 
     #[test]

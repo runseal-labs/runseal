@@ -125,7 +125,8 @@ pub(crate) fn timestamp_now() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{ExecutionEventContext, ExecutionIds, execution_event_now};
+    use serde_json::json;
 
     #[test]
     fn execution_event_preserves_backend_supplied_time() {
