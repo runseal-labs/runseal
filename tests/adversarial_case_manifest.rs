@@ -327,6 +327,12 @@ fn adversarial_result_schema_requires_public_skip_reason() -> Result<()> {
     result["skip_reason"] = json!("unsupported fixture kind");
     validate_result(&result)?;
 
+    result["status"] = json!("unsupported_fixture");
+    validate_result(&result)?;
+    result["skipped"] = json!(false);
+    assert!(validate_result(&result).is_err());
+    result["skipped"] = json!(true);
+
     result["status"] = json!("failed");
     assert!(validate_result(&result).is_err());
     result["status"] = json!("skipped");
@@ -700,6 +706,7 @@ fn validate_result(result: &Value) -> Result<()> {
     let status = required_string(result, "status", path)?;
     let passed = result["passed"] == true;
     let skipped = result["skipped"] == true;
+    let skipped_status = matches!(status, "skipped" | "unsupported_fixture");
     if status == "passed" && (!passed || skipped) {
         bail!("passed adversarial results must set passed=true and skipped=false");
     }
@@ -709,10 +716,10 @@ fn validate_result(result: &Value) -> Result<()> {
     if status != "passed" && passed {
         bail!("non-passed adversarial results must not set passed=true");
     }
-    if status == "skipped" && !skipped {
+    if skipped_status && !skipped {
         bail!("skipped adversarial status must set skipped=true");
     }
-    if status != "skipped" && skipped {
+    if !skipped_status && skipped {
         bail!("non-skipped adversarial status must not set skipped=true");
     }
     if status == "xfailed" && required_string(result, "backend_status", path)? != "experimental" {
