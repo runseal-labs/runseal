@@ -43,8 +43,7 @@ impl ServiceState {
         self.executions.all_events(types)
     }
 
-    pub(super) fn dispose_session(&mut self, session_id: &str) -> usize {
-        self.sessions.dispose(session_id);
-        0
+    pub(super) fn dispose_session(&mut self, session_id: &str) -> bool {
+        self.sessions.dispose(session_id)
     }
 }

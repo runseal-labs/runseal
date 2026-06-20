@@ -1461,10 +1461,18 @@ fn service_stdio_keeps_completed_execution_state() -> Result<()> {
     )?;
     let (_, dispose_response) = read_rpc_response(&mut stdout, 5)?;
     assert_eq!(dispose_response["result"]["status"], "disposed");
+    assert_eq!(dispose_response["result"]["released_sessions"], 1);
     assert_eq!(dispose_response["result"]["released_executions"], 0);
 
-    stdin.write_all(rpc_request_with_id(6, "listExecutions", json!({})).as_bytes())?;
-    let (_, list_response) = read_rpc_response(&mut stdout, 6)?;
+    stdin.write_all(
+        rpc_request_with_id(6, "disposeSession", json!({ "session_id": session_id })).as_bytes(),
+    )?;
+    let (_, second_dispose_response) = read_rpc_response(&mut stdout, 6)?;
+    assert_eq!(second_dispose_response["result"]["released_sessions"], 0);
+    assert_eq!(second_dispose_response["result"]["released_executions"], 0);
+
+    stdin.write_all(rpc_request_with_id(7, "listExecutions", json!({})).as_bytes())?;
+    let (_, list_response) = read_rpc_response(&mut stdout, 7)?;
     let summaries = list_response["result"]["executions"]
         .as_array()
         .context("executions must be an array")?;
@@ -1475,21 +1483,21 @@ fn service_stdio_keeps_completed_execution_state() -> Result<()> {
     assert_eq!(summary["status"], "finished");
 
     stdin.write_all(
-        rpc_request_with_id(7, "getExecution", json!({ "execution_id": execution_id })).as_bytes(),
+        rpc_request_with_id(8, "getExecution", json!({ "execution_id": execution_id })).as_bytes(),
     )?;
-    let (_, retained_response) = read_rpc_response(&mut stdout, 7)?;
+    let (_, retained_response) = read_rpc_response(&mut stdout, 8)?;
     assert_eq!(retained_response["result"]["execution_id"], execution_id);
     assert_eq!(retained_response["result"]["status"], "finished");
 
     stdin.write_all(
         rpc_request_with_id(
-            8,
+            9,
             "getAuditEvents",
             json!({ "execution_id": execution_id, "types": ["execution.finished"] }),
         )
         .as_bytes(),
     )?;
-    let (_, audit_response) = read_rpc_response(&mut stdout, 8)?;
+    let (_, audit_response) = read_rpc_response(&mut stdout, 9)?;
     assert_eq!(audit_response["result"]["count"], 1);
 
     drop(stdin);
@@ -2107,7 +2115,7 @@ fn lookup_and_session_methods_reject_overlong_ids() -> Result<()> {
 }
 
 #[test]
-fn dispose_session_is_noop_for_stdio_mvp() -> Result<()> {
+fn dispose_session_is_idempotent_for_unknown_session() -> Result<()> {
     let output = run_rpc(&rpc_request(
         "disposeSession",
         json!({"session_id": "sess_missing"}),
@@ -2123,6 +2131,8 @@ fn dispose_session_is_noop_for_stdio_mvp() -> Result<()> {
 
     assert_eq!(response["result"]["session_id"], "sess_missing");
     assert_eq!(response["result"]["status"], "disposed");
+    assert_eq!(response["result"]["released_sessions"], 0);
+    assert_eq!(response["result"]["released_executions"], 0);
     Ok(())
 }
 
