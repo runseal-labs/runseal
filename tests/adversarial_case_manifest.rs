@@ -161,6 +161,7 @@ const REPORT_LABELS: &[&str] = &[
     "cli_contract",
     "filesystem_conformance",
     "network_conformance",
+    "runtime_conformance",
     "adversarial_case_manifest",
 ];
 

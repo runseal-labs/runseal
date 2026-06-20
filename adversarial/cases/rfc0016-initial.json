@@ -159,6 +159,132 @@
   },
   {
     "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.runtime.precreated-runtime-root.v1",
+    "title": "Precreated runtime roots must not be trusted",
+    "primary_class": "runtime",
+    "capabilities_under_test": ["runtime_roots"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community"],
+    "sandbox_level": "workspace-contained",
+    "network_mode": "disabled",
+    "fixtures": [{"kind": "preexisting_runtime_root", "path": ".runseal/runtime/precreated"}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "open('.runseal/runtime/precreated/escape.txt','w').write('escape')"],
+      "policy": "workspace-contained"
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["path_not_modified"]
+    },
+    "public_report_labels": ["runtime_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.runtime.runtime-marker-spoof.v1",
+    "title": "Runtime root markers must not be spoofable",
+    "primary_class": "runtime",
+    "capabilities_under_test": ["runtime_roots"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community"],
+    "sandbox_level": "workspace-contained",
+    "network_mode": "disabled",
+    "fixtures": [{"kind": "file", "path": ".runseal/runtime/spoofed/marker.txt"}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "open('.runseal/runtime/spoofed/escape.txt','w').write('escape')"],
+      "policy": "workspace-contained"
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["path_not_modified"]
+    },
+    "public_report_labels": ["runtime_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.runtime.execution-id-reuse.v1",
+    "title": "Execution runtime roots must not be reusable across executions",
+    "primary_class": "runtime",
+    "capabilities_under_test": ["runtime_roots", "policy_epoch"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community"],
+    "sandbox_level": "workspace-contained",
+    "network_mode": "disabled",
+    "fixtures": [{"kind": "preexisting_runtime_root", "path": ".runseal/runtime/reused"}],
+    "request": {
+      "method": "execute",
+      "execution_id": "reused-execution",
+      "command": ["python", "-c", "open('.runseal/runtime/reused/escape.txt','w').write('escape')"],
+      "policy": "workspace-contained"
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["policy_epoch_consistent", "path_not_modified"]
+    },
+    "public_report_labels": ["runtime_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.runtime.cleanup-partial-failure.v1",
+    "title": "Partial runtime cleanup failures must remain visible",
+    "primary_class": "runtime",
+    "capabilities_under_test": ["runtime_roots", "process_cleanup"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community"],
+    "sandbox_level": "workspace-contained",
+    "network_mode": "disabled",
+    "fixtures": [{"kind": "readonly_file", "path": ".runseal/runtime/cleanup/locked.txt"}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "open('.runseal/runtime/cleanup/output.txt','w').write('cleanup')"],
+      "policy": "workspace-contained"
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["path_not_modified"]
+    },
+    "public_report_labels": ["runtime_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.runtime.cross-execution-contamination.v1",
+    "title": "Runtime roots must not leak state across executions",
+    "primary_class": "runtime",
+    "capabilities_under_test": ["runtime_roots"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community"],
+    "sandbox_level": "workspace-contained",
+    "network_mode": "disabled",
+    "fixtures": [{"kind": "file", "path": ".runseal/runtime/previous/private.txt", "body": "previous"}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print(open('.runseal/runtime/previous/private.txt').read())"],
+      "policy": "workspace-contained"
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["path_not_accessible"]
+    },
+    "public_report_labels": ["runtime_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
     "case_id": "adv.policy.unknown-top-level-field.v1",
     "title": "Unknown policy fields must be rejected",
     "primary_class": "policy",
