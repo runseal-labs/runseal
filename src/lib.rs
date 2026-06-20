@@ -72,7 +72,6 @@ fn run() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     #[cfg(not(windows))]
     use crate::commands::setup::windows_sandbox_setup_failed_error;
     #[cfg(windows)]
@@ -82,6 +81,7 @@ mod tests {
     use crate::events::new_execution_ids;
     use crate::protocol::request_validation::duration_millis_u64;
     use crate::setup::windows_sandbox_setup_status_payload;
+    use crate::{WINDOWS_SANDBOX_SETUP_FAILED, WINDOWS_SANDBOX_UNSUPPORTED};
     use std::collections::HashSet;
     use std::time::Duration;
 
