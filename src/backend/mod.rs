@@ -45,14 +45,18 @@ fn runtime_environment_value_is_path(key: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::capability::{CapabilityStatus, missing_backend_features};
+    use super::core::SandboxBackend;
     #[cfg(all(test, windows))]
     use super::error::POLICY_TRANSITION_BUSY_REASON;
+    use super::error::policy_transition_busy_reason;
     #[cfg(windows)]
     use super::error::public_windows_setup_unavailable_reason;
+    use super::execution::{ExecutionEnv, ExecutionStdin};
     use super::filesystem::{
         WindowsFilesystemAclDriver, WindowsFilesystemAclSubject,
         apply_private_filesystem_acl_transaction,
     };
+    use super::path_string;
     use super::plan::environment_runtime_json;
     #[cfg(all(test, windows))]
     use super::policy_epoch::{
@@ -69,7 +73,6 @@ mod tests {
     use super::windows::WindowsReferenceBackend;
     #[cfg(all(test, windows))]
     use super::windows::*;
-    use super::*;
     use crate::policy::{BackendFeature, NetworkMode, normalize_policy};
     use crate::windows::policy::{
         WindowsFilesystemAccess, WindowsFilesystemAclEntry, WindowsFilesystemAclPlan,
