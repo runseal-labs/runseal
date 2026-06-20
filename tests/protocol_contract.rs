@@ -1435,6 +1435,12 @@ fn service_stdio_keeps_completed_execution_state() -> Result<()> {
             .iter()
             .any(|event| event["params"]["type"] == "execution.finished")
     );
+    let subscribed_stdout = subscription_events
+        .iter()
+        .map(|message| &message["params"])
+        .find(|event| event["type"] == "execution.stdout")
+        .context("subscription must include stdout event")?;
+    assert!(decode_stream_event(subscribed_stdout)?.contains("service-ok"));
 
     stdin.write_all(
         rpc_request_with_id(
@@ -1499,6 +1505,40 @@ fn service_stdio_keeps_completed_execution_state() -> Result<()> {
     )?;
     let (_, audit_response) = read_rpc_response(&mut stdout, 9)?;
     assert_eq!(audit_response["result"]["count"], 1);
+
+    stdin.write_all(
+        rpc_request_with_id(
+            10,
+            "getAuditEvents",
+            json!({ "execution_id": execution_id, "types": ["execution.stdout"] }),
+        )
+        .as_bytes(),
+    )?;
+    let (_, audit_stdout_response) = read_rpc_response(&mut stdout, 10)?;
+    let audit_stdout_events = audit_stdout_response["result"]["events"]
+        .as_array()
+        .context("audit stdout events must be an array")?;
+    assert_eq!(audit_stdout_events.len(), 1);
+    assert_eq!(audit_stdout_events[0]["bytes"], subscribed_stdout["bytes"]);
+    assert!(audit_stdout_events[0].get("data").is_none());
+    assert!(audit_stdout_events[0].get("text").is_none());
+
+    stdin.write_all(
+        rpc_request_with_id(11, "tailAudit", json!({ "types": ["execution.stdout"] })).as_bytes(),
+    )?;
+    let (_, tail_stdout_response) = read_rpc_response(&mut stdout, 11)?;
+    let tail_stdout_events = tail_stdout_response["result"]["events"]
+        .as_array()
+        .context("tail stdout events must be an array")?;
+    assert!(
+        tail_stdout_events
+            .iter()
+            .any(|event| event["type"] == "execution.stdout")
+    );
+    assert!(tail_stdout_events.iter().all(|event| {
+        event["type"] != "execution.stdout"
+            || (event.get("data").is_none() && event.get("text").is_none())
+    }));
 
     drop(stdin);
     let status = child.wait().context("failed to wait for runseal service")?;

@@ -1,6 +1,6 @@
 use crate::control;
 use crate::error::RunSealError;
-use crate::execution::execute_command;
+use crate::execution::{audit_stream_event_metadata, execute_command};
 use crate::protocol::request_validation::{
     audit_events_params, cancel_execution_id_from_params, execute_request_from_params,
     explain_policy_request_from_params, get_execution_id_from_params, session_id_from_params,
@@ -212,6 +212,7 @@ impl Service {
         let Some(events) = self.state.execution_events(&execution_id, &types) else {
             return vec![rpc::error(id, execution_not_found(&execution_id))];
         };
+        let events = audit_event_metadata(events);
         vec![rpc::result(
             id,
             json!({
@@ -227,7 +228,7 @@ impl Service {
             Ok(types) => types,
             Err(err) => return vec![rpc::error(id, err)],
         };
-        let events = self.state.audit_tail(&types);
+        let events = audit_event_metadata(self.state.audit_tail(&types));
         vec![rpc::result(
             id,
             json!({
@@ -261,6 +262,13 @@ fn execution_not_found(execution_id: &str) -> RunSealError {
         format!("execution not found: {execution_id}"),
         json!({ "execution_id": execution_id }),
     )
+}
+
+fn audit_event_metadata(events: Vec<Value>) -> Vec<Value> {
+    events
+        .into_iter()
+        .map(|event| audit_stream_event_metadata(&event))
+        .collect()
 }
 
 fn execution_not_cancellable(result: &Value) -> RunSealError {
