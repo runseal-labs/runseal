@@ -156,6 +156,12 @@ const RESULT_STATUS: &[&str] = &[
     "unsupported_fixture",
     "harness_error",
 ];
+const REPORT_LABELS: &[&str] = &[
+    "protocol_contract",
+    "cli_contract",
+    "filesystem_conformance",
+    "adversarial_case_manifest",
+];
 
 #[test]
 fn adversarial_case_manifests_match_rfc0016_shape() -> Result<()> {
@@ -255,6 +261,9 @@ fn validate_case(case: &Value, path: &Path, case_ids: &mut HashSet<String>) -> R
     }
     if let Some(secondary_classes) = case.get("secondary_classes") {
         assert_array_members(secondary_classes, "case.secondary_classes", CLASSES, path)?;
+    }
+    if let Some(labels) = case.get("public_report_labels") {
+        assert_array_members(labels, "case.public_report_labels", REPORT_LABELS, path)?;
     }
     assert_non_empty_string(case, "title", path)?;
     assert_members(case, "capabilities_under_test", CAPABILITIES, path)?;
