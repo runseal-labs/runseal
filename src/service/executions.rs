@@ -46,7 +46,7 @@ impl ExecutionStore {
         let mut result = json!({
             "execution_id": execution_id,
             "session_id": session_id,
-            "status": "failed",
+            "status": error_status(err),
             "error": {
                 "code": err.code,
                 "reason": err.reason,
@@ -72,7 +72,7 @@ impl ExecutionStore {
             ExecutionRecord {
                 session_id: session_id.to_string(),
                 result,
-                events: vec![failed_event(execution_id, session_id, err, details)],
+                events: vec![error_event(execution_id, session_id, err, details)],
             },
         );
         Some(session_id.to_string())
@@ -98,24 +98,32 @@ impl ExecutionStore {
     }
 }
 
-fn failed_event(
-    execution_id: &str,
-    session_id: &str,
-    err: &RunSealError,
-    details: &Value,
-) -> Value {
-    let reason = if err.code == "EXECUTION_FAILED_TO_START" {
-        "execution failed to start"
-    } else {
-        err.reason.as_str()
+fn error_status(err: &RunSealError) -> &'static str {
+    match err.code.as_str() {
+        "APPROVAL_REQUIRED" | "POLICY_DENIED" => "denied",
+        _ => "failed",
+    }
+}
+
+fn error_event(execution_id: &str, session_id: &str, err: &RunSealError, details: &Value) -> Value {
+    let (event_type, decision, reason) = match err.code.as_str() {
+        "APPROVAL_REQUIRED" => (
+            "policy.requires_approval",
+            "requires_approval",
+            err.reason.as_str(),
+        ),
+        "POLICY_DENIED" => ("policy.denied", "denied", err.reason.as_str()),
+        "EXECUTION_FAILED_TO_START" => ("execution.failed", "failed", "execution failed to start"),
+        _ => ("execution.failed", "failed", err.reason.as_str()),
     };
     let mut event = json!({
-        "type": "execution.failed",
+        "type": event_type,
         "time": timestamp_now(),
         "runseal_version": env!("CARGO_PKG_VERSION"),
         "execution_id": execution_id,
         "session_id": session_id,
-        "status": "failed",
+        "status": error_status(err),
+        "decision": decision,
         "reason": reason,
         "error": err.reason,
     });

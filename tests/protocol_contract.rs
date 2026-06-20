@@ -889,6 +889,76 @@ fn service_stdio_keeps_failed_execution_state() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn service_stdio_records_policy_denial_state() -> Result<()> {
+    #[cfg(windows)]
+    let _guard = windows_protocol_lock()?;
+
+    let tmp = TempDir::new()?;
+    let mut child = Command::new(require_runseal_bin()?)
+        .args(["service", "--stdio"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to spawn runseal service")?;
+    let mut stdin = child.stdin.take().context("stdin unavailable")?;
+    let stdout = child.stdout.take().context("stdout unavailable")?;
+    let mut stdout = BufReader::new(stdout);
+
+    stdin.write_all(
+        rpc_request_with_id(
+            1,
+            "execute",
+            json!({
+                "command": [python_bin(), "-c", "print('must not run')"],
+                "cwd": tmp.path(),
+                "policy": {
+                    "version": "runseal.policy/v1",
+                    "filesystem": {"read": [tmp.path()], "write": []},
+                    "network": {"mode": "disabled"}
+                }
+            }),
+        )
+        .as_bytes(),
+    )?;
+    let (_, execute_response) = read_rpc_response(&mut stdout, 1)?;
+    assert_eq!(execute_response["error"]["data"]["code"], "POLICY_DENIED");
+    let execution_id = execute_response["error"]["data"]["execution_id"]
+        .as_str()
+        .context("policy denial response must include execution_id")?
+        .to_string();
+
+    stdin.write_all(
+        rpc_request_with_id(2, "getExecution", json!({ "execution_id": execution_id })).as_bytes(),
+    )?;
+    let (_, get_response) = read_rpc_response(&mut stdout, 2)?;
+    assert_eq!(get_response["result"]["execution_id"], execution_id);
+    assert_eq!(get_response["result"]["status"], "denied");
+    assert_eq!(get_response["result"]["error"]["code"], "POLICY_DENIED");
+
+    stdin.write_all(
+        rpc_request_with_id(
+            3,
+            "subscribeEvents",
+            json!({ "execution_id": execution_id, "types": ["policy.*"] }),
+        )
+        .as_bytes(),
+    )?;
+    let (subscription_events, subscribe_response) = read_rpc_response(&mut stdout, 3)?;
+    assert_eq!(subscribe_response["result"]["event_count"], 1);
+    assert!(
+        subscription_events
+            .iter()
+            .any(|event| event["params"]["type"] == "policy.denied")
+    );
+
+    drop(stdin);
+    let status = child.wait().context("failed to wait for runseal service")?;
+    assert!(status.success());
+    Ok(())
+}
+
 fn read_rpc_response(
     stdout: &mut BufReader<impl std::io::Read>,
     id: u64,
