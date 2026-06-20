@@ -701,6 +701,26 @@ fn service_stdio_keeps_completed_execution_state() -> Result<()> {
     assert!(
         execute_events
             .iter()
+            .any(|event| event["params"]["type"] == "execution.requested")
+    );
+    assert!(
+        execute_events
+            .iter()
+            .any(|event| event["params"]["type"] == "policy.resolved")
+    );
+    assert!(
+        execute_events
+            .iter()
+            .any(|event| event["params"]["type"] == "policy.allowed")
+    );
+    assert!(
+        execute_events
+            .iter()
+            .any(|event| event["params"]["type"] == "execution.resource.sample")
+    );
+    assert!(
+        execute_events
+            .iter()
             .any(|event| event["params"]["type"] == "execution.finished")
     );
 
