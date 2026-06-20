@@ -1445,22 +1445,33 @@ fn service_stdio_keeps_completed_execution_state() -> Result<()> {
     assert_eq!(dispose_response["result"]["status"], "disposed");
     assert_eq!(dispose_response["result"]["released_executions"], 0);
 
+    stdin.write_all(rpc_request_with_id(6, "listExecutions", json!({})).as_bytes())?;
+    let (_, list_response) = read_rpc_response(&mut stdout, 6)?;
+    let summaries = list_response["result"]["executions"]
+        .as_array()
+        .context("executions must be an array")?;
+    let summary = summaries
+        .iter()
+        .find(|summary| summary["execution_id"] == execution_id)
+        .context("disposed session execution summary must remain queryable")?;
+    assert_eq!(summary["status"], "finished");
+
     stdin.write_all(
-        rpc_request_with_id(6, "getExecution", json!({ "execution_id": execution_id })).as_bytes(),
+        rpc_request_with_id(7, "getExecution", json!({ "execution_id": execution_id })).as_bytes(),
     )?;
-    let (_, retained_response) = read_rpc_response(&mut stdout, 6)?;
+    let (_, retained_response) = read_rpc_response(&mut stdout, 7)?;
     assert_eq!(retained_response["result"]["execution_id"], execution_id);
     assert_eq!(retained_response["result"]["status"], "finished");
 
     stdin.write_all(
         rpc_request_with_id(
-            7,
+            8,
             "getAuditEvents",
             json!({ "execution_id": execution_id, "types": ["execution.finished"] }),
         )
         .as_bytes(),
     )?;
-    let (_, audit_response) = read_rpc_response(&mut stdout, 7)?;
+    let (_, audit_response) = read_rpc_response(&mut stdout, 8)?;
     assert_eq!(audit_response["result"]["count"], 1);
 
     drop(stdin);
