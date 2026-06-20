@@ -3137,6 +3137,34 @@ fn execute_rejects_unsupported_request_fields() -> Result<()> {
 }
 
 #[test]
+fn execute_rejects_string_command_without_shell_interpretation() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let output = run_rpc(&rpc_request(
+        "execute",
+        json!({
+            "command": format!("{} -c \"print('must not run')\"", python_bin()),
+            "cwd": tmp.path(),
+            "policy": "danger-full-access"
+        }),
+    ))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = &messages[0];
+
+    assert_eq!(response["error"]["data"]["code"], "INVALID_REQUEST");
+    assert_eq!(
+        response["error"]["data"]["reason"],
+        "params.command must be an array"
+    );
+    Ok(())
+}
+
+#[test]
 fn execute_accepts_non_secret_env_and_audits_keys_only() -> Result<()> {
     let tmp = TempDir::new()?;
     let output = run_rpc(&rpc_request(
