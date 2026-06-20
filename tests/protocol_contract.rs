@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 #[cfg(windows)]
 use std::sync::{Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tempfile::TempDir;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
@@ -1840,6 +1840,102 @@ fn service_stdio_keeps_completed_execution_state() -> Result<()> {
             && (event["type"] != "execution.stdout"
                 || (event.get("data").is_none() && event.get("text").is_none()))
     }));
+
+    drop(stdin);
+    let status = child.wait().context("failed to wait for runseal service")?;
+    assert!(status.success());
+    Ok(())
+}
+
+#[test]
+fn service_stdio_cancels_running_execution() -> Result<()> {
+    #[cfg(windows)]
+    let _guard = windows_protocol_lock()?;
+
+    let tmp = TempDir::new()?;
+    let mut child = Command::new(require_runseal_bin()?)
+        .args(["service", "--stdio"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to spawn runseal service")?;
+    let mut stdin = child.stdin.take().context("stdin unavailable")?;
+    let stdout = child.stdout.take().context("stdout unavailable")?;
+    let mut stdout = BufReader::new(stdout);
+
+    stdin.write_all(
+        rpc_request_with_id(
+            1,
+            "execute",
+            json!({
+                "command": [python_bin(), "-c", "import time; time.sleep(5)"],
+                "cwd": tmp.path(),
+                "policy": "danger-full-access",
+            }),
+        )
+        .as_bytes(),
+    )?;
+    stdin.flush()?;
+
+    let started = Instant::now();
+    let execution_id = loop {
+        if started.elapsed() > Duration::from_secs(3) {
+            bail!("runseal service did not report a running execution");
+        }
+        stdin.write_all(rpc_request_with_id(2, "listExecutions", json!({})).as_bytes())?;
+        stdin.flush()?;
+        let (_, list_response) = read_rpc_response(&mut stdout, 2)?;
+        let executions = list_response["result"]["executions"]
+            .as_array()
+            .context("executions must be an array")?;
+        if let Some(summary) = executions
+            .iter()
+            .find(|summary| summary["status"] == "running")
+        {
+            break summary["execution_id"]
+                .as_str()
+                .context("running summary must include execution_id")?
+                .to_string();
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    };
+
+    stdin.write_all(
+        rpc_request_with_id(3, "getExecution", json!({ "execution_id": execution_id })).as_bytes(),
+    )?;
+    let (_, running_response) = read_rpc_response(&mut stdout, 3)?;
+    assert_eq!(running_response["result"]["execution_id"], execution_id);
+    assert_eq!(running_response["result"]["status"], "running");
+
+    stdin.write_all(
+        rpc_request_with_id(
+            4,
+            "cancelExecution",
+            json!({ "execution_id": execution_id, "reason": "test" }),
+        )
+        .as_bytes(),
+    )?;
+    let (_, cancel_response) = read_rpc_response(&mut stdout, 4)?;
+    assert_eq!(cancel_response["result"]["execution_id"], execution_id);
+    assert_eq!(cancel_response["result"]["status"], "cancelling");
+
+    let (cancel_events, execute_response) = read_rpc_response(&mut stdout, 1)?;
+    assert_eq!(
+        execute_response["error"]["data"]["code"],
+        "EXECUTION_CANCELLED"
+    );
+    assert!(
+        cancel_events
+            .iter()
+            .any(|event| event["params"]["type"] == "execution.cancelled")
+    );
+
+    stdin.write_all(
+        rpc_request_with_id(5, "getExecution", json!({ "execution_id": execution_id })).as_bytes(),
+    )?;
+    let (_, final_response) = read_rpc_response(&mut stdout, 5)?;
+    assert_eq!(final_response["result"]["status"], "cancelled");
 
     drop(stdin);
     let status = child.wait().context("failed to wait for runseal service")?;

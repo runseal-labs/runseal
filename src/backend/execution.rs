@@ -5,5 +5,6 @@ use std::process::Output;
 pub struct BackendExecutionOutput {
     pub output: Output,
     pub timed_out: bool,
+    pub cancelled: bool,
     pub events: Vec<Value>,
 }

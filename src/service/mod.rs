@@ -1,17 +1,22 @@
+use crate::backend::{SandboxBackend, active_backend};
 use crate::control;
 use crate::error::RunSealError;
-use crate::events::new_execution_ids;
-use crate::execution::{audit_stream_event_metadata, execute_command_with_ids};
+use crate::events::{ExecutionIds, new_execution_ids, timestamp_now};
+use crate::execution::{
+    ExecutionCancellation, audit_stream_event_metadata, execute_command_with_ids,
+};
 use crate::rpc;
 use crate::setup::windows_sandbox_setup_status_for_cwd;
 use request_validation::{
-    audit_events_params, cancel_execution_id_from_params, execute_request_from_params,
-    explain_policy_request_from_params, get_execution_id_from_params, session_id_from_params,
-    setup_status_cwd_from_params, subscribe_events_params, tail_audit_params,
-    validate_empty_params,
+    ExecuteRequest, audit_events_params, cancel_execution_id_from_params,
+    execute_request_from_params, explain_policy_request_from_params, get_execution_id_from_params,
+    session_id_from_params, setup_status_cwd_from_params, subscribe_events_params,
+    tail_audit_params, validate_empty_params,
 };
 use serde_json::{Value, json};
 use state::ServiceState;
+use std::sync::mpsc::Sender;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 mod event_bus;
 mod executions;
@@ -19,9 +24,9 @@ mod request_validation;
 mod sessions;
 mod state;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct Service {
-    state: ServiceState,
+    state: Arc<Mutex<ServiceState>>,
     mode: ServiceMode,
 }
 
@@ -35,7 +40,7 @@ enum ServiceMode {
 impl Service {
     pub(crate) fn direct() -> Self {
         Self {
-            state: ServiceState::default(),
+            state: Arc::new(Mutex::new(ServiceState::default())),
             mode: ServiceMode::Direct,
         }
     }
@@ -44,7 +49,15 @@ impl Service {
         Self::default()
     }
 
-    pub(crate) fn handle_rpc_request(&mut self, request: &Value) -> Vec<Value> {
+    pub(crate) fn handle_rpc_request(&self, request: &Value) -> Vec<Value> {
+        self.handle_rpc_request_with_sender(request, None)
+    }
+
+    pub(crate) fn handle_rpc_request_with_sender(
+        &self,
+        request: &Value,
+        sender: Option<Sender<Vec<Value>>>,
+    ) -> Vec<Value> {
         if request
             .as_object()
             .is_some_and(|object| !object.contains_key("id"))
@@ -90,7 +103,7 @@ impl Service {
                     Err(err) => vec![rpc::error(id, RunSealError::new("INTERNAL_ERROR", err))],
                 }
             }
-            "execute" => self.execute(id, &params),
+            "execute" => self.execute(id, &params, sender),
             "getExecution" => self.get_execution(id, &params),
             "listExecutions" => match validate_empty_params(&params, "listExecutions") {
                 Ok(()) => vec![rpc::result(id, self.list_executions())],
@@ -117,7 +130,19 @@ impl Service {
         })
     }
 
-    fn execute(&mut self, id: Value, params: &Value) -> Vec<Value> {
+    fn state(&self) -> MutexGuard<'_, ServiceState> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn execute(&self, id: Value, params: &Value, sender: Option<Sender<Vec<Value>>>) -> Vec<Value> {
+        if matches!(self.mode, ServiceMode::Service)
+            && let Some(sender) = sender
+        {
+            return self.execute_async(id, params, sender);
+        }
+
         let result = execute_request_from_params(params).and_then(|request| {
             let ids = new_execution_ids();
             execute_command_with_ids(
@@ -132,9 +157,48 @@ impl Service {
                 None,
             )
         });
+        self.record_execute_result(id, result)
+    }
+
+    fn execute_async(&self, id: Value, params: &Value, sender: Sender<Vec<Value>>) -> Vec<Value> {
+        let request = match execute_request_from_params(params) {
+            Ok(request) => request,
+            Err(err) => return vec![rpc::error(id, err)],
+        };
+        let ids = new_execution_ids();
+        let cancellation = ExecutionCancellation::default();
+        self.state().record_running_execution(
+            running_execution_result(&ids, &request),
+            cancellation.clone(),
+        );
+
+        let service = self.clone();
+        std::thread::spawn(move || {
+            let result = execute_command_with_ids(
+                ids,
+                &request.command,
+                &request.cwd,
+                &request.policy,
+                request.stdin,
+                request.env,
+                request.metadata,
+                request.timeout,
+                Some(cancellation),
+            );
+            let _ = sender.send(service.record_execute_result(id, result));
+        });
+
+        Vec::new()
+    }
+
+    fn record_execute_result(
+        &self,
+        id: Value,
+        result: Result<(Vec<Value>, Value), RunSealError>,
+    ) -> Vec<Value> {
         match result {
             Ok((events, result)) => {
-                self.state.record_finished_execution(&result, &events);
+                self.state().record_finished_execution(&result, &events);
                 let mut messages: Vec<Value> = events
                     .into_iter()
                     .map(|event| json!({"jsonrpc": "2.0", "method": "event", "params": event}))
@@ -144,7 +208,7 @@ impl Service {
             }
             Err(err) => {
                 let events = err.events.clone();
-                self.state.record_failed_execution(&err);
+                self.state().record_failed_execution(&err);
                 let mut messages: Vec<Value> = events
                     .into_iter()
                     .map(|event| json!({"jsonrpc": "2.0", "method": "event", "params": event}))
@@ -160,14 +224,14 @@ impl Service {
             Ok(execution_id) => execution_id,
             Err(err) => return vec![rpc::error(id, err)],
         };
-        match self.state.execution_result(&execution_id) {
+        match self.state().execution_result(&execution_id) {
             Some(result) => vec![rpc::result(id, result)],
             None => vec![rpc::error(id, execution_not_found(&execution_id))],
         }
     }
 
     fn list_executions(&self) -> Value {
-        let executions = self.state.execution_summaries();
+        let executions = self.state().execution_summaries();
         json!({
             "count": executions.len(),
             "executions": executions,
@@ -179,7 +243,16 @@ impl Service {
             Ok(execution_id) => execution_id,
             Err(err) => return vec![rpc::error(id, err)],
         };
-        match self.state.execution_result(&execution_id) {
+        if let Some(result) = self.state().cancel_active_execution(&execution_id) {
+            return vec![rpc::result(
+                id,
+                json!({
+                    "execution_id": execution_id,
+                    "status": result.get("status").cloned().unwrap_or_else(|| json!("cancelling")),
+                }),
+            )];
+        }
+        match self.state().execution_result(&execution_id) {
             Some(result) => vec![rpc::error(id, execution_not_cancellable(&result))],
             None => vec![rpc::error(id, execution_not_found(&execution_id))],
         }
@@ -190,7 +263,7 @@ impl Service {
             Ok(params) => params,
             Err(err) => return vec![rpc::error(id, err)],
         };
-        let Some(events) = self.state.execution_events(&execution_id, &types) else {
+        let Some(events) = self.state().execution_events(&execution_id, &types) else {
             return vec![rpc::error(id, execution_not_found(&execution_id))];
         };
         let event_count = events.len();
@@ -214,7 +287,7 @@ impl Service {
             Ok(params) => params,
             Err(err) => return vec![rpc::error(id, err)],
         };
-        let Some(events) = self.state.execution_events(&execution_id, &types) else {
+        let Some(events) = self.state().execution_events(&execution_id, &types) else {
             return vec![rpc::error(id, execution_not_found(&execution_id))];
         };
         let events = audit_event_metadata(events);
@@ -233,7 +306,7 @@ impl Service {
             Ok(types) => types,
             Err(err) => return vec![rpc::error(id, err)],
         };
-        let events = audit_event_metadata(self.state.audit_tail(&types));
+        let events = audit_event_metadata(self.state().audit_tail(&types));
         vec![rpc::result(
             id,
             json!({
@@ -243,12 +316,12 @@ impl Service {
         )]
     }
 
-    fn dispose_session(&mut self, id: Value, params: &Value) -> Vec<Value> {
+    fn dispose_session(&self, id: Value, params: &Value) -> Vec<Value> {
         let session_id = match session_id_from_params(params) {
             Ok(session_id) => session_id,
             Err(err) => return vec![rpc::error(id, err)],
         };
-        let released_sessions = usize::from(self.state.dispose_session(&session_id));
+        let released_sessions = usize::from(self.state().dispose_session(&session_id));
         vec![rpc::result(
             id,
             json!({
@@ -267,6 +340,27 @@ fn execution_not_found(execution_id: &str) -> RunSealError {
         format!("execution not found: {execution_id}"),
         json!({ "execution_id": execution_id }),
     )
+}
+
+fn running_execution_result(ids: &ExecutionIds, request: &ExecuteRequest) -> Value {
+    let policy_hash = request.policy.hash();
+    let backend = active_backend();
+    json!({
+        "execution_id": ids.execution_id,
+        "session_id": ids.session_id,
+        "seal_id": ids.seal_id,
+        "status": "running",
+        "policy_id": request.policy.id.clone(),
+        "policy_hash": policy_hash,
+        "policy_epoch": policy_hash,
+        "audit_path": format!(".runseal/audit/{}.jsonl", ids.session_id),
+        "started_at": timestamp_now(),
+        "backend": {
+            "name": backend.name(),
+            "status": backend.status(),
+            "platform": backend.platform(),
+        },
+    })
 }
 
 fn audit_event_metadata(events: Vec<Value>) -> Vec<Value> {

@@ -1,5 +1,6 @@
 use crate::error::RunSealError;
 use crate::events::timestamp_now;
+use crate::execution::ExecutionCancellation;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
@@ -8,6 +9,7 @@ use super::event_bus::filter_events;
 #[derive(Default)]
 pub(super) struct ExecutionStore {
     records: BTreeMap<String, ExecutionRecord>,
+    active: BTreeMap<String, ActiveExecution>,
     record_order: Vec<String>,
 }
 
@@ -16,7 +18,40 @@ struct ExecutionRecord {
     events: Vec<Value>,
 }
 
+struct ActiveExecution {
+    result: Value,
+    events: Vec<Value>,
+    cancellation: ExecutionCancellation,
+}
+
 impl ExecutionStore {
+    pub(super) fn record_running(
+        &mut self,
+        result: Value,
+        cancellation: ExecutionCancellation,
+    ) -> Option<String> {
+        let (Some(execution_id), Some(session_id)) = (
+            result.get("execution_id").and_then(Value::as_str),
+            result.get("session_id").and_then(Value::as_str),
+        ) else {
+            return None;
+        };
+        let execution_id = execution_id.to_string();
+        let session_id = session_id.to_string();
+        if !self.records.contains_key(&execution_id) && !self.active.contains_key(&execution_id) {
+            self.record_order.push(execution_id.clone());
+        }
+        self.active.insert(
+            execution_id,
+            ActiveExecution {
+                result,
+                events: Vec::new(),
+                cancellation,
+            },
+        );
+        Some(session_id)
+    }
+
     pub(super) fn record_finished(&mut self, result: &Value, events: &[Value]) -> Option<String> {
         let (Some(execution_id), Some(session_id)) = (
             result.get("execution_id").and_then(Value::as_str),
@@ -37,6 +72,7 @@ impl ExecutionStore {
                 events: events.to_vec(),
             },
         );
+        self.active.remove(execution_id);
         Some(session_id.to_string())
     }
 
@@ -96,39 +132,69 @@ impl ExecutionStore {
             }
         }
         self.insert_record(execution_id, ExecutionRecord { result, events });
+        self.active.remove(execution_id);
         Some(session_id.to_string())
     }
 
     pub(super) fn result(&self, execution_id: &str) -> Option<Value> {
-        self.records
+        self.active
             .get(execution_id)
             .map(|record| record.result.clone())
+            .or_else(|| {
+                self.records
+                    .get(execution_id)
+                    .map(|record| record.result.clone())
+            })
     }
 
     pub(super) fn summaries(&self) -> Vec<Value> {
         self.record_order
             .iter()
-            .filter_map(|execution_id| self.records.get(execution_id))
-            .map(|record| execution_summary(&record.result))
+            .filter_map(|execution_id| {
+                self.active
+                    .get(execution_id)
+                    .map(|record| &record.result)
+                    .or_else(|| self.records.get(execution_id).map(|record| &record.result))
+            })
+            .map(execution_summary)
             .collect()
     }
 
     pub(super) fn events(&self, execution_id: &str, types: &[String]) -> Option<Vec<Value>> {
-        self.records
+        self.active
             .get(execution_id)
             .map(|record| filter_events(&record.events, types))
+            .or_else(|| {
+                self.records
+                    .get(execution_id)
+                    .map(|record| filter_events(&record.events, types))
+            })
     }
 
     pub(super) fn all_events(&self, types: &[String]) -> Vec<Value> {
         self.record_order
             .iter()
-            .filter_map(|execution_id| self.records.get(execution_id))
-            .flat_map(|record| filter_events(&record.events, types))
+            .filter_map(|execution_id| {
+                self.active
+                    .get(execution_id)
+                    .map(|record| &record.events)
+                    .or_else(|| self.records.get(execution_id).map(|record| &record.events))
+            })
+            .flat_map(|events| filter_events(events, types))
             .collect()
     }
 
+    pub(super) fn cancel_active(&mut self, execution_id: &str) -> Option<Value> {
+        let active = self.active.get_mut(execution_id)?;
+        active.cancellation.cancel();
+        if let Some(result) = active.result.as_object_mut() {
+            result.insert("status".to_string(), json!("cancelling"));
+        }
+        Some(active.result.clone())
+    }
+
     fn insert_record(&mut self, execution_id: &str, record: ExecutionRecord) {
-        if !self.records.contains_key(execution_id) {
+        if !self.records.contains_key(execution_id) && !self.active.contains_key(execution_id) {
             self.record_order.push(execution_id.to_string());
         }
         self.records.insert(execution_id.to_string(), record);
@@ -184,6 +250,7 @@ fn terminal_time(events: &[Value]) -> Option<Value> {
                 Some(
                     "execution.finished"
                         | "execution.failed"
+                        | "execution.cancelled"
                         | "policy.denied"
                         | "policy.requires_approval"
                         | "sandbox.backend_capability"
@@ -199,6 +266,7 @@ fn terminal_time(events: &[Value]) -> Option<Value> {
 fn error_status(err: &RunSealError) -> &'static str {
     match err.code.as_str() {
         "APPROVAL_REQUIRED" | "POLICY_DENIED" => "denied",
+        "EXECUTION_CANCELLED" => "cancelled",
         _ => "failed",
     }
 }
@@ -211,6 +279,7 @@ fn error_event(execution_id: &str, session_id: &str, err: &RunSealError, details
             err.reason.as_str(),
         ),
         "POLICY_DENIED" => ("policy.denied", "denied", err.reason.as_str()),
+        "EXECUTION_CANCELLED" => ("execution.cancelled", "cancelled", "execution cancelled"),
         "EXECUTION_FAILED_TO_START" => ("execution.failed", "failed", "execution failed to start"),
         _ => ("execution.failed", "failed", err.reason.as_str()),
     };

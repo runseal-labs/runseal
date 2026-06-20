@@ -1,4 +1,5 @@
 use crate::error::RunSealError;
+use crate::execution::ExecutionCancellation;
 use serde_json::Value;
 
 use super::executions::ExecutionStore;
@@ -11,6 +12,16 @@ pub(super) struct ServiceState {
 }
 
 impl ServiceState {
+    pub(super) fn record_running_execution(
+        &mut self,
+        result: Value,
+        cancellation: ExecutionCancellation,
+    ) {
+        if let Some(session_id) = self.executions.record_running(result, cancellation) {
+            self.sessions.record(session_id);
+        }
+    }
+
     pub(super) fn record_finished_execution(&mut self, result: &Value, events: &[Value]) {
         if let Some(session_id) = self.executions.record_finished(result, events) {
             self.sessions.record(session_id);
@@ -45,5 +56,9 @@ impl ServiceState {
 
     pub(super) fn dispose_session(&mut self, session_id: &str) -> bool {
         self.sessions.dispose(session_id)
+    }
+
+    pub(super) fn cancel_active_execution(&mut self, execution_id: &str) -> Option<Value> {
+        self.executions.cancel_active(execution_id)
     }
 }

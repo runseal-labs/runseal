@@ -21,7 +21,6 @@ pub(crate) struct ExecutionCancellation {
 }
 
 impl ExecutionCancellation {
-    #[allow(dead_code)] // ponytail: service active cancel wires this in the next slice.
     pub(crate) fn cancel(&self) {
         self.cancelled
             .store(true, std::sync::atomic::Ordering::SeqCst);

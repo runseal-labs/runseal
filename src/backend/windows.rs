@@ -394,6 +394,7 @@ pub(super) fn execute_windows_sandbox_plan(
             stderr: capture.stderr,
         },
         timed_out: capture.timed_out,
+        cancelled: false,
         events,
     })
 }

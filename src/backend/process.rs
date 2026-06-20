@@ -68,7 +68,7 @@ pub(super) fn spawn_local_command(
         }
     };
 
-    let (status, timed_out) = wait_child(&mut child, timeout, cancellation.as_ref())?;
+    let (status, timed_out, cancelled) = wait_child(&mut child, timeout, cancellation.as_ref())?;
     if !timed_out
         && !cancellation
             .as_ref()
@@ -85,6 +85,7 @@ pub(super) fn spawn_local_command(
             stderr: join_pipe_reader(stderr_reader)?,
         },
         timed_out,
+        cancelled,
         events: Vec::new(),
     })
 }
@@ -109,11 +110,11 @@ fn wait_child(
     child: &mut Child,
     timeout: Option<Duration>,
     cancellation: Option<&ExecutionCancellation>,
-) -> io::Result<(ExitStatus, bool)> {
+) -> io::Result<(ExitStatus, bool, bool)> {
     let start = Instant::now();
     loop {
         if let Some(status) = child.try_wait()? {
-            return Ok((status, false));
+            return Ok((status, false, false));
         }
 
         if cancellation.is_some_and(ExecutionCancellation::is_cancelled) {
@@ -122,7 +123,7 @@ fn wait_child(
             {
                 return Err(err);
             }
-            return child.wait().map(|status| (status, false));
+            return child.wait().map(|status| (status, false, true));
         }
 
         if timeout.is_some_and(|timeout| start.elapsed() >= timeout) {
@@ -131,7 +132,7 @@ fn wait_child(
             {
                 return Err(err);
             }
-            return child.wait().map(|status| (status, true));
+            return child.wait().map(|status| (status, true, false));
         }
 
         let sleep = timeout

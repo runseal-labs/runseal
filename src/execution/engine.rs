@@ -537,6 +537,50 @@ pub(crate) fn execute_command_with_ids(
         )
         .with_events(events));
     }
+    if execution_output.cancelled {
+        let cancelled = execution_event_now(
+            json!({
+                "type": "execution.cancelled",
+                "execution_id": ids.execution_id,
+                "policy_id": policy_id,
+                "policy_hash": policy_hash,
+                "audit_path": audit_path,
+                "status": "cancelled",
+                "reason": "execution cancelled",
+                "stdout_bytes": output.stdout.len(),
+                "stderr_bytes": output.stderr.len(),
+                "output_truncated": output_truncated,
+                "duration_ms": duration_ms,
+            }),
+            &event_context,
+        );
+        write_audit_event_with_metadata(&mut audit, &cancelled, &metadata)?;
+        events.push(cancelled);
+
+        return Err(RunSealError::with_details(
+            "EXECUTION_CANCELLED",
+            "execution cancelled",
+            json!({
+                "execution_id": ids.execution_id,
+                "session_id": ids.session_id,
+                "seal_id": ids.seal_id,
+                "policy_id": policy_id,
+                "policy_hash": policy_hash,
+                "policy_epoch": policy_epoch,
+                "audit_path": audit_path,
+                "backend": {
+                    "name": plan.backend,
+                    "status": plan.backend_status,
+                    "platform": plan.platform,
+                },
+                "platform_plan": plan.json(),
+                "stdout_bytes": output.stdout.len(),
+                "stderr_bytes": output.stderr.len(),
+                "output_truncated": output_truncated,
+            }),
+        )
+        .with_events(events));
+    }
     if !output.stdout.is_empty() {
         let event = stream_event("execution.stdout", &event_context, &output.stdout, 0);
         let audit_event = audit_stream_event_metadata(&event);
