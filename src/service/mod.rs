@@ -21,6 +21,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 mod event_bus;
 mod executions;
+mod policy_epoch;
 mod request_validation;
 mod sessions;
 mod state;
@@ -172,9 +173,10 @@ impl Service {
             Err(err) => return vec![rpc::error(id, err)],
         };
         let ids = new_execution_ids();
+        let policy_epoch = self.state().bind_policy_epoch(&request.policy);
         let cancellation = ExecutionCancellation::default();
         self.state().record_running_execution(
-            running_execution_result(&ids, &request),
+            running_execution_result(&ids, &request, &policy_epoch),
             cancellation.clone(),
         );
 
@@ -365,7 +367,11 @@ fn execution_not_found(execution_id: &str) -> RunSealError {
     )
 }
 
-fn running_execution_result(ids: &ExecutionIds, request: &ExecuteRequest) -> Value {
+fn running_execution_result(
+    ids: &ExecutionIds,
+    request: &ExecuteRequest,
+    policy_epoch: &str,
+) -> Value {
     let policy_hash = request.policy.hash();
     let backend = active_backend();
     json!({
@@ -375,7 +381,7 @@ fn running_execution_result(ids: &ExecutionIds, request: &ExecuteRequest) -> Val
         "status": "running",
         "policy_id": request.policy.id.clone(),
         "policy_hash": policy_hash,
-        "policy_epoch": policy_hash,
+        "policy_epoch": policy_epoch,
         "audit_path": format!(".runseal/audit/{}.jsonl", ids.session_id),
         "started_at": timestamp_now(),
         "backend": {

@@ -5,16 +5,23 @@ use std::sync::mpsc::Sender;
 
 use super::event_bus::EventBus;
 use super::executions::ExecutionStore;
+use super::policy_epoch::PolicyEpochRuntime;
 use super::sessions::SessionStore;
+use crate::policy::SandboxPolicy;
 
 #[derive(Default)]
 pub(super) struct ServiceState {
     executions: ExecutionStore,
     event_bus: EventBus,
+    policy_epoch: PolicyEpochRuntime,
     sessions: SessionStore,
 }
 
 impl ServiceState {
+    pub(super) fn bind_policy_epoch(&mut self, policy: &SandboxPolicy) -> String {
+        self.policy_epoch.bind(policy)
+    }
+
     pub(super) fn record_running_execution(
         &mut self,
         result: Value,
