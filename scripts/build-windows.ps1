@@ -20,8 +20,8 @@ function Copy-BuiltBinary {
 
     $destination = Join-Path $RootTarget $Name
     $candidates = @(
-        (Join-Path $RootTarget $Name),
-        (Join-Path $VendorTarget $Name)
+        (Join-Path $VendorTarget $Name),
+        (Join-Path $RootTarget $Name)
     )
     $source = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
     if (-not $source) {
