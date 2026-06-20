@@ -1538,6 +1538,8 @@ fn service_stdio_keeps_completed_execution_state() -> Result<()> {
     let _guard = windows_protocol_lock()?;
 
     let tmp = TempDir::new()?;
+    let stdin_secret = "service-stdin-secret";
+    let stdin_encoded = STANDARD.encode(stdin_secret.as_bytes());
     let mut child = Command::new(require_runseal_bin()?)
         .args(["service", "--stdio"])
         .stdin(Stdio::piped())
@@ -1554,9 +1556,14 @@ fn service_stdio_keeps_completed_execution_state() -> Result<()> {
             1,
             "execute",
             json!({
-                "command": [python_bin(), "-c", "print('service-ok')"],
+                "command": [python_bin(), "-c", "import sys; sys.stdin.buffer.read(); print('service-ok')"],
                 "cwd": tmp.path(),
                 "policy": "danger-full-access",
+                "stdin": {
+                    "mode": "bytes",
+                    "data": format!("base64:{stdin_encoded}"),
+                    "encoding": "base64"
+                },
                 "metadata": {
                     "Authorization": "Bearer service-secret",
                     "safe": "visible"
@@ -1575,6 +1582,8 @@ fn service_stdio_keeps_completed_execution_state() -> Result<()> {
         .context("execute result must include session_id")?
         .to_string();
     assert!(!execute_response.to_string().contains("service-secret"));
+    assert!(!execute_response.to_string().contains(stdin_secret));
+    assert!(!execute_response.to_string().contains(&stdin_encoded));
     assert!(
         execute_events
             .iter()
@@ -1712,6 +1721,8 @@ fn service_stdio_keeps_completed_execution_state() -> Result<()> {
     assert_eq!(summary["status"], "finished");
     assert!(summary.get("metadata").is_none());
     assert!(!summary.to_string().contains("service-secret"));
+    assert!(!summary.to_string().contains(stdin_secret));
+    assert!(!summary.to_string().contains(&stdin_encoded));
 
     stdin.write_all(
         rpc_request_with_id(8, "getExecution", json!({ "execution_id": execution_id })).as_bytes(),
@@ -1725,12 +1736,22 @@ fn service_stdio_keeps_completed_execution_state() -> Result<()> {
             .to_string()
             .contains("service-secret")
     );
+    assert!(
+        !retained_response["result"]
+            .to_string()
+            .contains(stdin_secret)
+    );
+    assert!(
+        !retained_response["result"]
+            .to_string()
+            .contains(&stdin_encoded)
+    );
 
     stdin.write_all(
         rpc_request_with_id(
             9,
             "getAuditEvents",
-            json!({ "execution_id": execution_id, "types": ["execution.finished"] }),
+            json!({ "execution_id": execution_id, "types": ["execution.started"] }),
         )
         .as_bytes(),
     )?;
@@ -1740,6 +1761,20 @@ fn service_stdio_keeps_completed_execution_state() -> Result<()> {
         !audit_response["result"]
             .to_string()
             .contains("service-secret")
+    );
+    assert!(!audit_response["result"].to_string().contains(stdin_secret));
+    assert!(
+        !audit_response["result"]
+            .to_string()
+            .contains(&stdin_encoded)
+    );
+    assert_eq!(
+        audit_response["result"]["events"][0]["stdin"]["mode"],
+        "bytes"
+    );
+    assert_eq!(
+        audit_response["result"]["events"][0]["stdin"]["byte_count"],
+        stdin_secret.len()
     );
     assert!(
         audit_response["result"]["events"]
