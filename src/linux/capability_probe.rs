@@ -14,6 +14,7 @@ pub(crate) fn payload() -> Value {
             "pid_namespace": file_status("/proc/self/ns/pid"),
             "network_namespace": file_status("/proc/self/ns/net"),
             "seccomp": seccomp_status(),
+            "seccomp_mode": seccomp_mode(),
             "landlock": file_status("/sys/kernel/security/landlock"),
             "landlock_abi": landlock_abi(),
             "bubblewrap": path_status("bwrap"),
@@ -65,17 +66,31 @@ fn is_executable_file(path: &Path) -> bool {
 }
 
 fn seccomp_status() -> &'static str {
+    seccomp_mode_value()
+        .map(|mode| if mode > 0 { "available" } else { "unavailable" })
+        .unwrap_or("unavailable")
+}
+
+fn seccomp_mode() -> Value {
+    let mode = seccomp_mode_value();
+    json!({
+        "status": mode.map(|_| "available").unwrap_or("unavailable"),
+        "mode": mode,
+    })
+}
+
+fn seccomp_mode_value() -> Option<u64> {
     fs::read_to_string("/proc/self/status")
         .ok()
-        .and_then(|status| {
-            status
-                .lines()
-                .find(|line| line.starts_with("Seccomp:"))
-                .and_then(|line| line.split_once(':'))
-                .and_then(|(_, value)| value.trim().parse::<u64>().ok())
-                .map(|mode| if mode > 0 { "available" } else { "unavailable" })
-        })
-        .unwrap_or("unavailable")
+        .and_then(|status| seccomp_mode_value_from_status(&status))
+}
+
+fn seccomp_mode_value_from_status(status: &str) -> Option<u64> {
+    status
+        .lines()
+        .find(|line| line.starts_with("Seccomp:"))
+        .and_then(|line| line.split_once(':'))
+        .and_then(|(_, value)| value.trim().parse::<u64>().ok())
 }
 
 fn landlock_abi() -> Value {
@@ -126,7 +141,10 @@ fn positive_sysctl(path: &str) -> Option<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::{binary_status_in_paths, unprivileged_user_namespace_status_for};
+    use super::{
+        binary_status_in_paths, seccomp_mode_value_from_status,
+        unprivileged_user_namespace_status_for,
+    };
     use std::fs;
     use tempfile::TempDir;
 
@@ -161,6 +179,15 @@ mod tests {
             "missing",
             [dir.path().to_path_buf()]
         ));
+    }
+
+    #[test]
+    fn seccomp_mode_probe_parses_proc_status() {
+        assert_eq!(
+            seccomp_mode_value_from_status("Name:\ttest\nSeccomp:\t2\n"),
+            Some(2)
+        );
+        assert_eq!(seccomp_mode_value_from_status("Name:\ttest\n"), None);
     }
 
     #[cfg(unix)]

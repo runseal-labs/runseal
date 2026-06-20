@@ -242,6 +242,11 @@ fn assert_portable_capability_probe_contract(payload: &Value) {
                 .as_str()
                 .is_some()
         );
+        assert!(
+            probes["runtime"]["seccomp_mode"]["status"]
+                .as_str()
+                .is_some()
+        );
     }
 
     if cfg!(target_os = "macos") {
