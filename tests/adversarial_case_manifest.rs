@@ -307,6 +307,13 @@ fn adversarial_result_schema_requires_public_skip_reason() -> Result<()> {
     result["passed"] = json!(true);
     result["status"] = json!("failed");
     assert!(validate_result(&result).is_err());
+
+    result["passed"] = json!(false);
+    result["status"] = json!("xfailed");
+    result["backend_status"] = json!("reference");
+    assert!(validate_result(&result).is_err());
+    result["backend_status"] = json!("experimental");
+    validate_result(&result)?;
     Ok(())
 }
 
@@ -551,6 +558,9 @@ fn validate_result(result: &Value) -> Result<()> {
     }
     if status != "skipped" && skipped {
         bail!("non-skipped adversarial status must not set skipped=true");
+    }
+    if status == "xfailed" && required_string(result, "backend_status", path)? != "experimental" {
+        bail!("xfailed adversarial results require experimental backend status");
     }
     if skipped && result.get("skip_reason").and_then(Value::as_str).is_none() {
         bail!("skipped adversarial results must include skip_reason");
