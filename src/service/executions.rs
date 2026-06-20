@@ -237,7 +237,9 @@ fn error_event(execution_id: &str, session_id: &str, err: &RunSealError, details
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::ExecutionStore;
+    use crate::error::RunSealError;
+    use serde_json::{Value, json};
 
     fn finished_result(execution_id: &str, session_id: &str) -> Value {
         json!({
