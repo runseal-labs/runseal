@@ -5,6 +5,7 @@ const CONTROL_FEATURES: &[BackendFeature] = &[
     BackendFeature::SetupReadiness,
     BackendFeature::StdinBytes,
     BackendFeature::StdinFile,
+    BackendFeature::AuditJsonl,
 ];
 
 #[derive(Clone, Copy, Debug, Default)]

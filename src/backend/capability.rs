@@ -94,7 +94,7 @@ pub(super) fn capabilities_json_for(backend: &dyn SandboxBackend, notes: &[&'sta
             "stdin_bytes": supported_features.contains(&BackendFeature::StdinBytes),
             "stdin_file": supported_features.contains(&BackendFeature::StdinFile),
             "resource_limits": supported_features.contains(&BackendFeature::ResourceLimits),
-            "audit_jsonl": true,
+            "audit_jsonl": supported_features.contains(&BackendFeature::AuditJsonl),
             "otel_export": false,
         },
         "sandbox_levels": {

@@ -78,6 +78,7 @@ pub enum BackendFeature {
     SetupReadiness,
     StdinBytes,
     StdinFile,
+    AuditJsonl,
     ResourceLimits,
 }
 
@@ -97,6 +98,7 @@ impl BackendFeature {
             Self::SetupReadiness => "setup_readiness",
             Self::StdinBytes => "stdin_bytes",
             Self::StdinFile => "stdin_file",
+            Self::AuditJsonl => "audit_jsonl",
             Self::ResourceLimits => "resource_limits",
         }
     }

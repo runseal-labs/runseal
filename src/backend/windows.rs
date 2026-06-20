@@ -150,6 +150,7 @@ const WINDOWS_REFERENCE_SUPPORTED_FEATURES: &[BackendFeature] = &[
     BackendFeature::SetupReadiness,
     BackendFeature::StdinBytes,
     BackendFeature::StdinFile,
+    BackendFeature::AuditJsonl,
 ];
 
 #[cfg(not(windows))]
@@ -160,6 +161,7 @@ const WINDOWS_REFERENCE_SUPPORTED_FEATURES: &[BackendFeature] = &[
     BackendFeature::SetupReadiness,
     BackendFeature::StdinBytes,
     BackendFeature::StdinFile,
+    BackendFeature::AuditJsonl,
 ];
 
 impl SandboxBackend for WindowsReferenceBackend {

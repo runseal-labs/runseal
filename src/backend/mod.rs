@@ -414,6 +414,7 @@ mod tests {
                 BackendFeature::SetupReadiness,
                 BackendFeature::StdinBytes,
                 BackendFeature::StdinFile,
+                BackendFeature::AuditJsonl,
             ]
         } else {
             &[
@@ -423,6 +424,7 @@ mod tests {
                 BackendFeature::SetupReadiness,
                 BackendFeature::StdinBytes,
                 BackendFeature::StdinFile,
+                BackendFeature::AuditJsonl,
             ]
         }
     }
@@ -573,6 +575,7 @@ mod tests {
         assert_eq!(capabilities["features"]["process_isolation"], false);
         assert_eq!(capabilities["features"]["stdin_bytes"], true);
         assert_eq!(capabilities["features"]["stdin_file"], true);
+        assert_eq!(capabilities["features"]["audit_jsonl"], true);
         assert!(
             capabilities["capability_probes"]["runtime"]["user_namespace"]
                 .as_str()
@@ -611,6 +614,7 @@ mod tests {
         assert_eq!(capabilities["features"]["process_isolation"], false);
         assert_eq!(capabilities["features"]["stdin_bytes"], true);
         assert_eq!(capabilities["features"]["stdin_file"], true);
+        assert_eq!(capabilities["features"]["audit_jsonl"], true);
         assert!(
             capabilities["capability_probes"]["runtime"]["sandbox_exec"]
                 .as_str()
