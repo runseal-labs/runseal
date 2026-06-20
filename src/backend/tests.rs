@@ -664,6 +664,14 @@ fn macos_skeleton_reports_experimental_track_without_sandbox_features() {
             .as_str()
             .is_some()
     );
+    for key in ["os_version", "canonical_path_model", "symlink_path_model"] {
+        assert!(
+            capabilities["capability_probes"]["runtime"][key]
+                .as_str()
+                .is_some(),
+            "{key}"
+        );
+    }
     let serialized = capabilities.to_string();
     assert!(!serialized.contains("/usr/bin"));
     assert!(!serialized.contains("/usr/libexec"));

@@ -254,6 +254,9 @@ fn assert_portable_capability_probe_contract(payload: &Value) {
     if cfg!(target_os = "macos") {
         assert!(probes["runtime"]["sandbox_exec"].as_str().is_some());
         assert!(probes["runtime"]["sandbox_runtime"].as_str().is_some());
+        for key in ["os_version", "canonical_path_model", "symlink_path_model"] {
+            assert!(probes["runtime"][key].as_str().is_some(), "{key}");
+        }
     }
 }
 

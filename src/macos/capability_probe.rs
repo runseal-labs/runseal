@@ -9,12 +9,48 @@ pub(crate) fn payload() -> Value {
         "runtime": {
             "sandbox_exec": executable_file_status("/usr/bin/sandbox-exec"),
             "sandbox_runtime": executable_file_status("/usr/libexec/sandboxd"),
+            "os_version": macos_version_status(),
+            "canonical_path_model": canonical_path_status(),
+            "symlink_path_model": symlink_path_status(),
         },
     })
 }
 
 fn executable_file_status(path: &str) -> &'static str {
     if is_executable_file(Path::new(path)) {
+        "available"
+    } else {
+        "unavailable"
+    }
+}
+
+fn macos_version_status() -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("sw_vers")
+            .arg("-productVersion")
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|_| "available")
+            .unwrap_or("unavailable")
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        "unavailable"
+    }
+}
+
+fn canonical_path_status() -> &'static str {
+    std::fs::canonicalize(".")
+        .ok()
+        .map(|_| "available")
+        .unwrap_or("unavailable")
+}
+
+fn symlink_path_status() -> &'static str {
+    if cfg!(unix) {
         "available"
     } else {
         "unavailable"
