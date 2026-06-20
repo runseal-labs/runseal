@@ -1844,14 +1844,31 @@ fn service_stdio_retains_backend_capability_failure_events() -> Result<()> {
     }));
 
     stdin.write_all(
+        rpc_request_with_id(2, "getExecution", json!({ "execution_id": execution_id })).as_bytes(),
+    )?;
+    let (_, get_response) = read_rpc_response(&mut stdout, 2)?;
+    assert_eq!(get_response["result"]["status"], "failed");
+    assert_eq!(
+        get_response["result"]["error"]["code"],
+        "BACKEND_CAPABILITY_MISSING"
+    );
+    assert!(
+        get_response["result"]["missing_features"]
+            .as_array()
+            .context("retained missing_features must be an array")?
+            .iter()
+            .any(|feature| feature == "resource_limits")
+    );
+
+    stdin.write_all(
         rpc_request_with_id(
-            2,
+            3,
             "getAuditEvents",
             json!({ "execution_id": execution_id, "types": ["sandbox.*"] }),
         )
         .as_bytes(),
     )?;
-    let (_, audit_response) = read_rpc_response(&mut stdout, 2)?;
+    let (_, audit_response) = read_rpc_response(&mut stdout, 3)?;
     assert_eq!(audit_response["result"]["execution_id"], execution_id);
     assert!(
         audit_response["result"]["events"]
@@ -1867,9 +1884,9 @@ fn service_stdio_retains_backend_capability_failure_events() -> Result<()> {
     );
 
     stdin.write_all(
-        rpc_request_with_id(3, "tailAudit", json!({ "types": ["sandbox.*"] })).as_bytes(),
+        rpc_request_with_id(4, "tailAudit", json!({ "types": ["sandbox.*"] })).as_bytes(),
     )?;
-    let (_, tail_response) = read_rpc_response(&mut stdout, 3)?;
+    let (_, tail_response) = read_rpc_response(&mut stdout, 4)?;
     assert!(
         tail_response["result"]["events"]
             .as_array()
