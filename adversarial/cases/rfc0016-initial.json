@@ -638,6 +638,32 @@
   },
   {
     "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.execution_injection.program-resolution-confusion.v1",
+    "title": "Program resolution must not execute attacker-controlled names",
+    "primary_class": "execution_injection",
+    "secondary_classes": ["filesystem"],
+    "capabilities_under_test": ["filesystem_policy"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "danger-full-access",
+    "network_mode": "disabled",
+    "fixtures": [{"kind": "executable_script", "path": "bin/python"}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('resolved')"],
+      "env": {"PATH": "bin"}
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["event_not_contains_private_detail"]
+    },
+    "public_report_labels": ["protocol_contract"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
     "case_id": "adv.audit.secret-metadata-redaction.v1",
     "title": "Sensitive metadata keys must be redacted from audit",
     "primary_class": "audit",
