@@ -8,7 +8,7 @@ RunSeal is **not** a cloud VM sandbox, a Docker Desktop replacement, or a microV
 
 ## Status
 
-MVP reference implementation in progress. The repository contains a buildable CLI/RPC shell, standard policy profile normalization, canonical policy hashes, backend capability reporting, a Windows reference backend, `PlatformSandboxPlan` summaries, JSONL audit output, and black-box conformance tests.
+`0.1.0` is the first technical-preview line for third-party integration. The repository contains a buildable CLI/RPC shell, standard policy profile normalization, canonical policy hashes, backend capability reporting, a Windows reference backend, `PlatformSandboxPlan` summaries, JSONL audit output, and black-box conformance tests.
 
 Current execution support is intentionally narrow: explicit `danger-full-access` runs as local, non-sandboxed execution. On Windows, sandboxed policies such as `read-only`, `workspace-contained`, and `workspace-write` execute through the reference backend. Other platforms still fail closed for sandboxed policies until a backend can enforce them.
 
@@ -17,6 +17,11 @@ On Windows, sandbox requests include a `PlatformSandboxPlan` for runtime root, s
 The Windows enforcement baseline lives behind a dedicated Windows sandbox implementation. RunSeal-specific code should stay at the adapter layer: policy normalization, `PlatformSandboxPlan` mapping, audit events, capability reporting, and conformance gates. Low-level OS boundary, setup-helper, and command-runner code should not be reimplemented in the RunSeal adapter.
 
 On macOS and Linux, RunSeal reports explicit experimental/community skeleton backends. They support only explicit `danger-full-access` local execution until contributed backend implementations pass the shared conformance gates.
+
+The protocol and policy version strings are `runseal.protocol/v1` and
+`runseal.policy/v1`. The Rust package version remains pre-`1.0`; breaking
+changes to provisional CLI flags, JSON fields, and audit shapes can still land
+when the RFCs change.
 
 The design lives in the RFC repository:
 
@@ -120,6 +125,20 @@ run again.
   }
 }
 ```
+
+## Third-party integration
+
+Integrators should start with one of these surfaces:
+
+- CLI: call `runseal exec --json` or `runseal exec --events` and handle structured errors.
+- JSON-RPC stdio: launch `runseal rpc --stdio`, call `getVersion`, then `getCapabilities`, then `execute`.
+- Conformance: set `RUNSEAL_BIN=/path/to/runseal` and run the black-box tests in `tests/`.
+
+Clients should gate sandboxed execution on `getCapabilities` and fail closed
+when a requested feature is unsupported or setup is unavailable. Active
+cancellation is reserved for a later daemon or named-pipe transport; the stdio
+MVP validates `cancelExecution` but cannot interrupt an in-flight synchronous
+`execute` request.
 
 ## Running tests
 
