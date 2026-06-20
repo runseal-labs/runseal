@@ -47,6 +47,9 @@ impl Service {
                 return vec![rpc::invalid_request(request_id_for_error(request), err)];
             }
         };
+        let Some(id) = id else {
+            return Vec::new();
+        };
 
         match method {
             "getVersion" => match validate_empty_params(&params, "getVersion") {
@@ -260,15 +263,11 @@ fn execution_not_cancellable(result: &Value) -> RunSealError {
     )
 }
 
-fn rpc_request_parts(request: &Value) -> Result<(Value, &str, Value), RunSealError> {
+fn rpc_request_parts(request: &Value) -> Result<(Option<Value>, &str, Value), RunSealError> {
     let request = request.as_object().ok_or_else(|| {
         RunSealError::new("INVALID_REQUEST", "JSON-RPC request must be an object")
     })?;
-    let id = request
-        .get("id")
-        .map(validated_request_id)
-        .transpose()?
-        .unwrap_or(Value::Null);
+    let id = request.get("id").map(validated_request_id).transpose()?;
     let version = request.get("jsonrpc").and_then(Value::as_str);
     if version != Some("2.0") {
         return Err(RunSealError::new(

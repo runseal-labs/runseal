@@ -524,6 +524,46 @@ fn rpc_stdio_reports_parse_error_and_continues() -> Result<()> {
 }
 
 #[test]
+fn rpc_stdio_ignores_client_notification_and_continues() -> Result<()> {
+    let mut child = Command::new(require_runseal_bin()?)
+        .args(["rpc", "--stdio"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to spawn runseal rpc")?;
+    let mut stdin = child.stdin.take().context("stdin unavailable")?;
+    let stdout = child.stdout.take().context("stdout unavailable")?;
+    let mut stdout = BufReader::new(stdout);
+
+    let notification = json!({
+        "jsonrpc": "2.0",
+        "method": "getVersion",
+        "params": {}
+    })
+    .to_string()
+        + "\n";
+    stdin.write_all(notification.as_bytes())?;
+    stdin.write_all(rpc_request_with_id(1, "getVersion", json!({})).as_bytes())?;
+    stdin.flush()?;
+
+    let (notifications, ok_response) = read_rpc_response(&mut stdout, 1)?;
+    assert!(
+        notifications.is_empty(),
+        "client notification produced messages: {notifications:?}"
+    );
+    assert_eq!(
+        ok_response["result"]["protocol_version"],
+        "runseal.protocol/v1"
+    );
+
+    drop(stdin);
+    let status = child.wait().context("failed to wait for runseal rpc")?;
+    assert!(status.success());
+    Ok(())
+}
+
+#[test]
 fn rpc_stdio_does_not_keep_completed_execution_state() -> Result<()> {
     #[cfg(windows)]
     let _guard = windows_protocol_lock()?;
