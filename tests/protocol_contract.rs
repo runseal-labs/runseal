@@ -672,6 +672,20 @@ fn rpc_stdio_does_not_keep_completed_execution_state() -> Result<()> {
     let (_, get_response) = read_rpc_response(&mut stdout, 2)?;
     assert_eq!(get_response["error"]["data"]["code"], "EXECUTION_NOT_FOUND");
 
+    stdin.write_all(
+        rpc_request_with_id(
+            3,
+            "cancelExecution",
+            json!({ "execution_id": execution_id, "reason": "direct-mode" }),
+        )
+        .as_bytes(),
+    )?;
+    let (_, cancel_response) = read_rpc_response(&mut stdout, 3)?;
+    assert_eq!(
+        cancel_response["error"]["data"]["code"],
+        "EXECUTION_NOT_FOUND"
+    );
+
     drop(stdin);
     let status = child.wait().context("failed to wait for runseal rpc")?;
     assert!(status.success());
