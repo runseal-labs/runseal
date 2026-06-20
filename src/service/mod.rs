@@ -268,7 +268,13 @@ fn execution_not_found(execution_id: &str) -> RunSealError {
 fn audit_event_metadata(events: Vec<Value>) -> Vec<Value> {
     events
         .into_iter()
-        .map(|event| audit_stream_event_metadata(&event))
+        .map(|event| {
+            let mut event = audit_stream_event_metadata(&event);
+            if let Some(object) = event.as_object_mut() {
+                object.remove("metadata");
+            }
+            event
+        })
         .collect()
 }
 
@@ -355,4 +361,27 @@ fn validated_request_id(value: &Value) -> Result<Value, RunSealError> {
 
 fn is_valid_request_id(value: &Value) -> bool {
     value.is_string() || value.is_number() || value.is_null()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::audit_event_metadata;
+    use serde_json::json;
+
+    #[test]
+    fn audit_lookup_metadata_is_public_safe() {
+        let events = audit_event_metadata(vec![json!({
+            "type": "execution.stdout",
+            "metadata": {"Authorization": "secret"},
+            "data": "base64:c2VjcmV0",
+            "text": "secret",
+            "bytes": 6
+        })]);
+
+        assert_eq!(events[0]["type"], "execution.stdout");
+        assert_eq!(events[0]["bytes"], 6);
+        assert!(events[0].get("metadata").is_none());
+        assert!(events[0].get("data").is_none());
+        assert!(events[0].get("text").is_none());
+    }
 }
