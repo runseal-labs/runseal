@@ -502,6 +502,7 @@ fn rpc_stdio_reports_parse_error_and_continues() -> Result<()> {
     let parse_response: Value =
         serde_json::from_str(&parse_line).context("parse error response must be JSON")?;
     assert_eq!(parse_response["id"], Value::Null);
+    assert_eq!(parse_response["error"]["code"], -32700);
     assert_eq!(parse_response["error"]["data"]["code"], "INVALID_REQUEST");
     assert!(
         parse_response["error"]["data"]["reason"]

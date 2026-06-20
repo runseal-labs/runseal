@@ -1,7 +1,7 @@
 use serde_json::Value;
 use std::io::{self, BufRead, Write};
 
-use crate::{error::RunSealError, rpc};
+use crate::rpc;
 
 pub(crate) fn run_rpc_stdio() -> Result<(), String> {
     run_stdio(false)
@@ -23,13 +23,7 @@ fn run_stdio(stateful: bool) -> Result<(), String> {
         let request: Value = match serde_json::from_str(&line) {
             Ok(request) => request,
             Err(err) => {
-                let message = rpc::error(
-                    Value::Null,
-                    RunSealError::new(
-                        "INVALID_REQUEST",
-                        format!("invalid JSON-RPC request: {err}"),
-                    ),
-                );
+                let message = rpc::parse_error(format!("invalid JSON-RPC request: {err}"));
                 writeln!(stdout, "{message}")
                     .map_err(|err| format!("failed to write stdout: {err}"))?;
                 stdout
