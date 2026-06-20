@@ -621,6 +621,7 @@ fn validate_result(result: &Value) -> Result<()> {
         "runseal.adversarial-result/v1"
     );
     case_id_class(required_string(result, "case_id", path)?)?;
+    assert_non_empty_string(result, "backend_name", path)?;
     assert_member(
         required_string(result, "backend_status", path)?,
         BACKEND_STATUS,
