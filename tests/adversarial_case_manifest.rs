@@ -517,6 +517,30 @@ fn validate_case(case: &Value, path: &Path, case_ids: &mut HashSet<String>) -> R
             bail!("case.request.interactive must be a boolean");
         }
     }
+    if let Some(policy) = request.get("policy") {
+        if method != "execute" {
+            bail!("case.request.policy is only valid for execute requests");
+        }
+        match policy {
+            Value::String(policy) => {
+                if policy.trim().is_empty() {
+                    bail!("case.request.policy must not be empty");
+                }
+                assert_member(policy, SANDBOX_LEVELS, path)?;
+            }
+            Value::Object(_) | Value::Null if case_has_class(case, "policy") => {}
+            _ => bail!("case.request.policy must be public policy text outside policy cases"),
+        }
+    }
+    if let Some(network) = request.get("network") {
+        if method != "execute" {
+            bail!("case.request.network is only valid for execute requests");
+        }
+        let network = network
+            .as_str()
+            .context("case.request.network must be a string")?;
+        assert_member(network, NETWORK_MODES, path)?;
+    }
     if let Some(timeout_ms) = request.get("timeout_ms") {
         assert_positive_u64(timeout_ms, "case.request.timeout_ms", path)?;
     }
@@ -592,6 +616,14 @@ fn case_id_class(case_id: &str) -> Result<&str> {
         bail!("case_id must use adv.<class>.<name>.v1 format: {case_id}");
     }
     Ok(case_id_parts[1])
+}
+
+fn case_has_class(case: &Value, class: &str) -> bool {
+    case.get("primary_class").and_then(Value::as_str) == Some(class)
+        || case
+            .get("secondary_classes")
+            .and_then(Value::as_array)
+            .is_some_and(|classes| classes.iter().any(|value| value.as_str() == Some(class)))
 }
 
 fn assert_non_empty_string(case: &Value, field: &str, path: &Path) -> Result<()> {
