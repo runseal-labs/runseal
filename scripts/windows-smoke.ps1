@@ -18,6 +18,7 @@ function Invoke-RunSeal {
     foreach ($arg in $RunArgs) {
         [void]$startInfo.ArgumentList.Add($arg)
     }
+    $startInfo.Environment["RUNSEAL_WINDOWS_SANDBOX_SETUP_TIMEOUT_SECONDS"] = "20"
 
     $process = [System.Diagnostics.Process]::new()
     $process.StartInfo = $startInfo

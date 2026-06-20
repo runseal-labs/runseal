@@ -758,6 +758,8 @@ fn verify_setup_completed(codex_home: &Path) -> Result<()> {
 const SCHEDULED_SETUP_TASK_NAME: &str = r"\RunSeal\WindowsSandboxSetup";
 const SCHEDULED_SETUP_PAYLOAD_PREFIX: &str = "setup-task-payload-";
 const SCHEDULED_SETUP_RESULT_PREFIX: &str = "setup-task-result-";
+const SCHEDULED_SETUP_TIMEOUT_ENV: &str = "RUNSEAL_WINDOWS_SANDBOX_SETUP_TIMEOUT_SECONDS";
+const DEFAULT_SCHEDULED_SETUP_TIMEOUT_SECONDS: u64 = 180;
 static SCHEDULED_SETUP_REQUEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Deserialize)]
@@ -835,6 +837,19 @@ fn validate_scheduled_setup_result(
 
 fn scheduled_setup_payload_sha256(payload_json: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(payload_json))
+}
+
+fn scheduled_setup_timeout() -> std::time::Duration {
+    scheduled_setup_timeout_from_env(std::env::var(SCHEDULED_SETUP_TIMEOUT_ENV).ok())
+}
+
+fn scheduled_setup_timeout_from_env(value: Option<String>) -> std::time::Duration {
+    let seconds = value
+        .as_deref()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|seconds| *seconds > 0)
+        .unwrap_or(DEFAULT_SCHEDULED_SETUP_TIMEOUT_SECONDS);
+    std::time::Duration::from_secs(seconds)
 }
 
 fn remove_scheduled_setup_result_file(path: &Path) -> Result<()> {
@@ -1032,7 +1047,7 @@ fn try_run_setup_exe_via_scheduled_task(
         ));
     }
 
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(180);
+    let deadline = std::time::Instant::now() + scheduled_setup_timeout();
     loop {
         match std::fs::read_to_string(&result_path) {
             Ok(contents) => {
@@ -1657,6 +1672,22 @@ mod tests {
         assert_eq!(parts[0], std::process::id().to_string());
         assert!(parts[1].parse::<u128>().is_ok());
         assert!(parts[2].parse::<u64>().is_ok());
+    }
+
+    #[test]
+    fn scheduled_setup_timeout_uses_positive_env_override() {
+        assert_eq!(
+            super::scheduled_setup_timeout_from_env(Some("2".to_string())),
+            std::time::Duration::from_secs(2)
+        );
+        assert_eq!(
+            super::scheduled_setup_timeout_from_env(Some("0".to_string())),
+            std::time::Duration::from_secs(super::DEFAULT_SCHEDULED_SETUP_TIMEOUT_SECONDS)
+        );
+        assert_eq!(
+            super::scheduled_setup_timeout_from_env(Some("bad".to_string())),
+            std::time::Duration::from_secs(super::DEFAULT_SCHEDULED_SETUP_TIMEOUT_SECONDS)
+        );
     }
 
     #[test]
