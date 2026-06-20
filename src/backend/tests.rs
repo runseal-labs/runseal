@@ -447,6 +447,46 @@ fn windows_reference_does_not_compile_sandboxed_policy_as_local_execution() {
 }
 
 #[test]
+fn portable_skeletons_fail_closed_for_sandboxed_policies() {
+    let cwd = PathBuf::from("/workspace");
+    for backend in [
+        &MacosExperimentalBackend as &dyn SandboxBackend,
+        &LinuxCommunityBackend as &dyn SandboxBackend,
+    ] {
+        for policy in ["read-only", "workspace-write", "workspace-contained"] {
+            let policy = normalize_policy(&json!(policy), &cwd, None).unwrap();
+            let err = backend
+                .compile_plan("exec_portable_fail_closed", &cwd, &policy)
+                .unwrap_err();
+
+            assert_eq!(err.code, "BACKEND_CAPABILITY_MISSING");
+            assert_eq!(err.support, CapabilityStatus::Unsupported.as_str());
+            assert_eq!(err.backend, backend.name());
+            assert!(err.missing_features.contains(&"filesystem_policy"));
+            assert!(err.plan.is_none());
+        }
+    }
+}
+
+#[test]
+fn portable_skeletons_allow_explicit_danger_full_access_only() {
+    let cwd = PathBuf::from("/workspace");
+    let policy = normalize_policy(&json!("danger-full-access"), &cwd, None).unwrap();
+    for backend in [
+        &MacosExperimentalBackend as &dyn SandboxBackend,
+        &LinuxCommunityBackend as &dyn SandboxBackend,
+    ] {
+        let plan = backend
+            .compile_plan("exec_portable_local", &cwd, &policy)
+            .unwrap();
+
+        assert_eq!(plan.enforcement, "local-execution");
+        assert_eq!(plan.backend, backend.name());
+        assert_eq!(plan.sandbox_level, "danger-full-access");
+    }
+}
+
+#[test]
 fn local_spawn_rejects_sandboxed_plan() -> io::Result<()> {
     let tmp = TempDir::new()?;
     let cwd = tmp.path().join("workspace");
