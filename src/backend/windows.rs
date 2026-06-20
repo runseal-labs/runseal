@@ -309,6 +309,7 @@ pub(super) fn execute_windows_sandbox_plan(
 
     let result = (|| {
         prepare_vendor_sandbox_home(cwd, &vendor_sandbox_home)?;
+        ensure_windows_sandbox_setup_ready(cwd)?;
         let managed_proxy = if plan.network_managed_proxy == "required" {
             Some(ManagedSandboxProxy::start().map_err(|err| {
                 io::Error::other(BackendUnavailableError {
@@ -394,6 +395,21 @@ pub(super) fn execute_windows_sandbox_plan(
         timed_out: capture.timed_out,
         events,
     })
+}
+
+#[cfg(windows)]
+fn ensure_windows_sandbox_setup_ready(cwd: &Path) -> io::Result<()> {
+    let setup_status = crate::setup::windows_sandbox_setup_status_for_cwd(cwd).map_err(|err| {
+        io::Error::other(BackendUnavailableError {
+            reason: format!("windows sandbox setup unavailable: {err}"),
+        })
+    })?;
+    if setup_status["requires_setup"].as_bool().unwrap_or(true) {
+        return Err(io::Error::other(BackendUnavailableError {
+            reason: "windows sandbox setup unavailable; run `runseal setup windows-sandbox` to install or repair".to_string(),
+        }));
+    }
+    Ok(())
 }
 
 #[cfg(windows)]
