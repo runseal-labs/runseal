@@ -2307,6 +2307,17 @@ fn service_stdio_dispose_session_cancels_running_execution() -> Result<()> {
     };
 
     stdin.write_all(
+        rpc_request_with_id(
+            6,
+            "subscribeEvents",
+            json!({ "execution_id": execution_id, "types": ["execution.cancelled"] }),
+        )
+        .as_bytes(),
+    )?;
+    let (_, subscribe_response) = read_rpc_response(&mut stdout, 6)?;
+    assert_eq!(subscribe_response["result"]["execution_id"], execution_id);
+
+    stdin.write_all(
         rpc_request_with_id(3, "disposeSession", json!({ "session_id": session_id })).as_bytes(),
     )?;
     let (_, dispose_response) = read_rpc_response(&mut stdout, 3)?;
@@ -2322,6 +2333,14 @@ fn service_stdio_dispose_session_cancels_running_execution() -> Result<()> {
         cancel_events
             .iter()
             .any(|event| event["params"]["type"] == "execution.cancelled")
+    );
+    assert_eq!(
+        cancel_events
+            .iter()
+            .filter(|event| event["params"]["type"] == "execution.cancelled")
+            .count(),
+        1,
+        "disposed session subscriptions must not receive future events"
     );
 
     stdin.write_all(

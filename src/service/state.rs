@@ -116,7 +116,12 @@ impl ServiceState {
     pub(super) fn dispose_session(&mut self, session_id: &str) -> (bool, usize) {
         let released_session = self.sessions.dispose(session_id);
         let released_executions = if released_session {
-            self.executions.cancel_active_in_session(session_id)
+            let execution_ids = self.executions.active_execution_ids_in_session(session_id);
+            let released_executions = self.executions.cancel_active_in_session(session_id);
+            for execution_id in execution_ids {
+                self.event_bus.clear_execution(&execution_id);
+            }
+            released_executions
         } else {
             0
         };

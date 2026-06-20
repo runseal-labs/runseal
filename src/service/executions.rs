@@ -263,6 +263,16 @@ impl ExecutionStore {
         cancelled
     }
 
+    pub(super) fn active_execution_ids_in_session(&self, session_id: &str) -> Vec<String> {
+        self.active
+            .iter()
+            .filter(|(_, active)| {
+                active.result.get("session_id").and_then(Value::as_str) == Some(session_id)
+            })
+            .map(|(execution_id, _)| execution_id.clone())
+            .collect()
+    }
+
     pub(super) fn cancel_all_active(&mut self) -> usize {
         let mut cancelled = 0;
         for active in self.active.values_mut() {
