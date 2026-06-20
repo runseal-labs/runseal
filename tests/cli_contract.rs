@@ -856,6 +856,64 @@ fn exec_events_stream_uses_execution_vocabulary() -> Result<()> {
 }
 
 #[test]
+fn read_only_exec_events_use_backend_or_report_unavailable() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let cwd = tmp.path().to_string_lossy().to_string();
+    let mut args = vec![
+        "exec",
+        "--events",
+        "--policy",
+        "read-only",
+        "--cwd",
+        &cwd,
+        "--",
+    ];
+    if cfg!(windows) {
+        args.extend(["cmd", "/d", "/c", "echo read-only-events-ok"]);
+    } else {
+        args.extend([python_bin(), "-c", "print('read-only-events-ok')"]);
+    }
+    let output = run_cli(&args)?;
+    assert!(output.stderr.is_empty());
+    let messages = stdout_json_lines(&output)?;
+
+    if !output.status.success() {
+        let payload = messages
+            .iter()
+            .find(|message| message["error"].is_object())
+            .context("failed exec --events must return a JSON error line")?;
+        if cfg!(windows) {
+            assert_eq!(payload["error"]["data"]["code"], "BACKEND_UNAVAILABLE");
+            assert_no_private_windows_setup_terms(&payload.to_string());
+        } else {
+            assert_eq!(
+                payload["error"]["data"]["code"],
+                "BACKEND_CAPABILITY_MISSING"
+            );
+        }
+        return Ok(());
+    }
+
+    let event_types: Vec<_> = messages
+        .iter()
+        .filter_map(|event| event["type"].as_str())
+        .collect();
+    assert!(event_types.contains(&"execution.started"));
+    assert!(event_types.contains(&"execution.stdout"));
+    assert!(event_types.contains(&"execution.finished"));
+    let stdout_event = messages
+        .iter()
+        .find(|event| event["type"] == "execution.stdout")
+        .context("execution.stdout event must exist")?;
+    assert!(decode_stream_event(stdout_event)?.contains("read-only-events-ok"));
+    for event in &messages {
+        assert_event_envelope(event)?;
+        assert_no_private_linux_backend_terms(&event.to_string());
+    }
+    Ok(())
+}
+
+#[test]
 fn exec_events_reports_policy_errors_as_json_line() -> Result<()> {
     let output = run_cli(&[
         "exec",
