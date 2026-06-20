@@ -65,6 +65,7 @@ impl ExecutionStore {
                 "audit_path",
                 "backend",
                 "platform_plan",
+                "setup_status",
             ] {
                 if let Some(value) = details.get(key) {
                     result.insert(key.to_string(), value.clone());
@@ -276,5 +277,28 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(markers, ["b1", "b2", "a1"]);
+    }
+
+    #[test]
+    fn failed_records_preserve_setup_status() {
+        let mut store = ExecutionStore::default();
+        let err = RunSealError::with_details(
+            "BACKEND_UNAVAILABLE",
+            "windows sandbox setup unavailable",
+            json!({
+                "execution_id": "exec_a",
+                "session_id": "sess_a",
+                "setup_status": {
+                    "setup": "windows-sandbox",
+                    "next_action": "run_setup"
+                }
+            }),
+        );
+
+        store.record_failed(&err);
+
+        let result = store.result("exec_a").expect("failed record must exist");
+        assert_eq!(result["setup_status"]["setup"], "windows-sandbox");
+        assert_eq!(result["setup_status"]["next_action"], "run_setup");
     }
 }
