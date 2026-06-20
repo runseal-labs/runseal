@@ -328,6 +328,24 @@ fn assert_no_private_windows_setup_terms(value: &Value) {
     }
 }
 
+fn assert_no_private_linux_backend_terms(value: &Value) {
+    let public_payload = value.to_string();
+    for private_term in [
+        "bwrap",
+        "--unshare-user",
+        "--unshare-pid",
+        "--unshare-net",
+        "--ro-bind",
+        "bubblewrap argv",
+        "namespace flags",
+    ] {
+        assert!(
+            !public_payload.contains(private_term),
+            "public protocol must not expose private Linux backend term {private_term}"
+        );
+    }
+}
+
 fn path_equals_existing(left: &str, right: &std::path::Path) -> bool {
     let Ok(left) = PathBuf::from(left).canonicalize() else {
         return false;
@@ -4679,7 +4697,7 @@ fn sandboxed_policy_uses_platform_backend_or_reports_unavailable() -> Result<()>
     let output = run_rpc(&rpc_request(
         "execute",
         json!({
-            "command": [python_bin(), "-c", "print('must not run')"],
+            "command": [python_bin(), "-c", "print('sandboxed-backend-ok')"],
             "cwd": tmp.path(),
             "policy": "read-only"
         }),
@@ -4709,6 +4727,26 @@ fn sandboxed_policy_uses_platform_backend_or_reports_unavailable() -> Result<()>
             );
             assert_no_private_windows_setup_terms(response);
         }
+        return Ok(());
+    }
+
+    if cfg!(target_os = "linux") && response.get("result").is_some() {
+        assert_eq!(response["result"]["status"], "finished");
+        assert_eq!(response["result"]["exit_code"], 0);
+        assert_eq!(response["result"]["sandbox"]["enforced"], true);
+        assert_eq!(
+            response["result"]["platform_plan"]["enforcement"],
+            "linux-bubblewrap-read-only"
+        );
+        assert_eq!(
+            response["result"]["platform_plan"]["process"]["boundary"],
+            "namespace-sandbox"
+        );
+        assert_eq!(
+            response["result"]["platform_plan"]["network"]["direct_egress"],
+            "deny"
+        );
+        assert_no_private_linux_backend_terms(response);
         return Ok(());
     }
 
