@@ -160,6 +160,7 @@ fn join_pipe_reader(reader: Option<JoinHandle<io::Result<Vec<u8>>>>) -> io::Resu
         .map_err(|_| io::Error::other("output reader thread panicked"))?
 }
 
+#[cfg(windows)]
 pub(super) fn cleanup_child_after_setup_error(mut child: Child, setup_err: io::Error) -> io::Error {
     let kill_err = match child.kill() {
         Ok(()) => None,

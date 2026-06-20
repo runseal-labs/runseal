@@ -9,7 +9,9 @@ use crate::setup::{windows_sandbox_setup_status_for_cwd, windows_sandbox_setup_s
 #[cfg(windows)]
 use crate::windows::vendor_adapter::WindowsVendorSandboxProfile;
 use crate::{WINDOWS_SANDBOX_SETUP_FAILED, WINDOWS_SANDBOX_UNSUPPORTED};
-use serde_json::{Value, json};
+#[cfg(windows)]
+use serde_json::Value;
+use serde_json::json;
 use std::path::{Path, PathBuf};
 
 const SETUP_HELP_TEXT: &str = "\

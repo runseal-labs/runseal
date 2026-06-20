@@ -2,6 +2,7 @@ use super::capability::{CapabilityStatus, missing_backend_features};
 use super::core::SandboxBackend;
 #[cfg(all(test, windows))]
 use super::error::POLICY_TRANSITION_BUSY_REASON;
+#[cfg(windows)]
 use super::error::policy_transition_busy_reason;
 #[cfg(windows)]
 use super::error::public_windows_setup_unavailable_reason;
@@ -14,10 +15,12 @@ use super::path_string;
 use super::policy_epoch::{WindowsSandboxPolicyCohortKey, windows_sandbox_execution_gate_for_key};
 #[cfg(all(test, windows))]
 use super::process::WindowsKillOnCloseJob;
+#[cfg(windows)]
+use super::process::cleanup_child_after_setup_error;
 #[cfg(any(test, windows))]
 use super::process::minimal_environment;
 #[cfg(test)]
-use super::process::{cleanup_child_after_setup_error, spawn_local_command};
+use super::process::spawn_local_command;
 use super::runtime::RUNTIME_ROOT_MARKER;
 use super::skeleton::{LinuxCommunityBackend, MacosExperimentalBackend};
 use super::windows::{WindowsReferenceBackend, has_single_user_setup_payload};
@@ -37,6 +40,7 @@ use crate::windows::policy::{
 };
 use serde_json::Value;
 use serde_json::json;
+#[cfg(windows)]
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::fs;
@@ -295,6 +299,7 @@ impl WindowsFilesystemAclDriver for RecordingAclDriver {
     }
 }
 
+#[cfg(windows)]
 fn long_running_child() -> io::Result<std::process::Child> {
     let mut command = if cfg!(windows) {
         let mut command = std::process::Command::new("cmd");
@@ -1302,6 +1307,7 @@ fn sandbox_execution_cleans_runtime_tree_after_vendor_home_prepare_failure() -> 
     Ok(())
 }
 
+#[cfg(windows)]
 #[test]
 fn cleanup_child_after_setup_error_preserves_setup_error() -> io::Result<()> {
     let child = long_running_child()?;
