@@ -1,7 +1,7 @@
 use serde_json::{Value, json};
 use std::env;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub(crate) fn payload() -> Value {
     json!({
@@ -36,11 +36,32 @@ fn path_status(binary: &str) -> &'static str {
         return "unavailable";
     };
 
-    if env::split_paths(&paths).any(|dir| dir.join(binary).is_file()) {
+    if binary_status_in_paths(binary, env::split_paths(&paths)) {
         "available"
     } else {
         "unavailable"
     }
+}
+
+fn binary_status_in_paths(binary: &str, paths: impl IntoIterator<Item = PathBuf>) -> bool {
+    paths
+        .into_iter()
+        .any(|dir| is_executable_file(&dir.join(binary)))
+}
+
+#[cfg(unix)]
+fn is_executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    let Ok(metadata) = fs::metadata(path) else {
+        return false;
+    };
+    metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+}
+
+#[cfg(not(unix))]
+fn is_executable_file(path: &Path) -> bool {
+    path.is_file()
 }
 
 fn seccomp_status() -> &'static str {
@@ -105,7 +126,9 @@ fn positive_sysctl(path: &str) -> Option<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::unprivileged_user_namespace_status_for;
+    use super::{binary_status_in_paths, unprivileged_user_namespace_status_for};
+    use std::fs;
+    use tempfile::TempDir;
 
     #[test]
     fn user_namespace_probe_combines_quota_and_distro_toggle() {
@@ -126,4 +149,38 @@ mod tests {
             "unavailable"
         );
     }
+
+    #[test]
+    fn path_probe_finds_binary_only_in_candidate_dirs() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("bwrap"), b"test").unwrap();
+        make_executable(&dir.path().join("bwrap"));
+
+        assert!(binary_status_in_paths("bwrap", [dir.path().to_path_buf()]));
+        assert!(!binary_status_in_paths(
+            "missing",
+            [dir.path().to_path_buf()]
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn path_probe_rejects_non_executable_files() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("bwrap"), b"test").unwrap();
+
+        assert!(!binary_status_in_paths("bwrap", [dir.path().to_path_buf()]));
+    }
+
+    #[cfg(unix)]
+    fn make_executable(path: &std::path::Path) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut permissions = fs::metadata(path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions).unwrap();
+    }
+
+    #[cfg(not(unix))]
+    fn make_executable(_path: &std::path::Path) {}
 }
