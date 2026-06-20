@@ -1280,11 +1280,8 @@ fn execute_windows_sandbox_plan(
         };
         let env_map = sandbox_environment(plan, env, managed_proxy.as_ref());
         let workspace_contained = plan.sandbox_level == SandboxLevel::WorkspaceContained.as_str();
-        let deny_read_paths = if workspace_contained {
-            windows_workspace_contained_deny_read_paths(&workspace_roots, plan, &env_map)?
-        } else {
-            Vec::new()
-        };
+        let deny_read_paths =
+            windows_sandbox_deny_read_paths(&workspace_roots, plan, &env_map, workspace_contained)?;
         let sandbox_command = windows_sandbox_command(command, &env_map);
 
         let capture =
@@ -1462,6 +1459,70 @@ fn windows_executable_candidate_names(program: &str, pathext: &str) -> Vec<Strin
 }
 
 #[cfg(windows)]
+fn windows_sandbox_deny_read_paths(
+    workspace_roots: &[AbsolutePathBuf],
+    plan: &PlatformSandboxPlan,
+    env_map: &HashMap<String, String>,
+    workspace_contained: bool,
+) -> io::Result<Vec<AbsolutePathBuf>> {
+    let mut deny_paths = windows_explicit_deny_read_paths(plan);
+    deny_paths.extend(windows_sensitive_profile_deny_read_paths(
+        workspace_roots,
+        plan,
+        env_map,
+    ));
+    if workspace_contained {
+        deny_paths.extend(windows_workspace_contained_deny_read_paths(
+            workspace_roots,
+            plan,
+            env_map,
+        )?);
+    }
+    Ok(deduplicate_absolute_paths(deny_paths))
+}
+
+#[cfg(windows)]
+fn windows_explicit_deny_read_paths(plan: &PlatformSandboxPlan) -> Vec<AbsolutePathBuf> {
+    plan.filesystem_deny
+        .iter()
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute() && path.exists())
+        .filter_map(|path| AbsolutePathBuf::from_absolute_path_checked(path).ok())
+        .collect()
+}
+
+#[cfg(windows)]
+fn windows_sensitive_profile_deny_read_paths(
+    workspace_roots: &[AbsolutePathBuf],
+    plan: &PlatformSandboxPlan,
+    env_map: &HashMap<String, String>,
+) -> Vec<AbsolutePathBuf> {
+    let Some(user_profile) = std::env::var_os("USERPROFILE").map(PathBuf::from) else {
+        return Vec::new();
+    };
+    let allowed_roots = windows_allowed_roots(workspace_roots, plan, env_map);
+    windows_sensitive_profile_deny_read_paths_for_profile(&user_profile, &allowed_roots)
+}
+
+#[cfg(windows)]
+fn windows_sensitive_profile_deny_read_paths_for_profile(
+    user_profile: &Path,
+    allowed_roots: &[PathBuf],
+) -> Vec<AbsolutePathBuf> {
+    [
+        user_profile.join(".ssh"),
+        user_profile.join(".codex"),
+        user_profile.join(".config"),
+        user_profile.join("AppData").join("Roaming"),
+    ]
+    .into_iter()
+    .filter(|path| path.exists())
+    .filter(|path| !is_allowed_or_inside_allowed_root(path, allowed_roots))
+    .filter_map(|path| AbsolutePathBuf::from_absolute_path_checked(path).ok())
+    .collect()
+}
+
+#[cfg(windows)]
 fn windows_workspace_contained_deny_read_paths(
     workspace_roots: &[AbsolutePathBuf],
     plan: &PlatformSandboxPlan,
@@ -1470,6 +1531,25 @@ fn windows_workspace_contained_deny_read_paths(
     let Some(user_profile) = std::env::var_os("USERPROFILE").map(PathBuf::from) else {
         return Ok(Vec::new());
     };
+    let allowed_roots = windows_allowed_roots(workspace_roots, plan, env_map);
+
+    let mut deny_paths = Vec::new();
+    let mut seen = HashSet::new();
+    collect_workspace_contained_profile_denies(
+        &user_profile,
+        &allowed_roots,
+        &mut deny_paths,
+        &mut seen,
+    );
+    Ok(deny_paths)
+}
+
+#[cfg(windows)]
+fn windows_allowed_roots(
+    workspace_roots: &[AbsolutePathBuf],
+    plan: &PlatformSandboxPlan,
+    env_map: &HashMap<String, String>,
+) -> Vec<PathBuf> {
     let mut allowed_roots = workspace_roots
         .iter()
         .map(AbsolutePathBuf::as_path)
@@ -1489,16 +1569,19 @@ fn windows_workspace_contained_deny_read_paths(
             }
         }
     }
+    allowed_roots
+}
 
+#[cfg(windows)]
+fn deduplicate_absolute_paths(paths: Vec<AbsolutePathBuf>) -> Vec<AbsolutePathBuf> {
     let mut deny_paths = Vec::new();
     let mut seen = HashSet::new();
-    collect_workspace_contained_profile_denies(
-        &user_profile,
-        &allowed_roots,
-        &mut deny_paths,
-        &mut seen,
-    );
-    Ok(deny_paths)
+    for path in paths {
+        if seen.insert(windows_sandbox_path_key(path.as_path())) {
+            deny_paths.push(path);
+        }
+    }
+    deny_paths
 }
 
 #[cfg(windows)]
@@ -1971,6 +2054,68 @@ mod tests {
 
         let next_policy_guard = windows_sandbox_execution_gate_for_key(policy_b)?;
         drop(next_policy_guard);
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_explicit_deny_paths_feed_deny_read_overrides() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let cwd = tmp.path().join("workspace");
+        let secret = tmp.path().join("secret");
+        fs::create_dir_all(&cwd)?;
+        fs::create_dir_all(&secret)?;
+        let policy = normalize_policy(
+            &json!({
+                "version": "runseal.policy/v1",
+                "sandbox_level": "workspace-write",
+                "filesystem": {
+                    "write": [cwd],
+                    "deny": [secret],
+                },
+            }),
+            &cwd,
+            None,
+        )
+        .unwrap();
+        let plan = WindowsReferenceBackend.fail_closed_plan("exec_explicit_deny", &cwd, &policy);
+        let deny_keys = windows_explicit_deny_read_paths(&plan)
+            .iter()
+            .map(|path| windows_sandbox_path_key(path.as_path()))
+            .collect::<HashSet<_>>();
+
+        assert!(deny_keys.contains(&windows_sandbox_path_key(&secret)));
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_sensitive_profile_denies_include_credential_roots() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let profile = tmp.path().join("profile");
+        let ssh = profile.join(".ssh");
+        let codex = profile.join(".codex");
+        let config = profile.join(".config");
+        let roaming = profile.join("AppData").join("Roaming");
+        let workspace = profile.join("workspace");
+        for dir in [&ssh, &codex, &config, &roaming, &workspace] {
+            fs::create_dir_all(dir)?;
+        }
+
+        let deny_paths = windows_sensitive_profile_deny_read_paths_for_profile(
+            &profile,
+            std::slice::from_ref(&workspace),
+        );
+        let deny_keys = deny_paths
+            .iter()
+            .map(|path| windows_sandbox_path_key(path.as_path()))
+            .collect::<HashSet<_>>();
+
+        assert!(deny_keys.contains(&windows_sandbox_path_key(&ssh)));
+        assert!(deny_keys.contains(&windows_sandbox_path_key(&codex)));
+        assert!(deny_keys.contains(&windows_sandbox_path_key(&config)));
+        assert!(deny_keys.contains(&windows_sandbox_path_key(&roaming)));
+        assert!(!deny_keys.contains(&windows_sandbox_path_key(&workspace)));
         Ok(())
     }
 
