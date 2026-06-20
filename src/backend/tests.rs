@@ -28,7 +28,7 @@ use super::windows::{
     windows_sandbox_workspace_roots_for_plan, windows_sandbox_write_roots_for_plan,
     windows_sensitive_profile_deny_read_paths_for_profile,
 };
-use crate::execution::{ExecutionEnv, ExecutionStdin};
+use crate::execution::{ExecutionCancellation, ExecutionEnv, ExecutionStdin};
 use crate::policy::{BackendFeature, NetworkMode, normalize_policy};
 use crate::windows::policy::{
     WindowsFilesystemAccess, WindowsFilesystemAclEntry, WindowsFilesystemAclPlan,
@@ -44,7 +44,6 @@ use std::io;
 use std::path::{Path, PathBuf};
 #[cfg(windows)]
 use std::sync::{MutexGuard, OnceLock};
-#[cfg(windows)]
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
@@ -457,12 +456,57 @@ fn local_spawn_rejects_sandboxed_plan() -> io::Result<()> {
         ExecutionStdin::Empty,
         &ExecutionEnv::default(),
         None,
+        None,
     )
     .unwrap_err();
 
     assert_eq!(err.kind(), io::ErrorKind::Unsupported);
     assert!(err.to_string().contains("refusing to spawn sandboxed plan"));
     Ok(())
+}
+
+#[test]
+fn local_spawn_honors_cancellation() -> io::Result<()> {
+    let tmp = TempDir::new()?;
+    let cwd = tmp.path().join("workspace");
+    fs::create_dir_all(&cwd)?;
+    let policy = normalize_policy(&json!("danger-full-access"), &cwd, None).unwrap();
+    let plan = WindowsReferenceBackend
+        .compile_plan("exec_cancel", &cwd, &policy)
+        .unwrap();
+    let cancellation = ExecutionCancellation::default();
+    let canceller = cancellation.clone();
+    let started = Instant::now();
+    let command = long_running_command();
+
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(50));
+        canceller.cancel();
+    });
+    let output = spawn_local_command(
+        &plan,
+        &command,
+        &cwd,
+        ExecutionStdin::Empty,
+        &ExecutionEnv::default(),
+        None,
+        Some(cancellation),
+    )?;
+
+    assert!(!output.timed_out);
+    assert!(started.elapsed() < Duration::from_secs(3));
+    Ok(())
+}
+
+fn long_running_command() -> Vec<String> {
+    if cfg!(windows) {
+        vec!["ping", "-n", "6", "127.0.0.1"]
+    } else {
+        vec!["sh", "-c", "sleep 5"]
+    }
+    .into_iter()
+    .map(str::to_string)
+    .collect()
 }
 
 #[test]

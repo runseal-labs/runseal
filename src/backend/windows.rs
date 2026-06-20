@@ -21,7 +21,7 @@ use super::runtime::{
 use crate::duration::duration_millis_u64;
 #[cfg(windows)]
 use crate::events::timestamp_now;
-use crate::execution::{ExecutionEnv, ExecutionStdin};
+use crate::execution::{ExecutionCancellation, ExecutionEnv, ExecutionStdin};
 #[cfg(windows)]
 use crate::policy::SandboxLevel;
 use crate::policy::{BackendFeature, SandboxPolicy};
@@ -264,11 +264,12 @@ impl SandboxBackend for WindowsReferenceBackend {
         stdin: ExecutionStdin,
         env: &ExecutionEnv,
         timeout: Option<Duration>,
+        cancellation: Option<ExecutionCancellation>,
     ) -> io::Result<BackendExecutionOutput> {
         if plan.is_sandbox_enforced() {
             return execute_windows_sandbox_plan(plan, command, cwd, stdin, env, timeout);
         }
-        spawn_local_command(plan, command, cwd, stdin, env, timeout)
+        spawn_local_command(plan, command, cwd, stdin, env, timeout, cancellation)
     }
 
     fn capabilities_json(&self) -> Value {
@@ -722,7 +723,7 @@ fn execute_windows_sandbox_plan(
     env: &ExecutionEnv,
     timeout: Option<Duration>,
 ) -> io::Result<BackendExecutionOutput> {
-    spawn_local_command(plan, command, cwd, stdin, env, timeout)
+    spawn_local_command(plan, command, cwd, stdin, env, timeout, None)
 }
 
 #[cfg(windows)]

@@ -129,6 +129,7 @@ impl Service {
                 request.env,
                 request.metadata,
                 request.timeout,
+                None,
             )
         });
         match result {

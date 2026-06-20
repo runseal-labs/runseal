@@ -9,7 +9,7 @@ use crate::events::{
     ExecutionEventContext, ExecutionIds, backend_event_json, execution_event_at,
     execution_event_now, new_execution_ids, stream_event, timestamp_now,
 };
-use crate::execution::{ExecutionEnv, ExecutionStdin};
+use crate::execution::{ExecutionCancellation, ExecutionEnv, ExecutionStdin};
 use crate::policy::SandboxPolicy;
 use crate::process_output::decode_process_output;
 use crate::stdin::stdin_audit_json;
@@ -35,6 +35,7 @@ pub(crate) fn execute_command(
         env,
         metadata,
         timeout,
+        None,
     )
 }
 
@@ -51,6 +52,7 @@ pub(crate) fn execute_command_with_ids(
     env: ExecutionEnv,
     metadata: Option<Value>,
     timeout: Option<Duration>,
+    cancellation: Option<ExecutionCancellation>,
 ) -> Result<(Vec<Value>, Value), RunSealError> {
     if command.is_empty() {
         return Err(RunSealError::new("INVALID_REQUEST", "command is empty"));
@@ -386,81 +388,85 @@ pub(crate) fn execute_command_with_ids(
     events.push(started);
 
     let timer = Instant::now();
-    let execution_output = match backend.execute_plan(&plan, command, cwd, stdin, &env, timeout) {
-        Ok(output) => output,
-        Err(err) => {
-            let backend_error = backend_execution_error(&err, sandbox_enforced, cwd);
-            let failure_reason = backend_error
-                .as_ref()
-                .map(|(_, reason, _)| reason.as_str())
-                .unwrap_or("execution failed to start");
-            let setup_status = backend_error
-                .as_ref()
-                .and_then(|(_, _, setup_status)| setup_status.clone());
-            let mut failed_payload = json!({
-                "type": "execution.failed",
-                "execution_id": ids.execution_id,
-                "policy_id": policy_id,
-                "policy_hash": policy_hash,
-                "audit_path": audit_path,
-                "status": "failed",
-                "reason": failure_reason,
-                "error": err.to_string(),
-            });
-            if let (Some(failed_payload), Some(setup_status)) =
-                (failed_payload.as_object_mut(), setup_status)
-            {
-                failed_payload.insert("setup_status".to_string(), setup_status);
-            }
-            let failed = execution_event_now(failed_payload, &event_context);
-            write_audit_event_with_metadata(&mut audit, &failed, &metadata)?;
-            events.push(failed);
-
-            if let Some((code, reason, setup_status)) = backend_error {
-                let mut details = json!({
+    let execution_output =
+        match backend.execute_plan(&plan, command, cwd, stdin, &env, timeout, cancellation) {
+            Ok(output) => output,
+            Err(err) => {
+                let backend_error = backend_execution_error(&err, sandbox_enforced, cwd);
+                let failure_reason = backend_error
+                    .as_ref()
+                    .map(|(_, reason, _)| reason.as_str())
+                    .unwrap_or("execution failed to start");
+                let setup_status = backend_error
+                    .as_ref()
+                    .and_then(|(_, _, setup_status)| setup_status.clone());
+                let mut failed_payload = json!({
+                    "type": "execution.failed",
                     "execution_id": ids.execution_id,
-                    "session_id": ids.session_id,
-                    "seal_id": ids.seal_id,
                     "policy_id": policy_id,
                     "policy_hash": policy_hash,
-                    "policy_epoch": policy_epoch,
                     "audit_path": audit_path,
-                    "backend": {
-                        "name": plan.backend,
-                        "status": plan.backend_status,
-                        "platform": plan.platform,
-                    },
-                    "platform_plan": plan.json(),
+                    "status": "failed",
+                    "reason": failure_reason,
+                    "error": err.to_string(),
                 });
-                if let (Some(details), Some(setup_status)) = (details.as_object_mut(), setup_status)
+                if let (Some(failed_payload), Some(setup_status)) =
+                    (failed_payload.as_object_mut(), setup_status)
                 {
-                    details.insert("setup_status".to_string(), setup_status);
+                    failed_payload.insert("setup_status".to_string(), setup_status);
                 }
-                return Err(RunSealError::with_details(code, reason, details).with_events(events));
-            }
+                let failed = execution_event_now(failed_payload, &event_context);
+                write_audit_event_with_metadata(&mut audit, &failed, &metadata)?;
+                events.push(failed);
 
-            return Err(RunSealError::with_details(
-                "EXECUTION_FAILED_TO_START",
-                format!("failed to spawn command {}: {err}", command[0]),
-                json!({
-                    "execution_id": ids.execution_id,
-                    "session_id": ids.session_id,
-                    "seal_id": ids.seal_id,
-                    "policy_id": policy_id,
-                    "policy_hash": policy_hash,
-                    "policy_epoch": policy_epoch,
-                    "audit_path": audit_path,
-                    "backend": {
-                        "name": plan.backend,
-                        "status": plan.backend_status,
-                        "platform": plan.platform,
-                    },
-                    "platform_plan": plan.json(),
-                }),
-            )
-            .with_events(events));
-        }
-    };
+                if let Some((code, reason, setup_status)) = backend_error {
+                    let mut details = json!({
+                        "execution_id": ids.execution_id,
+                        "session_id": ids.session_id,
+                        "seal_id": ids.seal_id,
+                        "policy_id": policy_id,
+                        "policy_hash": policy_hash,
+                        "policy_epoch": policy_epoch,
+                        "audit_path": audit_path,
+                        "backend": {
+                            "name": plan.backend,
+                            "status": plan.backend_status,
+                            "platform": plan.platform,
+                        },
+                        "platform_plan": plan.json(),
+                    });
+                    if let (Some(details), Some(setup_status)) =
+                        (details.as_object_mut(), setup_status)
+                    {
+                        details.insert("setup_status".to_string(), setup_status);
+                    }
+                    return Err(
+                        RunSealError::with_details(code, reason, details).with_events(events)
+                    );
+                }
+
+                return Err(RunSealError::with_details(
+                    "EXECUTION_FAILED_TO_START",
+                    format!("failed to spawn command {}: {err}", command[0]),
+                    json!({
+                        "execution_id": ids.execution_id,
+                        "session_id": ids.session_id,
+                        "seal_id": ids.seal_id,
+                        "policy_id": policy_id,
+                        "policy_hash": policy_hash,
+                        "policy_epoch": policy_epoch,
+                        "audit_path": audit_path,
+                        "backend": {
+                            "name": plan.backend,
+                            "status": plan.backend_status,
+                            "platform": plan.platform,
+                        },
+                        "platform_plan": plan.json(),
+                    }),
+                )
+                .with_events(events));
+            }
+        };
     let backend_events = execution_output
         .events
         .iter()
@@ -739,6 +745,7 @@ mod tests {
             &policy,
             ExecutionStdin::Empty,
             ExecutionEnv::default(),
+            None,
             None,
             None,
         )

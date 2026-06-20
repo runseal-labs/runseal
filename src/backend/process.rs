@@ -1,5 +1,5 @@
 use super::{BackendExecutionOutput, PlatformSandboxPlan};
-use crate::execution::{ExecutionEnv, ExecutionStdin};
+use crate::execution::{ExecutionCancellation, ExecutionEnv, ExecutionStdin};
 use crate::policy::matches_environment_scrub_pattern;
 use std::env;
 use std::ffi::OsString;
@@ -27,6 +27,7 @@ pub(super) fn spawn_local_command(
     stdin: ExecutionStdin,
     env: &ExecutionEnv,
     timeout: Option<Duration>,
+    cancellation: Option<ExecutionCancellation>,
 ) -> io::Result<BackendExecutionOutput> {
     if plan.is_sandbox_enforced() {
         return Err(io::Error::new(
@@ -52,27 +53,6 @@ pub(super) fn spawn_local_command(
     }
     process.stdout(Stdio::piped()).stderr(Stdio::piped());
 
-    let Some(timeout) = timeout else {
-        let mut child = process.spawn()?;
-        #[cfg(windows)]
-        let _process_job = match assign_windows_process_job(plan, &child) {
-            Ok(process_job) => process_job,
-            Err(err) => return Err(cleanup_child_after_setup_error(child, err)),
-        };
-        if let ExecutionStdin::Bytes(bytes) | ExecutionStdin::File(bytes) = stdin
-            && let Err(err) = write_child_stdin(&mut child, bytes)
-        {
-            return Err(cleanup_child_after_setup_error(child, err));
-        }
-        return child
-            .wait_with_output()
-            .map(|output| BackendExecutionOutput {
-                output,
-                timed_out: false,
-                events: Vec::new(),
-            });
-    };
-
     let mut child = process.spawn()?;
     #[cfg(windows)]
     let _process_job = match assign_windows_process_job(plan, &child) {
@@ -88,8 +68,12 @@ pub(super) fn spawn_local_command(
         }
     };
 
-    let (status, timed_out) = wait_child_with_timeout(&mut child, timeout)?;
-    if !timed_out {
+    let (status, timed_out) = wait_child(&mut child, timeout, cancellation.as_ref())?;
+    if !timed_out
+        && !cancellation
+            .as_ref()
+            .is_some_and(ExecutionCancellation::is_cancelled)
+    {
         join_stdin_writer(stdin_writer)?;
     } else {
         let _ = join_stdin_writer(stdin_writer);
@@ -121,14 +105,27 @@ fn join_stdin_writer(writer: Option<JoinHandle<io::Result<()>>>) -> io::Result<(
         .map_err(|_| io::Error::other("stdin writer thread panicked"))?
 }
 
-fn wait_child_with_timeout(child: &mut Child, timeout: Duration) -> io::Result<(ExitStatus, bool)> {
+fn wait_child(
+    child: &mut Child,
+    timeout: Option<Duration>,
+    cancellation: Option<&ExecutionCancellation>,
+) -> io::Result<(ExitStatus, bool)> {
     let start = Instant::now();
     loop {
         if let Some(status) = child.try_wait()? {
             return Ok((status, false));
         }
 
-        if start.elapsed() >= timeout {
+        if cancellation.is_some_and(ExecutionCancellation::is_cancelled) {
+            if let Err(err) = child.kill()
+                && err.kind() != io::ErrorKind::InvalidInput
+            {
+                return Err(err);
+            }
+            return child.wait().map(|status| (status, false));
+        }
+
+        if timeout.is_some_and(|timeout| start.elapsed() >= timeout) {
             if let Err(err) = child.kill()
                 && err.kind() != io::ErrorKind::InvalidInput
             {
@@ -137,11 +134,11 @@ fn wait_child_with_timeout(child: &mut Child, timeout: Duration) -> io::Result<(
             return child.wait().map(|status| (status, true));
         }
 
-        thread::sleep(
-            timeout
-                .saturating_sub(start.elapsed())
-                .min(Duration::from_millis(10)),
-        );
+        let sleep = timeout
+            .map(|timeout| timeout.saturating_sub(start.elapsed()))
+            .unwrap_or(Duration::from_millis(10))
+            .min(Duration::from_millis(10));
+        thread::sleep(sleep);
     }
 }
 
@@ -160,13 +157,6 @@ fn join_pipe_reader(reader: Option<JoinHandle<io::Result<Vec<u8>>>>) -> io::Resu
     reader
         .join()
         .map_err(|_| io::Error::other("output reader thread panicked"))?
-}
-
-fn write_child_stdin(child: &mut Child, bytes: Vec<u8>) -> io::Result<()> {
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(&bytes)?;
-    }
-    Ok(())
 }
 
 pub(super) fn cleanup_child_after_setup_error(mut child: Child, setup_err: io::Error) -> io::Error {

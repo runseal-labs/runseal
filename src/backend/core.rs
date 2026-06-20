@@ -4,7 +4,7 @@ use super::execution::BackendExecutionOutput;
 use super::plan::PlatformSandboxPlan;
 use super::skeleton::{LinuxCommunityBackend, LocalBackend, MacosExperimentalBackend};
 use super::windows::WindowsReferenceBackend;
-use crate::execution::{ExecutionEnv, ExecutionStdin};
+use crate::execution::{ExecutionCancellation, ExecutionEnv, ExecutionStdin};
 use crate::policy::{BackendFeature, SandboxPolicy};
 use serde_json::Value;
 use std::io;
@@ -31,6 +31,10 @@ pub trait SandboxBackend {
         cwd: &Path,
         policy: &SandboxPolicy,
     ) -> Result<PlatformSandboxPlan, BackendError>;
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "ponytail: cancellation is one control bit; add a request struct when more arrive"
+    )]
     fn execute_plan(
         &self,
         plan: &PlatformSandboxPlan,
@@ -39,6 +43,7 @@ pub trait SandboxBackend {
         stdin: ExecutionStdin,
         env: &ExecutionEnv,
         timeout: Option<Duration>,
+        cancellation: Option<ExecutionCancellation>,
     ) -> io::Result<BackendExecutionOutput>;
     fn capabilities_json(&self) -> Value;
 }
@@ -96,9 +101,10 @@ impl SandboxBackend for ActiveBackend {
         stdin: ExecutionStdin,
         env: &ExecutionEnv,
         timeout: Option<Duration>,
+        cancellation: Option<ExecutionCancellation>,
     ) -> io::Result<BackendExecutionOutput> {
         self.as_backend()
-            .execute_plan(plan, command, cwd, stdin, env, timeout)
+            .execute_plan(plan, command, cwd, stdin, env, timeout, cancellation)
     }
 
     fn capabilities_json(&self) -> Value {

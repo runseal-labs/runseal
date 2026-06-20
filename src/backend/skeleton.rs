@@ -5,7 +5,7 @@ use super::execution::BackendExecutionOutput;
 use super::host_platform;
 use super::plan::PlatformSandboxPlan;
 use super::process::spawn_local_command;
-use crate::execution::{ExecutionEnv, ExecutionStdin};
+use crate::execution::{ExecutionCancellation, ExecutionEnv, ExecutionStdin};
 use crate::policy::{BackendFeature, SandboxPolicy};
 use serde_json::Value;
 use std::io;
@@ -56,8 +56,9 @@ impl SandboxBackend for LocalBackend {
         stdin: ExecutionStdin,
         env: &ExecutionEnv,
         timeout: Option<Duration>,
+        cancellation: Option<ExecutionCancellation>,
     ) -> io::Result<BackendExecutionOutput> {
-        spawn_local_command(plan, command, cwd, stdin, env, timeout)
+        spawn_local_command(plan, command, cwd, stdin, env, timeout, cancellation)
     }
 
     fn capabilities_json(&self) -> Value {
@@ -107,8 +108,9 @@ impl SandboxBackend for MacosExperimentalBackend {
         stdin: ExecutionStdin,
         env: &ExecutionEnv,
         timeout: Option<Duration>,
+        cancellation: Option<ExecutionCancellation>,
     ) -> io::Result<BackendExecutionOutput> {
-        spawn_local_command(plan, command, cwd, stdin, env, timeout)
+        spawn_local_command(plan, command, cwd, stdin, env, timeout, cancellation)
     }
 
     fn capabilities_json(&self) -> Value {
@@ -161,8 +163,9 @@ impl SandboxBackend for LinuxCommunityBackend {
         stdin: ExecutionStdin,
         env: &ExecutionEnv,
         timeout: Option<Duration>,
+        cancellation: Option<ExecutionCancellation>,
     ) -> io::Result<BackendExecutionOutput> {
-        spawn_local_command(plan, command, cwd, stdin, env, timeout)
+        spawn_local_command(plan, command, cwd, stdin, env, timeout, cancellation)
     }
 
     fn capabilities_json(&self) -> Value {

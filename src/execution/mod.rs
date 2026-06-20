@@ -15,6 +15,23 @@ pub struct ExecutionEnv {
     pub entries: Vec<(String, String)>,
 }
 
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ExecutionCancellation {
+    cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl ExecutionCancellation {
+    #[allow(dead_code)] // ponytail: service active cancel wires this in the next slice.
+    pub(crate) fn cancel(&self) {
+        self.cancelled
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.cancelled.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
 impl ExecutionEnv {
     pub fn keys(&self) -> Vec<String> {
         self.entries.iter().map(|(key, _)| key.clone()).collect()
