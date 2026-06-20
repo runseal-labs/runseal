@@ -332,11 +332,11 @@ fn assert_no_private_linux_backend_terms(value: &Value) {
     let public_payload = value.to_string();
     for private_term in [
         "bwrap",
+        "bubblewrap",
         "--unshare-user",
         "--unshare-pid",
         "--unshare-net",
         "--ro-bind",
-        "bubblewrap argv",
         "namespace flags",
     ] {
         assert!(
@@ -4743,7 +4743,7 @@ fn sandboxed_policy_uses_platform_backend_or_reports_unavailable() -> Result<()>
         assert_eq!(response["result"]["sandbox"]["enforced"], true);
         assert_eq!(
             response["result"]["platform_plan"]["enforcement"],
-            "linux-bubblewrap-read-only"
+            "linux-read-only-sandbox"
         );
         assert_eq!(
             response["result"]["platform_plan"]["process"]["boundary"],

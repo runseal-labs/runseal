@@ -178,7 +178,7 @@ impl SandboxBackend for LinuxCommunityBackend {
         timeout: Option<Duration>,
         cancellation: Option<ExecutionCancellation>,
     ) -> io::Result<BackendExecutionOutput> {
-        if plan.enforcement == LINUX_BUBBLEWRAP_READ_ONLY_ENFORCEMENT {
+        if plan.enforcement == LINUX_READ_ONLY_ENFORCEMENT {
             return crate::linux::bubblewrap::execute_read_only(
                 plan,
                 command,
@@ -208,7 +208,7 @@ impl SandboxBackend for LinuxCommunityBackend {
         payload
     }
 }
-const LINUX_BUBBLEWRAP_READ_ONLY_ENFORCEMENT: &str = "linux-bubblewrap-read-only";
+const LINUX_READ_ONLY_ENFORCEMENT: &str = "linux-read-only-sandbox";
 
 fn linux_read_only_candidate(policy: &SandboxPolicy) -> bool {
     policy.sandbox_level == SandboxLevel::ReadOnly
@@ -225,7 +225,7 @@ fn linux_read_only_plan(
     policy: &SandboxPolicy,
 ) -> PlatformSandboxPlan {
     let mut plan = PlatformSandboxPlan::local_execution(backend, execution_id, cwd, policy);
-    plan.enforcement = LINUX_BUBBLEWRAP_READ_ONLY_ENFORCEMENT;
+    plan.enforcement = LINUX_READ_ONLY_ENFORCEMENT;
     plan.process_boundary = "namespace-sandbox";
     plan.process_cleanup = "process-tree";
     plan.network_direct_egress = "deny";
