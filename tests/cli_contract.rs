@@ -232,6 +232,7 @@ fn assert_portable_capability_probe_contract(payload: &Value) {
             "seccomp",
             "landlock",
             "bubblewrap",
+            "user_namespace_quota",
             "max_user_namespaces",
             "unprivileged_user_namespace",
         ] {
@@ -251,6 +252,7 @@ fn assert_portable_capability_probe_contract(payload: &Value) {
 
     if cfg!(target_os = "macos") {
         assert!(probes["runtime"]["sandbox_exec"].as_str().is_some());
+        assert!(probes["runtime"]["sandbox_runtime"].as_str().is_some());
     }
 }
 

@@ -8,6 +8,7 @@ pub(crate) fn payload() -> Value {
         "network_enforcement": "unsupported",
         "runtime": {
             "sandbox_exec": executable_file_status("/usr/bin/sandbox-exec"),
+            "sandbox_runtime": executable_file_status("/usr/libexec/sandboxd"),
         },
     })
 }

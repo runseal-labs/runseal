@@ -560,6 +560,11 @@ fn linux_skeleton_reports_community_track_without_sandbox_features() {
             .as_str()
             .is_some()
     );
+    assert!(
+        capabilities["capability_probes"]["runtime"]["user_namespace_quota"]
+            .as_str()
+            .is_some()
+    );
     let serialized = capabilities.to_string();
     assert!(!serialized.contains("/proc/"));
     assert!(!serialized.contains("/sys/"));
@@ -614,7 +619,14 @@ fn macos_skeleton_reports_experimental_track_without_sandbox_features() {
             .as_str()
             .is_some()
     );
-    assert!(!capabilities.to_string().contains("/usr/bin"));
+    assert!(
+        capabilities["capability_probes"]["runtime"]["sandbox_runtime"]
+            .as_str()
+            .is_some()
+    );
+    let serialized = capabilities.to_string();
+    assert!(!serialized.contains("/usr/bin"));
+    assert!(!serialized.contains("/usr/libexec"));
 }
 
 #[test]
