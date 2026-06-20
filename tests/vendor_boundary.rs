@@ -97,6 +97,25 @@ fn protocol_modules_do_not_depend_on_backend_modules() {
 }
 
 #[test]
+fn protocol_modules_do_not_depend_on_command_modules() {
+    for entry in std::fs::read_dir(RUNSEAL_PROTOCOL_DIR).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
+            continue;
+        }
+
+        let source = std::fs::read_to_string(&path).unwrap();
+        for forbidden in ["crate::commands", "super::commands"] {
+            assert!(
+                !source.contains(forbidden),
+                "{} must not depend on command module token {forbidden}",
+                path.display()
+            );
+        }
+    }
+}
+
+#[test]
 fn service_uses_stable_setup_status_error_code() {
     assert!(!RUNSEAL_SERVICE_SOURCE.contains("SETUP_STATUS_FAILED"));
     assert!(!RUNSEAL_SETUP_COMMAND_SOURCE.contains("WINDOWS_SANDBOX_SETUP_STATUS_FAILED"));

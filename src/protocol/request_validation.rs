@@ -1,4 +1,3 @@
-use crate::commands;
 use crate::error::RunSealError;
 use crate::execution::{ExecutionEnv, current_dir, execute_command, normalize_execution_cwd};
 use crate::policy::{
@@ -13,7 +12,9 @@ use serde_json::{Map, Value, json};
 use std::path::PathBuf;
 use std::time::Duration;
 
-pub(crate) fn explain_policy_from_params(params: &Value) -> Result<Value, RunSealError> {
+pub(crate) fn explain_policy_request_from_params(
+    params: &Value,
+) -> Result<(SandboxPolicy, PathBuf), RunSealError> {
     let params = params_object(params, "explainPolicy")?;
     validate_param_keys(params, "explainPolicy", &["policy", "cwd", "network"])?;
     let cwd = params
@@ -29,7 +30,7 @@ pub(crate) fn explain_policy_from_params(params: &Value) -> Result<Value, RunSea
     let network = network_override_from_params(params)?;
     let policy = normalize_policy(&policy, &cwd, network)?;
 
-    Ok(commands::explain_policy::explain_policy_json(&policy, &cwd))
+    Ok((policy, cwd))
 }
 
 pub(crate) fn setup_status_cwd_from_params(params: &Value) -> Result<PathBuf, RunSealError> {

@@ -2,7 +2,7 @@ use crate::commands;
 use crate::error::RunSealError;
 use crate::protocol::request_validation::{
     audit_events_params, cancel_execution_id_from_params, execute_from_params,
-    explain_policy_from_params, get_execution_id_from_params, session_id_from_params,
+    explain_policy_request_from_params, get_execution_id_from_params, session_id_from_params,
     setup_status_cwd_from_params, subscribe_events_params, tail_audit_params,
     validate_empty_params,
 };
@@ -70,8 +70,11 @@ impl Service {
                 Ok(()) => vec![rpc::result(id, self.service_status())],
                 Err(err) => vec![rpc::error(id, err)],
             },
-            "explainPolicy" => match explain_policy_from_params(&params) {
-                Ok(result) => vec![rpc::result(id, result)],
+            "explainPolicy" => match explain_policy_request_from_params(&params) {
+                Ok((policy, cwd)) => vec![rpc::result(
+                    id,
+                    commands::explain_policy::explain_policy_json(&policy, &cwd),
+                )],
                 Err(err) => vec![rpc::error(id, err)],
             },
             "getSetupStatus" => {
