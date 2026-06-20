@@ -406,6 +406,51 @@ fn rpc_stdio_replies_before_stdin_eof() -> Result<()> {
 }
 
 #[test]
+fn rpc_stdio_reports_parse_error_and_continues() -> Result<()> {
+    let mut child = Command::new(require_runseal_bin()?)
+        .args(["rpc", "--stdio"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to spawn runseal rpc")?;
+    let mut stdin = child.stdin.take().context("stdin unavailable")?;
+    let stdout = child.stdout.take().context("stdout unavailable")?;
+    let mut stdout = BufReader::new(stdout);
+
+    stdin.write_all(b"{not-json\n")?;
+    stdin.write_all(rpc_request_with_id(1, "getVersion", json!({})).as_bytes())?;
+    stdin.flush()?;
+
+    let mut parse_line = String::new();
+    stdout
+        .read_line(&mut parse_line)
+        .context("failed to read parse error response")?;
+    let parse_response: Value =
+        serde_json::from_str(&parse_line).context("parse error response must be JSON")?;
+    assert_eq!(parse_response["id"], Value::Null);
+    assert_eq!(parse_response["error"]["code"], -32700);
+    assert_eq!(parse_response["error"]["data"]["code"], "INVALID_REQUEST");
+    assert!(
+        parse_response["error"]["data"]["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("invalid JSON-RPC request")
+    );
+
+    let (_, ok_response) = read_rpc_response(&mut stdout, 1)?;
+    assert_eq!(
+        ok_response["result"]["protocol_version"],
+        "runseal.protocol/v1"
+    );
+
+    drop(stdin);
+    let status = child.wait().context("failed to wait for runseal rpc")?;
+    assert!(status.success());
+    Ok(())
+}
+
+#[test]
 fn rpc_stdio_does_not_keep_completed_execution_state() -> Result<()> {
     #[cfg(windows)]
     let _guard = windows_protocol_lock()?;
