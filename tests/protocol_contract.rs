@@ -1493,6 +1493,10 @@ fn service_stdio_keeps_failed_execution_state() -> Result<()> {
                 "command": ["runseal-command-that-does-not-exist"],
                 "cwd": tmp.path(),
                 "policy": "danger-full-access",
+                "metadata": {
+                    "Authorization": "Bearer summary-secret",
+                    "safe": "visible"
+                },
             }),
         )
         .as_bytes(),
@@ -1603,6 +1607,22 @@ fn service_stdio_keeps_failed_execution_state() -> Result<()> {
         failed_event["params"]["policy_hash"],
         execute_response["error"]["data"]["policy_hash"]
     );
+
+    stdin.write_all(rpc_request_with_id(5, "listExecutions", json!({})).as_bytes())?;
+    let (_, list_response) = read_rpc_response(&mut stdout, 5)?;
+    let summaries = list_response["result"]["executions"]
+        .as_array()
+        .context("executions must be an array")?;
+    let summary = summaries
+        .iter()
+        .find(|summary| summary["execution_id"] == execution_id)
+        .context("failed execution summary must exist")?;
+    assert_eq!(summary["status"], "failed");
+    assert_eq!(summary["error"]["code"], "EXECUTION_FAILED_TO_START");
+    assert!(summary.get("metadata").is_none());
+    assert!(summary.get("events").is_none());
+    assert!(summary.get("platform_plan").is_none());
+    assert!(!summary.to_string().contains("summary-secret"));
 
     drop(stdin);
     let status = child.wait().context("failed to wait for runseal service")?;
