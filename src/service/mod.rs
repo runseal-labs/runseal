@@ -111,7 +111,7 @@ impl Service {
                 Err(err) => vec![rpc::error(id, err)],
             },
             "cancelExecution" => self.cancel_execution(id, &params),
-            "subscribeEvents" => self.subscribe_events(id, &params),
+            "subscribeEvents" => self.subscribe_events(id, &params, sender),
             "getAuditEvents" => self.get_audit_events(id, &params),
             "tailAudit" => self.tail_audit(id, &params),
             "disposeSession" => self.dispose_session(id, &params),
@@ -273,12 +273,20 @@ impl Service {
         }
     }
 
-    fn subscribe_events(&self, id: Value, params: &Value) -> Vec<Value> {
+    fn subscribe_events(
+        &self,
+        id: Value,
+        params: &Value,
+        sender: Option<Sender<Vec<Value>>>,
+    ) -> Vec<Value> {
         let (execution_id, types) = match subscribe_events_params(params) {
             Ok(params) => params,
             Err(err) => return vec![rpc::error(id, err)],
         };
-        let Some(events) = self.state().execution_events(&execution_id, &types) else {
+        let Some(events) = self
+            .state()
+            .subscribe_execution_events(&execution_id, types, sender)
+        else {
             return vec![rpc::error(id, execution_not_found(&execution_id))];
         };
         let event_count = events.len();

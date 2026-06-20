@@ -213,6 +213,10 @@ impl ExecutionStore {
             })
     }
 
+    pub(super) fn is_active(&self, execution_id: &str) -> bool {
+        self.active.contains_key(execution_id)
+    }
+
     pub(super) fn all_events(&self, types: &[String]) -> Vec<Value> {
         self.record_order
             .iter()

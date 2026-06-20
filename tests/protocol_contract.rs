@@ -1958,25 +1958,48 @@ fn service_stdio_cancels_running_execution() -> Result<()> {
 
     stdin.write_all(
         rpc_request_with_id(
+            200,
+            "subscribeEvents",
+            json!({ "execution_id": execution_id, "types": ["execution.cancelled"] }),
+        )
+        .as_bytes(),
+    )?;
+    stdin.flush()?;
+    let (_, live_subscription_response) = read_rpc_response(&mut stdout, 200)?;
+    assert_eq!(
+        live_subscription_response["result"]["execution_id"],
+        execution_id
+    );
+
+    stdin.write_all(
+        rpc_request_with_id(
             4,
             "cancelExecution",
             json!({ "execution_id": execution_id, "reason": "test" }),
         )
         .as_bytes(),
     )?;
-    let (_, cancel_response) = read_rpc_response(&mut stdout, 4)?;
+    let (cancel_response_events, cancel_response, execute_response) =
+        read_two_rpc_responses(&mut stdout, 4, 1)?;
     assert_eq!(cancel_response["result"]["execution_id"], execution_id);
     assert_eq!(cancel_response["result"]["status"], "cancelling");
 
-    let (cancel_events, execute_response) = read_rpc_response(&mut stdout, 1)?;
     assert_eq!(
         execute_response["error"]["data"]["code"],
         "EXECUTION_CANCELLED"
     );
     assert!(
-        cancel_events
+        cancel_response_events
             .iter()
             .any(|event| event["params"]["type"] == "execution.cancelled")
+    );
+    let cancelled_event_count = cancel_response_events
+        .iter()
+        .filter(|event| event["params"]["type"] == "execution.cancelled")
+        .count();
+    assert!(
+        cancelled_event_count >= 2,
+        "live subscription must stream future cancellation events"
     );
 
     stdin.write_all(
@@ -2756,6 +2779,29 @@ fn read_rpc_response(
         }
         notifications.push(message);
     }
+}
+
+fn read_two_rpc_responses(
+    stdout: &mut BufReader<impl std::io::Read>,
+    first_id: u64,
+    second_id: u64,
+) -> Result<(Vec<Value>, Value, Value)> {
+    let mut notifications = Vec::new();
+    let mut first_response = None;
+    let mut second_response = None;
+    while first_response.is_none() || second_response.is_none() {
+        let message = read_rpc_message(stdout)?;
+        match message.get("id").and_then(Value::as_u64) {
+            Some(id) if id == first_id => first_response = Some(message),
+            Some(id) if id == second_id => second_response = Some(message),
+            _ => notifications.push(message),
+        }
+    }
+    Ok((
+        notifications,
+        first_response.context("first response must be set")?,
+        second_response.context("second response must be set")?,
+    ))
 }
 
 fn read_rpc_message(stdout: &mut BufReader<impl std::io::Read>) -> Result<Value> {
