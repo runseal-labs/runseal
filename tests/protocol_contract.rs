@@ -264,6 +264,16 @@ fn expected_status(supported: bool) -> &'static str {
     }
 }
 
+fn expected_read_only_status(payload: &Value) -> &'static str {
+    if cfg!(target_os = "linux")
+        && payload["capability_probes"]["runtime"]["bubblewrap_read_only_candidate"] == "available"
+    {
+        "experimental"
+    } else {
+        expected_status(expected_windows_sandbox_supported())
+    }
+}
+
 fn expected_missing_features(additional: &[&'static str]) -> Vec<&'static str> {
     let mut features = vec!["filesystem_policy"];
     if !expected_runtime_roots_supported() {
@@ -1367,6 +1377,10 @@ fn get_capabilities_rpc_contract() -> Result<()> {
         ])
     );
     assert_eq!(payload["sandbox_levels"]["danger-full-access"], "supported");
+    assert_eq!(
+        payload["sandbox_levels"]["read-only"],
+        expected_read_only_status(payload)
+    );
     assert_eq!(
         payload["sandbox_levels"]["workspace-write"],
         expected_status(expected_windows_sandbox_supported())

@@ -11,8 +11,8 @@ RUNSEAL_BIN=/path/to/runseal cargo test --test cli_contract --test protocol_cont
 On Windows, the tests serialize shared sandbox setup state internally, so the default `cargo test` path is supported.
 
 Run the suite on Windows before claiming reference-backend readiness. Other
-platforms can run the same tests to verify platform selection and fail-closed
-behavior until their backends are promoted.
+platforms can run the same tests to verify platform selection, experimental
+capability gates, and fail-closed behavior until their backends are promoted.
 
 The tests are black-box by design:
 
@@ -20,7 +20,8 @@ The tests are black-box by design:
 - Capability reporting through `runseal capabilities` and `getCapabilities`,
   without exposing private Windows account or setup identities.
 - Windows hosts select the Windows reference backend and run supported sandbox levels through the shared conformance tests.
-- macOS and Linux hosts select explicit experimental/community skeleton backends and still fail closed for unsupported sandbox levels.
+- macOS and Linux hosts select explicit experimental/community backends and still fail closed for unsupported sandbox levels.
+- Linux hosts may run `read-only` as experimental when the bubblewrap probe gate is available.
 - Windows sandbox plans include runtime root, synthetic home, setup requirements, protected filesystem categories, process boundary state, and network guard planning.
 - Windows filesystem ACL setup must bind rules to a single sandbox user restricted process identity before any rule can be applied.
 - Windows single-identity freeze gates cover policy epoch immutability,
@@ -48,4 +49,4 @@ The tests are black-box by design:
 - Executions write JSONL audit events under `.runseal/audit/`.
 - Policy denials and backend fail-closed decisions also write JSONL audit events.
 - `danger-full-access` is explicit local execution with no sandbox guarantee.
-- Sandboxed policies fail closed unless a backend can enforce them.
+- Sandboxed policies fail closed unless a backend can enforce them or explicitly reports an experimental conformance-gated path.
