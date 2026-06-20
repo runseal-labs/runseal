@@ -30,6 +30,7 @@ The design lives in the RFC repository:
 - https://github.com/runseal-labs/rfcs
 - Protocol draft: https://github.com/runseal-labs/rfcs/blob/main/rfcs/0006-stable-execution-protocol.md
 - Escape and adversarial conformance model: https://github.com/runseal-labs/rfcs/blob/main/rfcs/0015-escape-definition-and-adversarial-conformance.md
+- Adversarial conformance harness and case format: https://github.com/runseal-labs/rfcs/blob/main/rfcs/0016-adversarial-conformance-harness-and-case-format.md
 
 ## Quickstart
 
