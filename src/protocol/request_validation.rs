@@ -1,5 +1,5 @@
 use crate::error::RunSealError;
-use crate::execution::{ExecutionEnv, current_dir, execute_command, normalize_execution_cwd};
+use crate::execution::{ExecutionEnv, ExecutionStdin, current_dir, normalize_execution_cwd};
 use crate::policy::{
     NetworkMode, SandboxPolicy, matches_environment_scrub_pattern, normalize_policy,
 };
@@ -11,6 +11,16 @@ use crate::{
 use serde_json::{Map, Value, json};
 use std::path::PathBuf;
 use std::time::Duration;
+
+pub(crate) struct ExecuteRequest {
+    pub(crate) command: Vec<String>,
+    pub(crate) cwd: PathBuf,
+    pub(crate) policy: SandboxPolicy,
+    pub(crate) stdin: ExecutionStdin,
+    pub(crate) env: ExecutionEnv,
+    pub(crate) metadata: Option<Value>,
+    pub(crate) timeout: Option<Duration>,
+}
 
 pub(crate) fn explain_policy_request_from_params(
     params: &Value,
@@ -44,7 +54,7 @@ pub(crate) fn setup_status_cwd_from_params(params: &Value) -> Result<PathBuf, Ru
     normalize_execution_cwd(&cwd)
 }
 
-pub(crate) fn execute_from_params(params: &Value) -> Result<(Vec<Value>, Value), RunSealError> {
+pub(crate) fn execute_request_from_params(params: &Value) -> Result<ExecuteRequest, RunSealError> {
     let params = params_object(params, "execute")?;
     validate_param_keys(
         params,
@@ -88,7 +98,15 @@ pub(crate) fn execute_from_params(params: &Value) -> Result<(Vec<Value>, Value),
     let timeout = timeout_from_params(params, &policy)?;
     let env = env_from_params(params, &policy)?;
 
-    execute_command(&command, &cwd, &policy, stdin, env, metadata, timeout)
+    Ok(ExecuteRequest {
+        command,
+        cwd,
+        policy,
+        stdin,
+        env,
+        metadata,
+        timeout,
+    })
 }
 
 pub(crate) fn get_execution_id_from_params(params: &Value) -> Result<String, RunSealError> {

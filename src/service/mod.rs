@@ -1,7 +1,8 @@
 use crate::commands;
 use crate::error::RunSealError;
+use crate::execution::execute_command;
 use crate::protocol::request_validation::{
-    audit_events_params, cancel_execution_id_from_params, execute_from_params,
+    audit_events_params, cancel_execution_id_from_params, execute_request_from_params,
     explain_policy_request_from_params, get_execution_id_from_params, session_id_from_params,
     setup_status_cwd_from_params, subscribe_events_params, tail_audit_params,
     validate_empty_params,
@@ -115,7 +116,18 @@ impl Service {
     }
 
     fn execute(&mut self, id: Value, params: &Value) -> Vec<Value> {
-        match execute_from_params(params) {
+        let result = execute_request_from_params(params).and_then(|request| {
+            execute_command(
+                &request.command,
+                &request.cwd,
+                &request.policy,
+                request.stdin,
+                request.env,
+                request.metadata,
+                request.timeout,
+            )
+        });
+        match result {
             Ok((events, result)) => {
                 self.state.record_finished_execution(&result, &events);
                 let mut messages: Vec<Value> = events
