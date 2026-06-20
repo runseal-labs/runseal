@@ -159,7 +159,10 @@ impl Service {
             Ok(execution_id) => execution_id,
             Err(err) => return vec![rpc::error(id, err)],
         };
-        vec![rpc::error(id, execution_not_found(&execution_id))]
+        match self.state.execution_result(&execution_id) {
+            Some(result) => vec![rpc::error(id, execution_not_cancellable(&result))],
+            None => vec![rpc::error(id, execution_not_found(&execution_id))],
+        }
     }
 
     fn subscribe_events(&self, id: Value, params: &Value) -> Vec<Value> {
@@ -241,6 +244,25 @@ fn execution_not_found(execution_id: &str) -> RunSealError {
         "EXECUTION_NOT_FOUND",
         format!("execution not found: {execution_id}"),
         json!({ "execution_id": execution_id }),
+    )
+}
+
+fn execution_not_cancellable(result: &Value) -> RunSealError {
+    let execution_id = result
+        .get("execution_id")
+        .and_then(Value::as_str)
+        .unwrap_or("exec_unknown");
+    let status = result
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    RunSealError::with_details(
+        "EXECUTION_NOT_CANCELLABLE",
+        format!("execution is not cancellable: {execution_id}"),
+        json!({
+            "execution_id": execution_id,
+            "status": status,
+        }),
     )
 }
 
