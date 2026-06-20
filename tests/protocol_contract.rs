@@ -4754,6 +4754,11 @@ fn sandboxed_policy_uses_platform_backend_or_reports_unavailable() -> Result<()>
             "deny"
         );
         assert_no_private_linux_backend_terms(response);
+        let audit_path = response["result"]["audit_path"]
+            .as_str()
+            .expect("successful sandboxed execution must return audit_path");
+        let audit_events = read_audit_events(tmp.path(), audit_path)?;
+        assert_no_private_linux_backend_terms(&json!(audit_events));
         return Ok(());
     }
 
