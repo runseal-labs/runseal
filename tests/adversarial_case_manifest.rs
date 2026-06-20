@@ -470,7 +470,8 @@ fn validate_case(case: &Value, path: &Path, case_ids: &mut HashSet<String>) -> R
         REQUEST_METHODS,
         path,
     )?;
-    if required_string(&request, "method", path)? == "execute" {
+    let method = required_string(&request, "method", path)?;
+    if method == "execute" {
         match request
             .get("command")
             .context("case.request.command must be present")?
@@ -489,6 +490,8 @@ fn validate_case(case: &Value, path: &Path, case_ids: &mut HashSet<String>) -> R
                 "case.request.command must be an argv array outside execution_injection cases"
             ),
         }
+    } else if request.get("command").is_some() {
+        bail!("case.request.command is only valid for execute requests");
     }
     if let Some(timeout_ms) = request.get("timeout_ms") {
         assert_positive_u64(timeout_ms, "case.request.timeout_ms", path)?;
