@@ -164,6 +164,10 @@ Integrators should start with one of these surfaces:
 - Service stdio: launch `runseal service --stdio` when one local process should own completed execution state across JSON-RPC requests.
 - Conformance: set `RUNSEAL_BIN=/path/to/runseal` and run the black-box tests in `tests/`.
 
+Service stdio is a local stateful execution coordinator. It is not a network
+server, remote API, installable system service, or replacement for direct
+`runseal exec` execution.
+
 Clients should gate sandboxed execution on `getCapabilities` and fail closed
 when a requested feature is unsupported or setup is unavailable. `getSetupStatus`
 reports setup readiness without changing setup state. `getServiceStatus` reports
