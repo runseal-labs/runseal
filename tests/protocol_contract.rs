@@ -3493,6 +3493,46 @@ fn execute_rejects_secret_env_keys() -> Result<()> {
 }
 
 #[test]
+fn execute_rejects_invalid_env_shapes() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let cases = [
+        (json!("RUNSEAL_FLAG=1"), "params.env must be an object"),
+        (
+            json!({"RUNSEAL_FLAG": true}),
+            "params.env.RUNSEAL_FLAG must be a string",
+        ),
+        (
+            json!({"1RUNSEAL_FLAG": "value"}),
+            "params.env.1RUNSEAL_FLAG is not a valid environment variable name",
+        ),
+    ];
+
+    for (env, expected_reason) in cases {
+        let output = run_rpc(&rpc_request(
+            "execute",
+            json!({
+                "command": [python_bin(), "-c", "print('must not run')"],
+                "cwd": tmp.path(),
+                "policy": "danger-full-access",
+                "env": env
+            }),
+        ))?;
+
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let messages = stdout_json_lines(&output)?;
+        let response = &messages[0];
+
+        assert_eq!(response["error"]["data"]["code"], "INVALID_REQUEST");
+        assert_eq!(response["error"]["data"]["reason"], expected_reason);
+    }
+    Ok(())
+}
+
+#[test]
 fn execute_copies_metadata_to_audit_events() -> Result<()> {
     let tmp = TempDir::new()?;
     let metadata = json!({
