@@ -690,6 +690,34 @@
   },
   {
     "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.network.proxy-env-override.v1",
+    "title": "Proxy environment overrides must not bypass managed proxy policy",
+    "primary_class": "network",
+    "secondary_classes": ["policy", "audit"],
+    "capabilities_under_test": ["network_proxy", "managed_proxy", "direct_network_deny", "audit_jsonl"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community"],
+    "sandbox_level": "workspace-write",
+    "network_mode": "proxy",
+    "fixtures": [{"kind": "network_listener", "name": "unmanaged target"}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "import os,socket; socket.create_connection(('1.1.1.1',53), timeout=0.5)"],
+      "policy": "workspace-write",
+      "network": "proxy",
+      "env": {"HTTP_PROXY": "http://127.0.0.1:9", "HTTPS_PROXY": "http://127.0.0.1:9"}
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["network_connection_absent", "audit_not_contains_secret"]
+    },
+    "public_report_labels": ["network_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
     "case_id": "adv.network.direct-egress-disabled.v1",
     "title": "Disabled network policy must block direct egress",
     "primary_class": "network",
@@ -704,6 +732,58 @@
       "command": ["python", "-c", "import socket; socket.create_connection(('1.1.1.1', 53), timeout=0.5)"],
       "policy": "workspace-write",
       "network": "disabled"
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["network_connection_absent"]
+    },
+    "public_report_labels": ["network_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.network.dns-leak-disabled.v1",
+    "title": "Disabled network policy must not allow DNS egress",
+    "primary_class": "network",
+    "capabilities_under_test": ["network_disabled", "direct_network_deny"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community"],
+    "sandbox_level": "workspace-write",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "import socket; socket.getaddrinfo('example.com', 80)"],
+      "policy": "workspace-write",
+      "network": "disabled"
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["network_connection_absent"]
+    },
+    "public_report_labels": ["network_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.network.loopback-tunnel-bypass.v1",
+    "title": "Loopback tunnels must not bypass network policy",
+    "primary_class": "network",
+    "capabilities_under_test": ["network_proxy", "managed_proxy", "direct_network_deny"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community"],
+    "sandbox_level": "workspace-write",
+    "network_mode": "proxy",
+    "fixtures": [{"kind": "network_listener", "name": "loopback tunnel"}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "import socket; socket.create_connection(('127.0.0.1', 9), timeout=0.5)"],
+      "policy": "workspace-write",
+      "network": "proxy"
     },
     "oracle": {
       "expected_result": "deny_or_fail_closed",
