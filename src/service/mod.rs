@@ -6,7 +6,6 @@ use crate::execution::{
     ExecutionCancellation, audit_stream_event_metadata, execute_command_with_ids,
 };
 use crate::rpc;
-use crate::setup::windows_sandbox_setup_status_for_cwd;
 use event_bus::{notification as event_notification, notifications as event_notifications};
 use request_validation::{
     ExecuteRequest, audit_events_params, cancel_execution_id_from_params,
@@ -24,6 +23,7 @@ mod executions;
 mod policy_epoch;
 mod request_validation;
 mod sessions;
+mod setup_readiness;
 mod state;
 
 #[derive(Clone, Default)]
@@ -100,7 +100,7 @@ impl Service {
                     Ok(cwd) => cwd,
                     Err(err) => return vec![rpc::error(id, err)],
                 };
-                match windows_sandbox_setup_status_for_cwd(&cwd) {
+                match self.state().setup_status(&cwd) {
                     Ok(result) => vec![rpc::result(id, result)],
                     Err(err) => vec![rpc::error(id, RunSealError::new("INTERNAL_ERROR", err))],
                 }

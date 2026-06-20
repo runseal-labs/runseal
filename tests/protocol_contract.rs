@@ -1280,6 +1280,58 @@ fn get_service_status_does_not_mutate_service_execution_index() -> Result<()> {
 }
 
 #[test]
+fn get_setup_status_does_not_mutate_service_execution_index() -> Result<()> {
+    #[cfg(windows)]
+    let _guard = windows_protocol_lock()?;
+
+    let tmp = TempDir::new()?;
+    let mut child = Command::new(require_runseal_bin()?)
+        .args(["service", "--stdio"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to spawn runseal service")?;
+    let mut stdin = child.stdin.take().context("stdin unavailable")?;
+    let stdout = child.stdout.take().context("stdout unavailable")?;
+    let mut stdout = BufReader::new(stdout);
+
+    stdin.write_all(
+        rpc_request_with_id(
+            1,
+            "execute",
+            json!({
+                "command": [python_bin(), "-c", "print('setup-status-readonly')"],
+                "cwd": tmp.path(),
+                "policy": "danger-full-access",
+            }),
+        )
+        .as_bytes(),
+    )?;
+    read_rpc_response(&mut stdout, 1)?;
+
+    stdin.write_all(rpc_request_with_id(2, "listExecutions", json!({})).as_bytes())?;
+    let (_, before_response) = read_rpc_response(&mut stdout, 2)?;
+    let before_executions = before_response["result"]["executions"].clone();
+
+    stdin.write_all(
+        rpc_request_with_id(3, "getSetupStatus", json!({ "cwd": tmp.path() })).as_bytes(),
+    )?;
+    let (_, status_response) = read_rpc_response(&mut stdout, 3)?;
+    assert_eq!(status_response["result"]["setup"], "windows-sandbox");
+    assert!(status_response["result"]["next_action"].as_str().is_some());
+
+    stdin.write_all(rpc_request_with_id(4, "listExecutions", json!({})).as_bytes())?;
+    let (_, after_response) = read_rpc_response(&mut stdout, 4)?;
+    assert_eq!(after_response["result"]["executions"], before_executions);
+
+    drop(stdin);
+    let status = child.wait().context("failed to wait for runseal service")?;
+    assert!(status.success());
+    Ok(())
+}
+
+#[test]
 fn get_capabilities_rpc_contract() -> Result<()> {
     let output = run_rpc(&rpc_request("getCapabilities", json!({})))?;
 

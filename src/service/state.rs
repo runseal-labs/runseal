@@ -7,19 +7,26 @@ use super::event_bus::EventBus;
 use super::executions::ExecutionStore;
 use super::policy_epoch::PolicyEpochRuntime;
 use super::sessions::SessionStore;
+use super::setup_readiness::SetupReadinessCache;
 use crate::policy::SandboxPolicy;
+use std::path::Path;
 
 #[derive(Default)]
 pub(super) struct ServiceState {
     executions: ExecutionStore,
     event_bus: EventBus,
     policy_epoch: PolicyEpochRuntime,
+    setup_readiness: SetupReadinessCache,
     sessions: SessionStore,
 }
 
 impl ServiceState {
     pub(super) fn bind_policy_epoch(&mut self, policy: &SandboxPolicy) -> String {
         self.policy_epoch.bind(policy)
+    }
+
+    pub(super) fn setup_status(&mut self, cwd: &Path) -> Result<Value, String> {
+        self.setup_readiness.refresh(cwd)
     }
 
     pub(super) fn record_running_execution(
