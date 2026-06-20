@@ -571,6 +571,40 @@ fn read_only_denies_workspace_write_when_supported_or_fails_closed() -> Result<(
 }
 
 #[test]
+fn read_only_proxy_network_requires_supported_backend_or_fails_closed() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let workspace = tmp.path().join("workspace");
+    fs::create_dir_all(&workspace)?;
+    let response = execute_platform_script(
+        "read-only",
+        &workspace,
+        Some("proxy"),
+        "print('read-only-proxy-ok')".to_string(),
+        "'read-only-proxy-ok'".to_string(),
+    )?;
+
+    if is_backend_missing(&response) {
+        let expected_features = expected_missing_features(&["network_proxy", "managed_proxy"]);
+        assert_backend_missing_features(&response, &workspace, &expected_features)?;
+        return Ok(());
+    }
+    if is_backend_unavailable(&response) {
+        assert_backend_unavailable(&response, &workspace)?;
+        return Ok(());
+    }
+
+    assert_eq!(response["result"]["status"], "finished");
+    assert_eq!(response["result"]["exit_code"], 0);
+    assert!(
+        response["result"]["stdout"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("read-only-proxy-ok")
+    );
+    Ok(())
+}
+
+#[test]
 fn workspace_contained_denies_external_read_when_supported_or_fails_closed() -> Result<()> {
     let tmp = TempDir::new()?;
     let workspace = tmp.path().join("workspace");
