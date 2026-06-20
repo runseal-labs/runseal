@@ -6,7 +6,12 @@ pub(crate) fn result(id: Value, result: Value) -> Value {
 }
 
 pub(crate) fn error(id: Value, err: RunSealError) -> Value {
-    error_with_code(id, -32000, err)
+    let code = if err.code == "INVALID_REQUEST" {
+        -32602
+    } else {
+        -32000
+    };
+    error_with_code(id, code, err)
 }
 
 pub(crate) fn parse_error(reason: impl Into<String>) -> Value {
