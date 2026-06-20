@@ -118,6 +118,10 @@ impl Service {
         }
     }
 
+    pub(crate) fn shutdown(&self) -> usize {
+        self.state().cancel_all_active_executions()
+    }
+
     fn service_status(&self) -> Value {
         let stateful = matches!(self.mode, ServiceMode::Service);
         json!({

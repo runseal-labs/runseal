@@ -81,6 +81,7 @@ fn run_stateful_stdio() -> Result<(), String> {
         }
     }
 
+    service.shutdown();
     drop(sender);
     writer
         .join()

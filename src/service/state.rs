@@ -71,4 +71,8 @@ impl ServiceState {
     pub(super) fn cancel_active_execution(&mut self, execution_id: &str) -> Option<Value> {
         self.executions.cancel_active(execution_id)
     }
+
+    pub(super) fn cancel_all_active_executions(&mut self) -> usize {
+        self.executions.cancel_all_active()
+    }
 }

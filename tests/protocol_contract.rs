@@ -5,7 +5,7 @@ use std::env;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, ExitStatus, Output, Stdio};
 #[cfg(windows)]
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -71,6 +71,19 @@ fn run_rpc_with_env(message: &str, envs: &[(&str, &str)]) -> Result<Output> {
     child
         .wait_with_output()
         .context("failed to wait for runseal rpc")
+}
+
+fn wait_child_success(child: &mut std::process::Child, timeout: Duration) -> Result<ExitStatus> {
+    let started = Instant::now();
+    while started.elapsed() <= timeout {
+        if let Some(status) = child.try_wait().context("failed to poll child")? {
+            return Ok(status);
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    bail!("child did not exit within {timeout:?}");
 }
 
 #[cfg(windows)]
@@ -2079,6 +2092,47 @@ fn service_stdio_rejects_empty_command_without_recording_execution() -> Result<(
 
     drop(stdin);
     let status = child.wait().context("failed to wait for runseal service")?;
+    assert!(status.success());
+    Ok(())
+}
+
+#[test]
+fn service_stdio_shutdown_cancels_running_execution() -> Result<()> {
+    #[cfg(windows)]
+    let _guard = windows_protocol_lock()?;
+
+    let tmp = TempDir::new()?;
+    let mut child = Command::new(require_runseal_bin()?)
+        .args(["service", "--stdio"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to spawn runseal service")?;
+    let mut stdin = child.stdin.take().context("stdin unavailable")?;
+    let stdout = child.stdout.take().context("stdout unavailable")?;
+    let mut stdout = BufReader::new(stdout);
+
+    stdin.write_all(
+        rpc_request_with_id(
+            1,
+            "execute",
+            json!({
+                "command": [python_bin(), "-c", "import time; time.sleep(5)"],
+                "cwd": tmp.path(),
+                "policy": "danger-full-access",
+            }),
+        )
+        .as_bytes(),
+    )?;
+    stdin.flush()?;
+
+    let first_message = read_rpc_message(&mut stdout)?;
+    assert_eq!(first_message["method"], "event");
+    drop(stdin);
+
+    let status = wait_child_success(&mut child, Duration::from_secs(3))
+        .context("service must exit after cancelling active execution on stdin close")?;
     assert!(status.success());
     Ok(())
 }
