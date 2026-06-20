@@ -605,6 +605,44 @@ fn read_only_proxy_network_requires_supported_backend_or_fails_closed() -> Resul
 }
 
 #[test]
+fn read_only_network_disabled_blocks_direct_egress_when_supported_or_fails_closed() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let workspace = tmp.path().join("workspace");
+    fs::create_dir_all(&workspace)?;
+    let code = "import socket; socket.create_connection(('1.1.1.1', 53), timeout=0.5); print('direct-network-ok')".to_string();
+    let ps_code = "$ErrorActionPreference = 'Stop'; \
+                   $client = [Net.Sockets.TcpClient]::new(); \
+                   $async = $client.BeginConnect('1.1.1.1', 53, $null, $null); \
+                   if ($async.AsyncWaitHandle.WaitOne(500)) { \
+                       $client.EndConnect($async); \
+                       'direct-network-ok' \
+                   } else { throw 'direct network timeout' }"
+        .to_string();
+    let response =
+        execute_platform_script("read-only", &workspace, Some("disabled"), code, ps_code)?;
+
+    if is_backend_missing(&response) {
+        let expected_features = expected_missing_features(&["network_disabled"]);
+        assert_backend_missing_features(&response, &workspace, &expected_features)?;
+        return Ok(());
+    }
+    if is_backend_unavailable(&response) {
+        assert_backend_unavailable(&response, &workspace)?;
+        return Ok(());
+    }
+
+    assert_eq!(response["result"]["status"], "finished");
+    assert_ne!(response["result"]["exit_code"], 0);
+    assert!(
+        !response["result"]["stdout"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("direct-network-ok")
+    );
+    Ok(())
+}
+
+#[test]
 fn workspace_contained_denies_external_read_when_supported_or_fails_closed() -> Result<()> {
     let tmp = TempDir::new()?;
     let workspace = tmp.path().join("workspace");
