@@ -992,6 +992,73 @@ fn tail_audit_rejects_path_lookup() -> Result<()> {
 }
 
 #[test]
+fn event_lookup_methods_reject_invalid_type_filters() -> Result<()> {
+    let cases = [
+        (
+            "subscribeEvents",
+            json!({ "execution_id": "exec_missing", "types": "execution.*" }),
+            "params.types must be an array",
+        ),
+        (
+            "subscribeEvents",
+            json!({ "execution_id": "exec_missing", "types": [""] }),
+            "params.types entries must be non-empty strings",
+        ),
+        (
+            "subscribeEvents",
+            json!({ "execution_id": "exec_missing", "types": [42] }),
+            "params.types entries must be non-empty strings",
+        ),
+        (
+            "getAuditEvents",
+            json!({ "execution_id": "exec_missing", "types": "execution.*" }),
+            "params.types must be an array",
+        ),
+        (
+            "getAuditEvents",
+            json!({ "execution_id": "exec_missing", "types": [""] }),
+            "params.types entries must be non-empty strings",
+        ),
+        (
+            "getAuditEvents",
+            json!({ "execution_id": "exec_missing", "types": [42] }),
+            "params.types entries must be non-empty strings",
+        ),
+        (
+            "tailAudit",
+            json!({ "types": "execution.*" }),
+            "params.types must be an array",
+        ),
+        (
+            "tailAudit",
+            json!({ "types": [""] }),
+            "params.types entries must be non-empty strings",
+        ),
+        (
+            "tailAudit",
+            json!({ "types": [42] }),
+            "params.types entries must be non-empty strings",
+        ),
+    ];
+
+    for (method, params, expected_reason) in cases {
+        let output = run_rpc(&rpc_request(method, params))?;
+
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let messages = stdout_json_lines(&output)?;
+        let response = &messages[0];
+
+        assert_eq!(response["error"]["data"]["code"], "INVALID_REQUEST");
+        assert_eq!(response["error"]["data"]["reason"], expected_reason);
+    }
+    Ok(())
+}
+
+#[test]
 fn rpc_stdio_returns_no_cross_request_audit_events() -> Result<()> {
     let tmp = TempDir::new()?;
     let mut child = Command::new(require_runseal_bin()?)
