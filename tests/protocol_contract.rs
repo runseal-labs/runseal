@@ -1148,6 +1148,7 @@ fn rpc_rejects_malformed_envelope() -> Result<()> {
         let messages = stdout_json_lines(&output)?;
         let response = &messages[0];
 
+        assert_eq!(response["error"]["code"], -32600);
         assert_eq!(response["error"]["data"]["code"], "INVALID_REQUEST");
         assert_eq!(response["error"]["data"]["reason"], expected_reason);
     }

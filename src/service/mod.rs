@@ -44,7 +44,7 @@ impl Service {
         let (id, method, params) = match rpc_request_parts(request) {
             Ok(parts) => parts,
             Err(err) => {
-                return vec![rpc::error(
+                return vec![rpc::invalid_request(
                     request.get("id").cloned().unwrap_or(Value::Null),
                     err,
                 )];
