@@ -3165,6 +3165,40 @@ fn execute_rejects_string_command_without_shell_interpretation() -> Result<()> {
 }
 
 #[test]
+fn execute_rejects_unknown_inline_policy_fields() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let output = run_rpc(&rpc_request(
+        "execute",
+        json!({
+            "command": [python_bin(), "-c", "print('must not run')"],
+            "cwd": tmp.path(),
+            "policy": {
+                "version": "runseal.policy/v1",
+                "sandbox_level": "danger-full-access",
+                "unknown_requirement": true
+            }
+        }),
+    ))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = &messages[0];
+
+    assert_eq!(response["error"]["data"]["code"], "POLICY_INVALID");
+    assert!(
+        response["error"]["data"]["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("policy.unknown_requirement")
+    );
+    Ok(())
+}
+
+#[test]
 fn execute_accepts_non_secret_env_and_audits_keys_only() -> Result<()> {
     let tmp = TempDir::new()?;
     let output = run_rpc(&rpc_request(
