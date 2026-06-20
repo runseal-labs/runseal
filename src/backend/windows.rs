@@ -146,6 +146,7 @@ const WINDOWS_REFERENCE_SUPPORTED_FEATURES: &[BackendFeature] = &[
     BackendFeature::NetworkDisabled,
     BackendFeature::NetworkProxy,
     BackendFeature::ManagedProxy,
+    BackendFeature::PolicyEpoch,
 ];
 
 #[cfg(not(windows))]

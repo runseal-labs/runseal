@@ -326,6 +326,10 @@ fn assert_backend_unavailable(response: &Value, root: &std::path::Path) -> Resul
     Ok(())
 }
 
+fn assert_portable_capability_probe_contract(payload: &Value) {
+    assert!(payload.get("capability_probes").is_none());
+}
+
 #[test]
 fn rpc_missing_binary_is_explicit_red_state() {
     if runseal_bin().exists() {
@@ -415,6 +419,16 @@ fn get_capabilities_rpc_contract() -> Result<()> {
     assert_eq!(payload["backend"], expected_backend_name());
     assert_eq!(payload["backend_status"], expected_backend_status());
     assert!(payload["platform"].as_str().is_some());
+    assert_eq!(
+        payload["capability_statuses"],
+        json!([
+            "supported",
+            "experimental",
+            "unsupported",
+            "unavailable",
+            "requires_setup"
+        ])
+    );
     assert_eq!(payload["sandbox_levels"]["danger-full-access"], "supported");
     assert_eq!(
         payload["sandbox_levels"]["workspace-write"],
@@ -457,6 +471,13 @@ fn get_capabilities_rpc_contract() -> Result<()> {
         expected_windows_sandbox_supported()
     );
     assert_eq!(
+        payload["features"]["policy_epoch"],
+        expected_windows_sandbox_supported()
+    );
+    assert_eq!(payload["features"]["setup_readiness"], true);
+    assert_eq!(payload["features"]["stdin_bytes"], true);
+    assert_eq!(payload["features"]["stdin_file"], true);
+    assert_eq!(
         payload["features"]["resource_limits"],
         expected_resource_limits_supported()
     );
@@ -464,6 +485,7 @@ fn get_capabilities_rpc_contract() -> Result<()> {
     assert_eq!(payload["features"]["otel_export"], false);
     assert_eq!(payload["setup_status"]["setup"], "windows-sandbox");
     assert!(payload["setup_status"]["next_action"].as_str().is_some());
+    assert_portable_capability_probe_contract(payload);
     assert_no_private_windows_setup_terms(payload);
     Ok(())
 }
