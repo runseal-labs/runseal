@@ -1,8 +1,3 @@
-use crate::policy::{
-    BackendFeature, SandboxLevel, SandboxPolicy, matches_environment_scrub_pattern,
-};
-use crate::windows::policy::{WindowsHostRoots, WindowsPolicyPlan, WindowsRuntimeRoots};
-use crate::windows::vendor_adapter::WindowsVendorSandboxProfile;
 mod capability;
 mod core;
 mod error;
@@ -18,64 +13,18 @@ mod registry;
 mod runtime;
 mod skeleton;
 mod windows;
-#[cfg(windows)]
-use crate::events::timestamp_now;
-#[cfg(windows)]
-use managed_proxy::ManagedSandboxProxy;
-#[cfg(all(test, windows))]
-use process::WindowsKillOnCloseJob;
-#[cfg(test)]
-use process::cleanup_child_after_setup_error;
-#[cfg(any(test, windows))]
-use process::minimal_environment;
-use process::spawn_local_command;
-use runtime::{
-    normalize_lexical, validate_runtime_root_ancestors, validate_runtime_tree_has_no_symlinks,
-};
-use serde_json::{Value, json};
-use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
-use std::process::Output;
-#[cfg(windows)]
-use {
-    codex_utils_absolute_path::AbsolutePathBuf,
-    std::collections::{HashMap, HashSet},
-    std::os::windows::process::ExitStatusExt,
-};
 
-#[cfg(test)]
-use capability::CapabilityStatus;
-use capability::capabilities_json_for;
-#[cfg(test)]
-use capability::missing_backend_features;
 pub use core::SandboxBackend;
 pub use error::BackendError;
 #[cfg(all(test, windows))]
-use error::POLICY_TRANSITION_BUSY_REASON;
-#[cfg(all(test, windows))]
 pub(crate) use error::policy_transition_busy_error_for_test;
-#[cfg(windows)]
-use error::{BackendUnavailableError, public_windows_setup_unavailable_reason};
 pub(crate) use error::{backend_unavailable_reason, policy_transition_busy_reason};
 pub use execution::{BackendExecutionOutput, ExecutionEnv, ExecutionStdin};
 pub use plan::PlatformSandboxPlan;
-#[cfg(test)]
-use plan::environment_runtime_json;
-use plan::protected_filesystem_labels;
-#[cfg(windows)]
-use policy_epoch::windows_sandbox_execution_gate;
-#[cfg(all(test, windows))]
-use policy_epoch::{WindowsSandboxPolicyCohortKey, windows_sandbox_execution_gate_for_key};
 pub use registry::active_backend;
-#[cfg(test)]
-use skeleton::{LinuxCommunityBackend, MacosExperimentalBackend};
-#[cfg(test)]
-use windows::WindowsReferenceBackend;
 #[cfg(windows)]
 pub(crate) use windows::windows_sandbox_home;
-#[cfg(all(test, windows))]
-use windows::*;
 fn host_platform() -> &'static str {
     match std::env::consts::OS {
         "windows" => "windows",
@@ -95,18 +44,41 @@ fn runtime_environment_value_is_path(key: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::capability::{CapabilityStatus, missing_backend_features};
+    #[cfg(all(test, windows))]
+    use super::error::POLICY_TRANSITION_BUSY_REASON;
+    #[cfg(windows)]
+    use super::error::public_windows_setup_unavailable_reason;
     use super::filesystem::{
         WindowsFilesystemAclDriver, WindowsFilesystemAclSubject,
         apply_private_filesystem_acl_transaction,
     };
+    use super::plan::environment_runtime_json;
+    #[cfg(all(test, windows))]
+    use super::policy_epoch::{
+        WindowsSandboxPolicyCohortKey, windows_sandbox_execution_gate_for_key,
+    };
+    #[cfg(all(test, windows))]
+    use super::process::WindowsKillOnCloseJob;
+    #[cfg(any(test, windows))]
+    use super::process::minimal_environment;
+    #[cfg(test)]
+    use super::process::{cleanup_child_after_setup_error, spawn_local_command};
     use super::runtime::RUNTIME_ROOT_MARKER;
+    use super::skeleton::{LinuxCommunityBackend, MacosExperimentalBackend};
+    use super::windows::WindowsReferenceBackend;
+    #[cfg(all(test, windows))]
+    use super::windows::*;
     use super::*;
-    use crate::policy::{NetworkMode, normalize_policy};
+    use crate::policy::{BackendFeature, NetworkMode, normalize_policy};
     use crate::windows::policy::{
         WindowsFilesystemAccess, WindowsFilesystemAclEntry, WindowsFilesystemAclPlan,
         WindowsFilesystemAclTransactionPlan, WindowsFilesystemRule, WindowsFilesystemRuleSource,
+        WindowsHostRoots,
     };
+    use serde_json::Value;
     use serde_json::json;
+    use std::collections::{HashMap, HashSet};
     use std::ffi::OsString;
     use std::fs;
     use std::io;

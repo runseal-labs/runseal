@@ -1,4 +1,44 @@
-use super::*;
+use super::capability::capabilities_json_for;
+use super::core::SandboxBackend;
+use super::error::BackendError;
+#[cfg(windows)]
+use super::error::{BackendUnavailableError, public_windows_setup_unavailable_reason};
+use super::execution::{BackendExecutionOutput, ExecutionEnv, ExecutionStdin};
+#[cfg(windows)]
+use super::managed_proxy::ManagedSandboxProxy;
+use super::path_string;
+use super::plan::{PlatformSandboxPlan, protected_filesystem_labels};
+#[cfg(windows)]
+use super::policy_epoch::windows_sandbox_execution_gate;
+#[cfg(windows)]
+use super::process::minimal_environment;
+use super::process::spawn_local_command;
+#[cfg(windows)]
+use super::runtime::{
+    normalize_lexical, validate_runtime_root_ancestors, validate_runtime_tree_has_no_symlinks,
+};
+#[cfg(windows)]
+use crate::events::timestamp_now;
+#[cfg(windows)]
+use crate::policy::SandboxLevel;
+use crate::policy::{BackendFeature, SandboxPolicy};
+use crate::windows::policy::{WindowsHostRoots, WindowsPolicyPlan, WindowsRuntimeRoots};
+use crate::windows::vendor_adapter::WindowsVendorSandboxProfile;
+#[cfg(windows)]
+use codex_utils_absolute_path::AbsolutePathBuf;
+use serde_json::Value;
+#[cfg(windows)]
+use serde_json::json;
+#[cfg(windows)]
+use std::collections::{HashMap, HashSet};
+#[cfg(windows)]
+use std::fs;
+use std::io;
+#[cfg(windows)]
+use std::os::windows::process::ExitStatusExt;
+use std::path::{Path, PathBuf};
+#[cfg(windows)]
+use std::process::Output;
 use std::time::Duration;
 
 impl WindowsReferenceBackend {

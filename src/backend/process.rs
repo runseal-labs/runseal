@@ -1,7 +1,5 @@
-use super::{
-    BackendExecutionOutput, ExecutionEnv, ExecutionStdin, PlatformSandboxPlan,
-    matches_environment_scrub_pattern,
-};
+use super::{BackendExecutionOutput, ExecutionEnv, ExecutionStdin, PlatformSandboxPlan};
+use crate::policy::matches_environment_scrub_pattern;
 use std::env;
 use std::ffi::OsString;
 use std::io::{self, Read, Write};
