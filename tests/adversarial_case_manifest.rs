@@ -141,6 +141,8 @@ const REQUEST_FIELDS: &[&str] = &[
     "audit_path",
 ];
 const REQUEST_METHODS: &[&str] = &["execute", "getAuditEvents"];
+const STDIN_FIELDS: &[&str] = &["mode", "path", "encoding", "data"];
+const STDIN_MODES: &[&str] = &["empty", "file", "bytes"];
 const FIXTURE_FIELDS: &[&str] = &["kind", "path", "target", "name", "value", "command", "body"];
 const RESULT_FIELDS: &[&str] = &[
     "schema_version",
@@ -493,6 +495,12 @@ fn validate_case(case: &Value, path: &Path, case_ids: &mut HashSet<String>) -> R
     } else if request.get("command").is_some() {
         bail!("case.request.command is only valid for execute requests");
     }
+    if let Some(stdin) = request.get("stdin") {
+        if method != "execute" {
+            bail!("case.request.stdin is only valid for execute requests");
+        }
+        validate_stdin(stdin, path)?;
+    }
     if let Some(timeout_ms) = request.get("timeout_ms") {
         assert_positive_u64(timeout_ms, "case.request.timeout_ms", path)?;
     }
@@ -631,6 +639,40 @@ fn validate_fixtures(fixtures: &Value, path: &Path) -> Result<()> {
                 assert_string_value(value, &format!("case.fixtures[].{field}"), path)?;
             }
         }
+    }
+    Ok(())
+}
+
+fn validate_stdin(stdin: &Value, path: &Path) -> Result<()> {
+    assert_allowed_fields(stdin, "case.request.stdin", STDIN_FIELDS, path)?;
+    let mode = required_string(stdin, "mode", path)?;
+    assert_member(mode, STDIN_MODES, path)?;
+    match mode {
+        "file" => assert_string_value(
+            stdin
+                .get("path")
+                .context("case.request.stdin.path must be present")?,
+            "case.request.stdin.path",
+            path,
+        )?,
+        "bytes" => {
+            let encoding = stdin
+                .get("encoding")
+                .and_then(Value::as_str)
+                .context("case.request.stdin.encoding must be a string")?;
+            if encoding != "base64" {
+                bail!("case.request.stdin.encoding must be base64");
+            }
+            assert_string_value(
+                stdin
+                    .get("data")
+                    .context("case.request.stdin.data must be present")?,
+                "case.request.stdin.data",
+                path,
+            )?;
+        }
+        "empty" => {}
+        _ => unreachable!(),
     }
     Ok(())
 }
