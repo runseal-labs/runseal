@@ -35,8 +35,8 @@ const WINDOWS_SANDBOX_MANIFEST: &str =
     include_str!("../vendor/codex-windows-sandbox/upstream/Cargo.toml");
 const WINDOWS_SANDBOX_VENDOR_NOTES: &str =
     include_str!("../vendor/codex-windows-sandbox/VENDOR.md");
-const RUNSEAL_BACKEND_SOURCE: &str = include_str!("../src/backend.rs");
-const RUNSEAL_LIB_SOURCE: &str = include_str!("../src/lib.rs");
+const RUNSEAL_BACKEND_SOURCE: &str = include_str!("../src/backend/windows.rs");
+const RUNSEAL_SETUP_COMMAND_SOURCE: &str = include_str!("../src/commands/setup.rs");
 const WINDOWS_SANDBOX_SETUP_MAIN: &str =
     include_str!("../vendor/codex-windows-sandbox/upstream/bin/setup_main/main.rs");
 const WINDOWS_SANDBOX_RUNNER_MAIN: &str =
@@ -76,7 +76,7 @@ fn vendored_windows_sandbox_notes_capture_runseal_divergence() {
 
 #[test]
 fn runseal_windows_setup_runs_workspace_full_setup() {
-    let setup_cli = RUNSEAL_LIB_SOURCE
+    let setup_cli = RUNSEAL_SETUP_COMMAND_SOURCE
         .split_once("fn run_windows_sandbox_setup(")
         .and_then(|(_, tail)| tail.split_once("fn run_windows_sandbox_full_setup"))
         .map(|(setup_cli, _)| setup_cli)
@@ -84,8 +84,8 @@ fn runseal_windows_setup_runs_workspace_full_setup() {
 
     assert!(setup_cli.contains("run_windows_sandbox_full_setup"));
     assert!(!setup_cli.contains("run_elevated_provisioning_setup"));
-    assert!(RUNSEAL_LIB_SOURCE.contains("codex_windows_sandbox::run_elevated_setup"));
-    assert!(RUNSEAL_LIB_SOURCE.contains("write_roots: Some(vec![cwd.to_path_buf()])"));
+    assert!(RUNSEAL_SETUP_COMMAND_SOURCE.contains("codex_windows_sandbox::run_elevated_setup"));
+    assert!(RUNSEAL_SETUP_COMMAND_SOURCE.contains("write_roots: Some(vec![cwd.to_path_buf()])"));
 }
 
 #[test]
