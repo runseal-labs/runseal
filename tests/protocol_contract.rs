@@ -3732,6 +3732,33 @@ fn execute_policy_hash_tracks_network_override() -> Result<()> {
         proxy["result"]["policy_epoch"],
         disabled["result"]["policy_epoch"]
     );
+    assert_messages_and_audit_match_result_binding(&proxy_messages, proxy, tmp.path())?;
+    assert_messages_and_audit_match_result_binding(&disabled_messages, disabled, tmp.path())?;
+    Ok(())
+}
+
+fn assert_messages_and_audit_match_result_binding(
+    messages: &[Value],
+    response: &Value,
+    root: &Path,
+) -> Result<()> {
+    let result = &response["result"];
+    for event in messages
+        .iter()
+        .filter(|message| message.get("method") == Some(&json!("event")))
+        .map(|message| &message["params"])
+    {
+        assert_eq!(event["policy_hash"], result["policy_hash"]);
+        assert_eq!(event["policy_epoch"], result["policy_epoch"]);
+    }
+
+    let audit_path = result["audit_path"]
+        .as_str()
+        .context("execution result must include audit_path")?;
+    for event in read_audit_events(root, audit_path)? {
+        assert_eq!(event["policy_hash"], result["policy_hash"]);
+        assert_eq!(event["policy_epoch"], result["policy_epoch"]);
+    }
     Ok(())
 }
 
