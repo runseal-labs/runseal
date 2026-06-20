@@ -330,14 +330,14 @@ impl Service {
             Ok(session_id) => session_id,
             Err(err) => return vec![rpc::error(id, err)],
         };
-        let released_sessions = usize::from(self.state().dispose_session(&session_id));
+        let (released_session, released_executions) = self.state().dispose_session(&session_id);
         vec![rpc::result(
             id,
             json!({
                 "session_id": session_id,
                 "status": "disposed",
-                "released_sessions": released_sessions,
-                "released_executions": 0,
+                "released_sessions": usize::from(released_session),
+                "released_executions": released_executions,
             }),
         )]
     }

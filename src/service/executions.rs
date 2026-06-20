@@ -199,6 +199,23 @@ impl ExecutionStore {
         Some(active.result.clone())
     }
 
+    pub(super) fn cancel_active_in_session(&mut self, session_id: &str) -> usize {
+        let mut cancelled = 0;
+        for active in self.active.values_mut().filter(|active| {
+            active.result.get("session_id").and_then(Value::as_str) == Some(session_id)
+        }) {
+            if active.result.get("status").and_then(Value::as_str) == Some("cancelling") {
+                continue;
+            }
+            active.cancellation.cancel();
+            if let Some(result) = active.result.as_object_mut() {
+                result.insert("status".to_string(), json!("cancelling"));
+            }
+            cancelled += 1;
+        }
+        cancelled
+    }
+
     fn insert_record(&mut self, execution_id: &str, record: ExecutionRecord) {
         if !self.records.contains_key(execution_id) && !self.active.contains_key(execution_id) {
             self.record_order.push(execution_id.to_string());

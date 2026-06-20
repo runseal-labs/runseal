@@ -1971,6 +1971,103 @@ fn service_stdio_cancels_running_execution() -> Result<()> {
 }
 
 #[test]
+fn service_stdio_dispose_session_cancels_running_execution() -> Result<()> {
+    #[cfg(windows)]
+    let _guard = windows_protocol_lock()?;
+
+    let tmp = TempDir::new()?;
+    let mut child = Command::new(require_runseal_bin()?)
+        .args(["service", "--stdio"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to spawn runseal service")?;
+    let mut stdin = child.stdin.take().context("stdin unavailable")?;
+    let stdout = child.stdout.take().context("stdout unavailable")?;
+    let mut stdout = BufReader::new(stdout);
+
+    stdin.write_all(
+        rpc_request_with_id(
+            1,
+            "execute",
+            json!({
+                "command": [python_bin(), "-c", "import time; time.sleep(5)"],
+                "cwd": tmp.path(),
+                "policy": "danger-full-access",
+            }),
+        )
+        .as_bytes(),
+    )?;
+    stdin.flush()?;
+
+    let started = Instant::now();
+    let (execution_id, session_id) = loop {
+        if started.elapsed() > Duration::from_secs(3) {
+            bail!("runseal service did not report a running execution");
+        }
+        stdin.write_all(rpc_request_with_id(2, "listExecutions", json!({})).as_bytes())?;
+        stdin.flush()?;
+        let (_, list_response) = read_rpc_response(&mut stdout, 2)?;
+        let executions = list_response["result"]["executions"]
+            .as_array()
+            .context("executions must be an array")?;
+        if let Some(summary) = executions
+            .iter()
+            .find(|summary| summary["status"] == "running")
+        {
+            break (
+                summary["execution_id"]
+                    .as_str()
+                    .context("running summary must include execution_id")?
+                    .to_string(),
+                summary["session_id"]
+                    .as_str()
+                    .context("running summary must include session_id")?
+                    .to_string(),
+            );
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    };
+
+    stdin.write_all(
+        rpc_request_with_id(3, "disposeSession", json!({ "session_id": session_id })).as_bytes(),
+    )?;
+    let (_, dispose_response) = read_rpc_response(&mut stdout, 3)?;
+    assert_eq!(dispose_response["result"]["released_sessions"], 1);
+    assert_eq!(dispose_response["result"]["released_executions"], 1);
+
+    let (cancel_events, execute_response) = read_rpc_response(&mut stdout, 1)?;
+    assert_eq!(
+        execute_response["error"]["data"]["code"],
+        "EXECUTION_CANCELLED"
+    );
+    assert!(
+        cancel_events
+            .iter()
+            .any(|event| event["params"]["type"] == "execution.cancelled")
+    );
+
+    stdin.write_all(
+        rpc_request_with_id(4, "getExecution", json!({ "execution_id": execution_id })).as_bytes(),
+    )?;
+    let (_, final_response) = read_rpc_response(&mut stdout, 4)?;
+    assert_eq!(final_response["result"]["status"], "cancelled");
+
+    stdin.write_all(
+        rpc_request_with_id(5, "disposeSession", json!({ "session_id": session_id })).as_bytes(),
+    )?;
+    let (_, second_dispose_response) = read_rpc_response(&mut stdout, 5)?;
+    assert_eq!(second_dispose_response["result"]["released_sessions"], 0);
+    assert_eq!(second_dispose_response["result"]["released_executions"], 0);
+
+    drop(stdin);
+    let status = child.wait().context("failed to wait for runseal service")?;
+    assert!(status.success());
+    Ok(())
+}
+
+#[test]
 fn service_stdio_keeps_failed_execution_state() -> Result<()> {
     #[cfg(windows)]
     let _guard = windows_protocol_lock()?;

@@ -58,8 +58,14 @@ impl ServiceState {
         self.executions.record_active_event(execution_id, event);
     }
 
-    pub(super) fn dispose_session(&mut self, session_id: &str) -> bool {
-        self.sessions.dispose(session_id)
+    pub(super) fn dispose_session(&mut self, session_id: &str) -> (bool, usize) {
+        let released_session = self.sessions.dispose(session_id);
+        let released_executions = if released_session {
+            self.executions.cancel_active_in_session(session_id)
+        } else {
+            0
+        };
+        (released_session, released_executions)
     }
 
     pub(super) fn cancel_active_execution(&mut self, execution_id: &str) -> Option<Value> {
