@@ -3100,6 +3100,8 @@ fn execute_rejects_unsupported_request_fields() -> Result<()> {
     let unsupported_cases = [
         ("trace_id", json!("trace_test")),
         ("network_mode", json!("proxy")),
+        ("policy_hash", json!("sha256:spoofed")),
+        ("policy_epoch", json!("sha256:spoofed")),
     ];
 
     for (field, value) in unsupported_cases {
