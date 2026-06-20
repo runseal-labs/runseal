@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(not(windows))]
+use crate::execution::validate_execution_cwd;
 
 const SETUP_HELP_TEXT: &str = "\
 Usage: runseal setup windows-sandbox [--cwd <path>] [--status] [--json]
