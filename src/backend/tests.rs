@@ -32,7 +32,7 @@ use super::windows::{
     windows_sensitive_profile_deny_read_paths_for_profile,
 };
 use crate::execution::{ExecutionCancellation, ExecutionEnv, ExecutionStdin};
-use crate::policy::{BackendFeature, NetworkMode, normalize_policy};
+use crate::policy::{BackendFeature, NetworkMode, SandboxLevel, normalize_policy};
 use crate::windows::policy::{
     WindowsFilesystemAccess, WindowsFilesystemAclEntry, WindowsFilesystemAclPlan,
     WindowsFilesystemAclTransactionPlan, WindowsFilesystemRule, WindowsFilesystemRuleSource,
@@ -455,6 +455,12 @@ fn portable_skeletons_fail_closed_for_sandboxed_policies() {
     ] {
         for policy in ["read-only", "workspace-write", "workspace-contained"] {
             let policy = normalize_policy(&json!(policy), &cwd, None).unwrap();
+            if backend.name() == LinuxCommunityBackend.name()
+                && policy.sandbox_level == SandboxLevel::ReadOnly
+                && crate::linux::capability_probe::bubblewrap_read_only_candidate_available()
+            {
+                continue;
+            }
             let err = backend
                 .compile_plan("exec_portable_fail_closed", &cwd, &policy)
                 .unwrap_err();
@@ -584,7 +590,14 @@ fn linux_skeleton_reports_community_track_without_sandbox_features() {
         capabilities["sandbox_levels"]["danger-full-access"],
         "supported"
     );
-    assert_eq!(capabilities["sandbox_levels"]["read-only"], "unsupported");
+    assert_eq!(
+        capabilities["sandbox_levels"]["read-only"],
+        if crate::linux::capability_probe::bubblewrap_read_only_candidate_available() {
+            "experimental"
+        } else {
+            "unsupported"
+        }
+    );
     assert_eq!(
         capabilities["sandbox_levels"]["workspace-contained"],
         "unsupported"

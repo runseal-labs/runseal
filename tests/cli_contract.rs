@@ -172,6 +172,16 @@ fn expected_status(supported: bool) -> &'static str {
     }
 }
 
+fn expected_read_only_status(payload: &Value) -> &'static str {
+    if cfg!(target_os = "linux")
+        && payload["capability_probes"]["runtime"]["bubblewrap_read_only_candidate"] == "available"
+    {
+        "experimental"
+    } else {
+        expected_status(expected_windows_sandbox_supported())
+    }
+}
+
 fn assert_no_private_windows_setup_terms(text: &str) {
     for private_term in [
         "single-sandbox-user",
@@ -654,7 +664,7 @@ fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
     assert_eq!(payload["sandbox_levels"]["danger-full-access"], "supported");
     assert_eq!(
         payload["sandbox_levels"]["read-only"],
-        expected_status(expected_windows_sandbox_supported())
+        expected_read_only_status(&payload)
     );
     assert_eq!(
         payload["network_modes"]["proxy"],

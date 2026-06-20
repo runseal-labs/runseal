@@ -43,6 +43,18 @@ pub(super) fn spawn_local_command(
         .env_clear()
         .envs(minimal_environment(plan))
         .envs(env.entries.iter().map(|(key, value)| (key, value)));
+    spawn_prepared_command(plan, process, stdin, timeout, cancellation)
+}
+
+pub(crate) fn spawn_prepared_command(
+    plan: &PlatformSandboxPlan,
+    mut process: Command,
+    stdin: ExecutionStdin,
+    timeout: Option<Duration>,
+    cancellation: Option<ExecutionCancellation>,
+) -> io::Result<BackendExecutionOutput> {
+    #[cfg(not(windows))]
+    let _ = plan;
     match &stdin {
         ExecutionStdin::Empty => {
             process.stdin(Stdio::null());
@@ -252,7 +264,7 @@ impl Drop for WindowsKillOnCloseJob {
     }
 }
 
-pub(super) fn minimal_environment(plan: &PlatformSandboxPlan) -> Vec<(OsString, OsString)> {
+pub(crate) fn minimal_environment(plan: &PlatformSandboxPlan) -> Vec<(OsString, OsString)> {
     if plan.environment_inherit != "minimal" {
         return Vec::new();
     }

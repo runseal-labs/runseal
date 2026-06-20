@@ -6,7 +6,7 @@ use super::host_platform;
 use super::plan::PlatformSandboxPlan;
 use super::process::spawn_local_command;
 use crate::execution::{ExecutionCancellation, ExecutionEnv, ExecutionStdin};
-use crate::policy::{BackendFeature, SandboxPolicy};
+use crate::policy::{BackendFeature, NetworkMode, SandboxLevel, SandboxPolicy};
 use serde_json::Value;
 use std::io;
 use std::path::Path;
@@ -152,7 +152,20 @@ impl SandboxBackend for LinuxCommunityBackend {
         cwd: &Path,
         policy: &SandboxPolicy,
     ) -> Result<PlatformSandboxPlan, BackendError> {
-        compile_local_execution_or_unsupported(self, execution_id, cwd, policy)
+        if policy.allows_local_execution() {
+            return Ok(PlatformSandboxPlan::local_execution(
+                self,
+                execution_id,
+                cwd,
+                policy,
+            ));
+        }
+
+        if linux_read_only_candidate(policy) {
+            return Ok(linux_read_only_plan(self, execution_id, cwd, policy));
+        }
+
+        Err(BackendError::unsupported(self, policy))
     }
 
     fn execute_plan(
@@ -165,6 +178,18 @@ impl SandboxBackend for LinuxCommunityBackend {
         timeout: Option<Duration>,
         cancellation: Option<ExecutionCancellation>,
     ) -> io::Result<BackendExecutionOutput> {
+        if plan.enforcement == LINUX_BUBBLEWRAP_READ_ONLY_ENFORCEMENT {
+            return crate::linux::bubblewrap::execute_read_only(
+                plan,
+                command,
+                cwd,
+                stdin,
+                env,
+                timeout,
+                cancellation,
+            );
+        }
+
         spawn_local_command(plan, command, cwd, stdin, env, timeout, cancellation)
     }
 
@@ -177,8 +202,34 @@ impl SandboxBackend for LinuxCommunityBackend {
             ],
         );
         payload["capability_probes"] = crate::linux::capability_probe::payload();
+        if crate::linux::capability_probe::bubblewrap_read_only_candidate_available() {
+            payload["sandbox_levels"]["read-only"] = Value::String("experimental".to_string());
+        }
         payload
     }
+}
+const LINUX_BUBBLEWRAP_READ_ONLY_ENFORCEMENT: &str = "linux-bubblewrap-read-only";
+
+fn linux_read_only_candidate(policy: &SandboxPolicy) -> bool {
+    policy.sandbox_level == SandboxLevel::ReadOnly
+        && policy.network.mode == NetworkMode::Disabled
+        && policy.resources.memory_bytes.is_none()
+        && policy.resources.cpu_percent.is_none()
+        && crate::linux::capability_probe::bubblewrap_read_only_candidate_available()
+}
+
+fn linux_read_only_plan(
+    backend: &dyn SandboxBackend,
+    execution_id: &str,
+    cwd: &Path,
+    policy: &SandboxPolicy,
+) -> PlatformSandboxPlan {
+    let mut plan = PlatformSandboxPlan::local_execution(backend, execution_id, cwd, policy);
+    plan.enforcement = LINUX_BUBBLEWRAP_READ_ONLY_ENFORCEMENT;
+    plan.process_boundary = "namespace-sandbox";
+    plan.process_cleanup = "process-tree";
+    plan.network_direct_egress = "deny";
+    plan
 }
 fn compile_local_execution_or_unsupported(
     backend: &dyn SandboxBackend,

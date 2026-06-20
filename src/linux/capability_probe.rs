@@ -132,15 +132,19 @@ fn cgroup_version_from_proc_self_cgroup(value: &str) -> Option<u64> {
     })
 }
 
-fn bubblewrap_read_only_candidate_status() -> &'static str {
-    if bubblewrap_read_only_candidate_status_for(
+pub(crate) fn bubblewrap_read_only_candidate_available() -> bool {
+    bubblewrap_read_only_candidate_status_for(
         path_status("bwrap"),
         file_status("/proc/self/ns/user"),
         file_status("/proc/self/ns/mnt"),
         file_status("/proc/self/ns/pid"),
         seccomp_status(),
         unprivileged_user_namespace_status(),
-    ) {
+    )
+}
+
+fn bubblewrap_read_only_candidate_status() -> &'static str {
+    if bubblewrap_read_only_candidate_available() {
         "available"
     } else {
         "unavailable"

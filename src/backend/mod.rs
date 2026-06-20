@@ -8,7 +8,7 @@ mod managed_proxy;
 mod plan;
 #[cfg(windows)]
 mod policy_epoch;
-mod process;
+pub(crate) mod process;
 mod registry;
 mod runtime;
 mod skeleton;
