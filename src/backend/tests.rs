@@ -488,6 +488,21 @@ fn linux_skeleton_reports_community_track_without_sandbox_features() {
     assert_eq!(capabilities["features"]["stdin_bytes"], true);
     assert_eq!(capabilities["features"]["stdin_file"], true);
     assert_eq!(capabilities["features"]["audit_jsonl"], true);
+    assert_eq!(
+        capabilities["sandbox_levels"]["danger-full-access"],
+        "supported"
+    );
+    assert_eq!(capabilities["sandbox_levels"]["read-only"], "unsupported");
+    assert_eq!(
+        capabilities["sandbox_levels"]["workspace-contained"],
+        "unsupported"
+    );
+    assert_eq!(
+        capabilities["sandbox_levels"]["workspace-write"],
+        "unsupported"
+    );
+    assert_eq!(capabilities["network_modes"]["disabled"], "unsupported");
+    assert_eq!(capabilities["network_modes"]["proxy"], "unsupported");
     assert!(
         capabilities["capability_probes"]["runtime"]["user_namespace"]
             .as_str()
@@ -527,6 +542,21 @@ fn macos_skeleton_reports_experimental_track_without_sandbox_features() {
     assert_eq!(capabilities["features"]["stdin_bytes"], true);
     assert_eq!(capabilities["features"]["stdin_file"], true);
     assert_eq!(capabilities["features"]["audit_jsonl"], true);
+    assert_eq!(
+        capabilities["sandbox_levels"]["danger-full-access"],
+        "supported"
+    );
+    assert_eq!(capabilities["sandbox_levels"]["read-only"], "unsupported");
+    assert_eq!(
+        capabilities["sandbox_levels"]["workspace-contained"],
+        "unsupported"
+    );
+    assert_eq!(
+        capabilities["sandbox_levels"]["workspace-write"],
+        "unsupported"
+    );
+    assert_eq!(capabilities["network_modes"]["disabled"], "unsupported");
+    assert_eq!(capabilities["network_modes"]["proxy"], "unsupported");
     assert!(
         capabilities["capability_probes"]["runtime"]["sandbox_exec"]
             .as_str()
