@@ -24,10 +24,16 @@ impl ExecutionStore {
         ) else {
             return None;
         };
+        let mut result = result.clone();
+        if let Some(result) = result.as_object_mut() {
+            result.remove("stdout");
+            result.remove("stderr");
+            result.remove("metadata");
+        }
         self.insert_record(
             execution_id,
             ExecutionRecord {
-                result: result.clone(),
+                result,
                 events: events.to_vec(),
             },
         );
@@ -293,6 +299,31 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(markers, ["b1", "b2", "a1"]);
+    }
+
+    #[test]
+    fn finished_records_omit_raw_output() {
+        let mut store = ExecutionStore::default();
+        store.record_finished(
+            &json!({
+                "execution_id": "exec_a",
+                "session_id": "sess_a",
+                "status": "finished",
+                "stdout": "secret-output",
+                "stderr": "secret-error",
+                "stdout_bytes": 13,
+                "stderr_bytes": 12,
+                "metadata": {"Authorization": "secret"}
+            }),
+            &[],
+        );
+
+        let result = store.result("exec_a").expect("finished record must exist");
+        assert!(result.get("stdout").is_none());
+        assert!(result.get("stderr").is_none());
+        assert!(result.get("metadata").is_none());
+        assert_eq!(result["stdout_bytes"], 13);
+        assert_eq!(result["stderr_bytes"], 12);
     }
 
     #[test]

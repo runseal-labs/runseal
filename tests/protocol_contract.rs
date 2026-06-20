@@ -1731,6 +1731,13 @@ fn service_stdio_keeps_completed_execution_state() -> Result<()> {
     assert_eq!(retained_response["result"]["execution_id"], execution_id);
     assert_eq!(retained_response["result"]["status"], "finished");
     assert!(retained_response["result"].get("metadata").is_none());
+    assert!(retained_response["result"].get("stdout").is_none());
+    assert!(retained_response["result"].get("stderr").is_none());
+    assert!(
+        !retained_response["result"]
+            .to_string()
+            .contains("service-ok")
+    );
     assert!(
         !retained_response["result"]
             .to_string()
