@@ -68,7 +68,7 @@ fn run() -> Result<(), String> {
             protocol::rpc_handler::run_rpc_stdio()
         }
         [command, flag] if command == "service" && flag == "--stdio" => {
-            protocol::rpc_handler::run_rpc_stdio()
+            protocol::rpc_handler::run_service_stdio()
         }
         [command, rest @ ..] if command == "setup" => commands::setup::run(rest),
         [command, rest @ ..] if command == "explain-policy" => commands::explain_policy::run(rest),

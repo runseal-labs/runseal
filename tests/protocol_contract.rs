@@ -478,6 +478,53 @@ fn rpc_stdio_replies_before_stdin_eof() -> Result<()> {
 }
 
 #[test]
+fn rpc_stdio_does_not_keep_completed_execution_state() -> Result<()> {
+    #[cfg(windows)]
+    let _guard = windows_protocol_lock()?;
+
+    let tmp = TempDir::new()?;
+    let mut child = Command::new(require_runseal_bin()?)
+        .args(["rpc", "--stdio"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to spawn runseal rpc")?;
+    let mut stdin = child.stdin.take().context("stdin unavailable")?;
+    let stdout = child.stdout.take().context("stdout unavailable")?;
+    let mut stdout = BufReader::new(stdout);
+
+    stdin.write_all(
+        rpc_request_with_id(
+            1,
+            "execute",
+            json!({
+                "command": [python_bin(), "-c", "print('direct-rpc')"],
+                "cwd": tmp.path(),
+                "policy": "danger-full-access",
+            }),
+        )
+        .as_bytes(),
+    )?;
+    let (_, execute_response) = read_rpc_response(&mut stdout, 1)?;
+    let execution_id = execute_response["result"]["execution_id"]
+        .as_str()
+        .context("execute result must include execution_id")?
+        .to_string();
+
+    stdin.write_all(
+        rpc_request_with_id(2, "getExecution", json!({ "execution_id": execution_id })).as_bytes(),
+    )?;
+    let (_, get_response) = read_rpc_response(&mut stdout, 2)?;
+    assert_eq!(get_response["error"]["data"]["code"], "EXECUTION_NOT_FOUND");
+
+    drop(stdin);
+    let status = child.wait().context("failed to wait for runseal rpc")?;
+    assert!(status.success());
+    Ok(())
+}
+
+#[test]
 fn get_capabilities_rpc_contract() -> Result<()> {
     let output = run_rpc(&rpc_request("getCapabilities", json!({})))?;
 
