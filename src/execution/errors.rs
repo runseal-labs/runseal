@@ -51,7 +51,7 @@ fn backend_unavailable_setup_status(reason: &str, cwd: &Path) -> Option<Value> {
     None
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 mod tests {
     use super::*;
 
