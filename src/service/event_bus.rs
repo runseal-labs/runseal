@@ -84,7 +84,24 @@ fn event_matches_types(event: &Value, types: &[String]) -> bool {
         filter == event_type
             || filter == "*"
             || filter
-                .strip_suffix(".*")
+                .strip_suffix('*')
                 .is_some_and(|prefix| event_type.starts_with(prefix))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::filter_events;
+    use serde_json::json;
+
+    #[test]
+    fn namespace_wildcard_requires_dot_boundary() {
+        let events = vec![
+            json!({"type": "execution.started"}),
+            json!({"type": "executionx.started"}),
+        ];
+        let filtered = filter_events(&events, &["execution.*".to_string()]);
+
+        assert_eq!(filtered, vec![json!({"type": "execution.started"})]);
+    }
 }
