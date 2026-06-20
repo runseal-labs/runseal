@@ -165,6 +165,43 @@ const REPORT_LABELS: &[&str] = &[
     "process_conformance",
     "adversarial_case_manifest",
 ];
+const REQUIRED_INITIAL_CASES: &[&str] = &[
+    "adv.filesystem.parent-traversal.v1",
+    "adv.filesystem.symlink-parent-traversal.v1",
+    "adv.filesystem.preexisting-symlinked-runtime-root.v1",
+    "adv.filesystem.protected-subpath-write.v1",
+    "adv.filesystem.external-write-from-workspace-write.v1",
+    "adv.filesystem.external-read-from-workspace-contained.v1",
+    "adv.runtime.precreated-runtime-root.v1",
+    "adv.runtime.runtime-marker-spoof.v1",
+    "adv.runtime.execution-id-reuse.v1",
+    "adv.runtime.cleanup-partial-failure.v1",
+    "adv.runtime.cross-execution-contamination.v1",
+    "adv.process.orphan-child-after-cancel.v1",
+    "adv.process.background-daemon-after-timeout.v1",
+    "adv.process.shell-trampoline-child.v1",
+    "adv.process.interactive-disabled.v1",
+    "adv.network.direct-egress-disabled.v1",
+    "adv.network.proxy-env-override.v1",
+    "adv.network.proxy-credential-redaction.v1",
+    "adv.network.dns-leak-disabled.v1",
+    "adv.network.loopback-tunnel-bypass.v1",
+    "adv.policy.unknown-top-level-field.v1",
+    "adv.policy.unsupported-nonempty-section.v1",
+    "adv.policy.network-override-hash-drift.v1",
+    "adv.policy.stale-policy-epoch.v1",
+    "adv.policy.malformed-json.v1",
+    "adv.execution_injection.argv-shell-metacharacters.v1",
+    "adv.execution_injection.stdin-file-outside-cwd.v1",
+    "adv.execution_injection.invalid-base64-stdin.v1",
+    "adv.execution_injection.secret-env-key.v1",
+    "adv.execution_injection.program-resolution-confusion.v1",
+    "adv.audit.secret-metadata-redaction.v1",
+    "adv.audit.audit-path-traversal.v1",
+    "adv.audit.missing-deny-event.v1",
+    "adv.audit.policy-hash-consistency.v1",
+    "adv.audit.backend-private-redaction.v1",
+];
 
 #[test]
 fn adversarial_case_manifests_match_rfc0016_shape() -> Result<()> {
@@ -177,6 +214,11 @@ fn adversarial_case_manifests_match_rfc0016_shape() -> Result<()> {
             .with_context(|| format!("manifest must be a JSON array: {}", path.display()))?;
         for case in cases {
             validate_case(&case, &path, &mut case_ids)?;
+        }
+    }
+    for required in REQUIRED_INITIAL_CASES {
+        if !case_ids.contains(*required) {
+            bail!("missing RFC-0016 initial adversarial case {required}");
         }
     }
     Ok(())
