@@ -84,10 +84,6 @@ impl ExecutionStore {
             .map(|record| record.result.clone())
     }
 
-    pub(super) fn contains(&self, execution_id: &str) -> bool {
-        self.records.contains_key(execution_id)
-    }
-
     pub(super) fn events(&self, execution_id: &str, types: &[String]) -> Option<Vec<Value>> {
         self.records
             .get(execution_id)

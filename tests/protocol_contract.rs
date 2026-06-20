@@ -717,8 +717,10 @@ fn service_stdio_keeps_completed_execution_state() -> Result<()> {
         .as_bytes(),
     )?;
     let (_, cancel_response) = read_rpc_response(&mut stdout, 4)?;
-    assert_eq!(cancel_response["result"]["execution_id"], execution_id);
-    assert_eq!(cancel_response["result"]["status"], "not_cancellable");
+    assert_eq!(
+        cancel_response["error"]["data"]["code"],
+        "EXECUTION_NOT_FOUND"
+    );
 
     stdin.write_all(
         rpc_request_with_id(5, "disposeSession", json!({ "session_id": session_id })).as_bytes(),
@@ -820,8 +822,10 @@ fn service_stdio_keeps_failed_execution_state() -> Result<()> {
         .as_bytes(),
     )?;
     let (_, cancel_response) = read_rpc_response(&mut stdout, 3)?;
-    assert_eq!(cancel_response["result"]["execution_id"], execution_id);
-    assert_eq!(cancel_response["result"]["status"], "not_cancellable");
+    assert_eq!(
+        cancel_response["error"]["data"]["code"],
+        "EXECUTION_NOT_FOUND"
+    );
 
     stdin.write_all(
         rpc_request_with_id(

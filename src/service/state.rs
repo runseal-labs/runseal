@@ -27,10 +27,6 @@ impl ServiceState {
         self.executions.result(execution_id)
     }
 
-    pub(super) fn has_execution(&self, execution_id: &str) -> bool {
-        self.executions.contains(execution_id)
-    }
-
     pub(super) fn execution_events(
         &self,
         execution_id: &str,

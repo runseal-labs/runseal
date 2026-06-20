@@ -90,18 +90,7 @@ impl Service {
             Ok(execution_id) => execution_id,
             Err(err) => return vec![rpc::error(id, err)],
         };
-        if self.state.has_execution(&execution_id) {
-            vec![rpc::result(
-                id,
-                json!({
-                    "execution_id": execution_id,
-                    "status": "not_cancellable",
-                    "reason": "execution is already finished",
-                }),
-            )]
-        } else {
-            vec![rpc::error(id, execution_not_found(&execution_id))]
-        }
+        vec![rpc::error(id, execution_not_found(&execution_id))]
     }
 
     fn subscribe_events(&self, id: Value, params: &Value) -> Vec<Value> {
