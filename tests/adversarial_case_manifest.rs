@@ -226,11 +226,33 @@ fn adversarial_case_manifests_match_rfc0016_shape() -> Result<()> {
 
 #[test]
 fn adversarial_result_gate_rejects_non_promotable_results() {
-    assert!(promotion_gate_allows("S0", "S0", true, false));
-    assert!(promotion_gate_allows("S1", "S1", true, false));
-    assert!(!promotion_gate_allows("S2", "S1", true, false));
-    assert!(!promotion_gate_allows("S0", "S1", false, false));
-    assert!(!promotion_gate_allows("S0", "S1", true, true));
+    assert!(promotion_gate_allows("passed", "S0", "S0", true, false));
+    assert!(promotion_gate_allows("passed", "S1", "S1", true, false));
+    assert!(!promotion_gate_allows("passed", "S2", "S1", true, false));
+    assert!(!promotion_gate_allows("failed", "S0", "S1", false, false));
+    assert!(!promotion_gate_allows("skipped", "S0", "S1", true, true));
+    assert!(!promotion_gate_allows("xfailed", "S0", "S1", true, false));
+    assert!(!promotion_gate_allows(
+        "invalid_case",
+        "S0",
+        "S1",
+        true,
+        false
+    ));
+    assert!(!promotion_gate_allows(
+        "unsupported_fixture",
+        "S0",
+        "S1",
+        true,
+        false
+    ));
+    assert!(!promotion_gate_allows(
+        "harness_error",
+        "S0",
+        "S1",
+        true,
+        false
+    ));
 }
 
 #[test]
@@ -545,12 +567,14 @@ fn assert_public_safe(manifest: &str, path: &Path) -> Result<()> {
 }
 
 fn promotion_gate_allows(
+    status: &str,
     observed_severity: &str,
     max_severity: &str,
     passed: bool,
     skipped: bool,
 ) -> bool {
-    passed
+    status == "passed"
+        && passed
         && !skipped
         && severity_rank(observed_severity).is_some_and(|observed| {
             severity_rank(max_severity).is_some_and(|maximum| observed <= maximum)
