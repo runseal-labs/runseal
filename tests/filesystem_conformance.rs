@@ -848,6 +848,44 @@ fn workspace_write_accepts_bytes_stdin_when_supported_or_fails_closed() -> Resul
 }
 
 #[test]
+fn read_only_accepts_bytes_stdin_when_supported_or_fails_closed() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let workspace = tmp.path().join("workspace");
+    fs::create_dir_all(&workspace)?;
+    let stdin_text = "runseal read-only stdin bytes";
+    let encoded = STANDARD.encode(stdin_text.as_bytes());
+    let response = execute_params(json!({
+        "command": stdin_echo_command(),
+        "cwd": workspace,
+        "policy": "read-only",
+        "network": {"mode": "disabled"},
+        "stdin": {
+            "mode": "bytes",
+            "data": format!("base64:{encoded}"),
+            "encoding": "base64"
+        }
+    }))?;
+
+    if is_backend_missing(&response) {
+        let expected_features = expected_missing_features(&["network_disabled"]);
+        assert_backend_missing_features(&response, &workspace, &expected_features)?;
+        return Ok(());
+    }
+    if is_backend_unavailable(&response) {
+        assert_backend_unavailable(&response, &workspace)?;
+        return Ok(());
+    }
+
+    assert_eq!(response["result"]["status"], "finished");
+    assert_eq!(response["result"]["exit_code"], 0);
+    assert_eq!(
+        response["result"]["stdout"].as_str().unwrap_or_default(),
+        stdin_text
+    );
+    Ok(())
+}
+
+#[test]
 fn workspace_write_accepts_file_stdin_when_supported_or_fails_closed() -> Result<()> {
     let tmp = TempDir::new()?;
     let workspace = tmp.path().join("workspace");
