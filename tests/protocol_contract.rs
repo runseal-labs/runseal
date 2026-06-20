@@ -2051,6 +2051,7 @@ fn execute_output_limit_returns_stable_error_and_audit_event() -> Result<()> {
         .unwrap();
 
     assert_eq!(response["error"]["data"]["code"], "OUTPUT_LIMIT_EXCEEDED");
+    assert_error_execution_binding(&response["error"]["data"]);
     assert_eq!(response["error"]["data"]["stdout_bytes"], 6);
     assert_eq!(response["error"]["data"]["retained_stdout_bytes"], 3);
     let audit_path = response["error"]["data"]["audit_path"]
@@ -2820,6 +2821,7 @@ fn execute_timeout_returns_stable_error_and_audit_event() -> Result<()> {
     let response = response_with_id(&messages, 1)?;
 
     assert_eq!(response["error"]["data"]["code"], "EXECUTION_TIMEOUT");
+    assert_error_execution_binding(&response["error"]["data"]);
     assert_eq!(response["error"]["data"]["timeout_ms"], 10);
     let audit_path = response["error"]["data"]["audit_path"]
         .as_str()
