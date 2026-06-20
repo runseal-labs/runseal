@@ -740,8 +740,12 @@ fn exec_events_stream_uses_execution_vocabulary() -> Result<()> {
         .filter_map(|event| event["type"].as_str())
         .collect();
 
+    assert!(event_types.contains(&"execution.requested"));
+    assert!(event_types.contains(&"policy.resolved"));
+    assert!(event_types.contains(&"policy.allowed"));
     assert!(event_types.contains(&"execution.started"));
     assert!(event_types.contains(&"execution.stdout"));
+    assert!(event_types.contains(&"execution.resource.sample"));
     assert!(event_types.contains(&"execution.finished"));
     for event in &events {
         assert_event_envelope(event)?;
