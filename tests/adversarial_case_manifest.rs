@@ -696,11 +696,38 @@ fn validate_fixtures(fixtures: &Value, path: &Path) -> Result<()> {
             .and_then(Value::as_str)
             .context("case.fixtures entries must include kind")?;
         assert_member(kind, FIXTURE_KINDS, path)?;
+        validate_fixture_required_fields(fixture, kind, path)?;
         for field in ["path", "target", "name", "value", "command", "body"] {
             if let Some(value) = fixture.get(field) {
                 assert_string_value(value, &format!("case.fixtures[].{field}"), path)?;
             }
         }
+    }
+    Ok(())
+}
+
+fn validate_fixture_required_fields(fixture: &Value, kind: &str, path: &Path) -> Result<()> {
+    let required_fields: &[&str] = match kind {
+        "file"
+        | "directory"
+        | "readonly_file"
+        | "executable_script"
+        | "preexisting_runtime_root" => &["path"],
+        "symlink" | "hardlink" | "junction" => &["path", "target"],
+        "environment" => &["name", "value"],
+        "background_process" => &["command"],
+        "network_listener" => &["name"],
+        "malformed_request" => &["body"],
+        _ => unreachable!(),
+    };
+    for field in required_fields {
+        assert_string_value(
+            fixture
+                .get(*field)
+                .with_context(|| format!("case.fixtures[].{field} must be present"))?,
+            &format!("case.fixtures[].{field}"),
+            path,
+        )?;
     }
     Ok(())
 }
