@@ -13,6 +13,7 @@ mod filesystem;
 #[cfg(windows)]
 mod managed_proxy;
 mod plan;
+#[cfg(windows)]
 mod policy_epoch;
 mod process;
 mod runtime;
@@ -78,8 +79,9 @@ use policy_epoch::{WindowsSandboxPolicyCohortKey, windows_sandbox_execution_gate
 pub use skeleton::{LinuxCommunityBackend, LocalBackend, MacosExperimentalBackend};
 pub use windows::WindowsReferenceBackend;
 use windows::has_single_user_setup_payload;
+#[cfg(windows)]
 pub(crate) use windows::windows_sandbox_home;
-#[cfg(test)]
+#[cfg(all(test, windows))]
 use windows::*;
 pub trait SandboxBackend {
     fn name(&self) -> &'static str;

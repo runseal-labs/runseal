@@ -19,7 +19,9 @@ use backend::{
     policy_transition_busy_reason,
 };
 use cli::{parse_exec_args, parse_policy_args};
-#[cfg(test)]
+#[cfg(all(test, not(windows)))]
+use commands::setup::{windows_sandbox_setup_failed_error, windows_sandbox_setup_status_payload};
+#[cfg(all(test, windows))]
 use commands::setup::{
     windows_sandbox_setup_failed_error, windows_sandbox_setup_status_payload,
     windows_sandbox_setup_success_payload,
