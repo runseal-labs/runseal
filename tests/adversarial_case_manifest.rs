@@ -501,6 +501,14 @@ fn validate_case(case: &Value, path: &Path, case_ids: &mut HashSet<String>) -> R
         }
         validate_stdin(stdin, path)?;
     }
+    for field in ["env", "metadata"] {
+        if let Some(values) = request.get(field) {
+            if method != "execute" {
+                bail!("case.request.{field} is only valid for execute requests");
+            }
+            validate_string_map(values, &format!("case.request.{field}"), path)?;
+        }
+    }
     if let Some(timeout_ms) = request.get("timeout_ms") {
         assert_positive_u64(timeout_ms, "case.request.timeout_ms", path)?;
     }
@@ -673,6 +681,19 @@ fn validate_stdin(stdin: &Value, path: &Path) -> Result<()> {
         }
         "empty" => {}
         _ => unreachable!(),
+    }
+    Ok(())
+}
+
+fn validate_string_map(value: &Value, label: &str, path: &Path) -> Result<()> {
+    let object = value
+        .as_object()
+        .with_context(|| format!("{label} must be an object in {}", path.display()))?;
+    for (key, value) in object {
+        if key.trim().is_empty() {
+            bail!("{label} keys must not be empty");
+        }
+        assert_string_value(value, &format!("{label}.{key}"), path)?;
     }
     Ok(())
 }
