@@ -204,8 +204,13 @@ fn validate_case(case: &Value, path: &Path, case_ids: &mut HashSet<String>) -> R
         PROMOTION_SEVERITIES,
         path,
     )?;
-    if let Some(side_effects) = oracle.get("side_effects") {
-        assert_array_members(side_effects, "case.oracle.side_effects", SIDE_EFFECTS, path)?;
+    if let Some(side_effects) = oracle.get("forbidden_side_effects") {
+        assert_array_members(
+            side_effects,
+            "case.oracle.forbidden_side_effects",
+            SIDE_EFFECTS,
+            path,
+        )?;
     }
     Ok(())
 }
