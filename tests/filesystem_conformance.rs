@@ -368,14 +368,7 @@ fn assert_backend_missing_features(
     let missing_features = response["error"]["data"]["missing_features"]
         .as_array()
         .context("unsupported response must include missing_features")?;
-    for expected_feature in expected_features {
-        assert!(
-            missing_features
-                .iter()
-                .any(|feature| feature == expected_feature),
-            "missing_features must include {expected_feature}"
-        );
-    }
+    assert_eq!(missing_features, expected_features);
 
     let audit_path = response["error"]["data"]["audit_path"]
         .as_str()
@@ -393,16 +386,12 @@ fn assert_backend_missing_features(
         .iter()
         .find(|event| event["type"] == "sandbox.backend_capability")
         .context("audit must include sandbox.backend_capability event")?;
-    for expected_feature in expected_features {
-        assert!(
-            backend_event["missing_features"]
-                .as_array()
-                .context("backend audit event must include missing_features")?
-                .iter()
-                .any(|feature| feature == expected_feature),
-            "backend audit event missing_features must include {expected_feature}"
-        );
-    }
+    assert_eq!(
+        backend_event["missing_features"]
+            .as_array()
+            .context("backend audit event must include missing_features")?,
+        expected_features
+    );
     Ok(())
 }
 
