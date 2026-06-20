@@ -362,6 +362,9 @@ fn adversarial_result_schema_requires_public_skip_reason() -> Result<()> {
     assert!(validate_result(&result).is_err());
     result["backend_status"] = json!("experimental");
     validate_result(&result)?;
+
+    result["case_id"] = json!("adv.audit.v1");
+    assert!(validate_result(&result).is_err());
     Ok(())
 }
 
@@ -391,15 +394,7 @@ fn validate_case(case: &Value, path: &Path, case_ids: &mut HashSet<String>) -> R
     );
     let primary_class = required_string(case, "primary_class", path)?;
     assert_member(primary_class, CLASSES, path)?;
-    let case_id_parts = case_id.split('.').collect::<Vec<_>>();
-    if case_id_parts.len() != 4
-        || case_id_parts[0] != "adv"
-        || case_id_parts[2].is_empty()
-        || case_id_parts[3] != "v1"
-    {
-        bail!("case_id must use adv.<class>.<name>.v1 format: {case_id}");
-    }
-    let case_class = case_id_parts[1];
+    let case_class = case_id_class(case_id)?;
     if case_class != primary_class {
         bail!("case_id class {case_class} must match primary_class {primary_class}");
     }
@@ -512,6 +507,18 @@ fn required_string<'a>(case: &'a Value, field: &str, path: &Path) -> Result<&'a 
         .with_context(|| format!("case.{field} must be a string in {}", path.display()))
 }
 
+fn case_id_class(case_id: &str) -> Result<&str> {
+    let case_id_parts = case_id.split('.').collect::<Vec<_>>();
+    if case_id_parts.len() != 4
+        || case_id_parts[0] != "adv"
+        || case_id_parts[2].is_empty()
+        || case_id_parts[3] != "v1"
+    {
+        bail!("case_id must use adv.<class>.<name>.v1 format: {case_id}");
+    }
+    Ok(case_id_parts[1])
+}
+
 fn assert_non_empty_string(case: &Value, field: &str, path: &Path) -> Result<()> {
     if required_string(case, field, path)?.is_empty() {
         bail!("case.{field} must not be empty in {}", path.display());
@@ -613,6 +620,7 @@ fn validate_result(result: &Value) -> Result<()> {
         required_string(result, "schema_version", path)?,
         "runseal.adversarial-result/v1"
     );
+    case_id_class(required_string(result, "case_id", path)?)?;
     assert_member(
         required_string(result, "backend_status", path)?,
         BACKEND_STATUS,
