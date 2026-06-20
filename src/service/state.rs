@@ -54,6 +54,10 @@ impl ServiceState {
         self.executions.all_events(types)
     }
 
+    pub(super) fn record_execution_event(&mut self, execution_id: &str, event: &Value) {
+        self.executions.record_active_event(execution_id, event);
+    }
+
     pub(super) fn dispose_session(&mut self, session_id: &str) -> bool {
         self.sessions.dispose(session_id)
     }

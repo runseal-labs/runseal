@@ -36,12 +36,13 @@ pub(crate) fn execute_command(
         metadata,
         timeout,
         None,
+        None,
     )
 }
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "ponytail: one caller-owned id input; add a request struct when active execution needs it"
+    reason = "ponytail: request fields stay flat until one more caller needs a struct"
 )]
 pub(crate) fn execute_command_with_ids(
     ids: ExecutionIds,
@@ -53,6 +54,7 @@ pub(crate) fn execute_command_with_ids(
     metadata: Option<Value>,
     timeout: Option<Duration>,
     cancellation: Option<ExecutionCancellation>,
+    mut event_sink: Option<&mut dyn FnMut(&Value)>,
 ) -> Result<(Vec<Value>, Value), RunSealError> {
     if command.is_empty() {
         return Err(RunSealError::new("INVALID_REQUEST", "command is empty"));
@@ -86,7 +88,8 @@ pub(crate) fn execute_command_with_ids(
         &event_context,
     );
     write_audit_event_with_metadata(&mut audit, &requested, &metadata)?;
-    let mut events = vec![requested];
+    let mut events = Vec::new();
+    record_event(&mut events, requested, &mut event_sink);
     let resolved = execution_event_now(
         json!({
             "type": "policy.resolved",
@@ -103,7 +106,7 @@ pub(crate) fn execute_command_with_ids(
         &event_context,
     );
     write_audit_event_with_metadata(&mut audit, &resolved, &metadata)?;
-    events.push(resolved);
+    record_event(&mut events, resolved, &mut event_sink);
 
     if policy.requires_broad_write_approval() {
         let reason = "filesystem broad write requires approval";
@@ -120,8 +123,7 @@ pub(crate) fn execute_command_with_ids(
             &event_context,
         );
         write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
-        let mut error_events = events.clone();
-        error_events.push(event);
+        record_event(&mut events, event, &mut event_sink);
 
         return Err(RunSealError::with_details(
             "APPROVAL_REQUIRED",
@@ -137,7 +139,7 @@ pub(crate) fn execute_command_with_ids(
                 "backend": event_context.backend,
             }),
         )
-        .with_events(error_events));
+        .with_events(events));
     }
 
     if policy.denies_execution_without_backend() {
@@ -166,8 +168,7 @@ pub(crate) fn execute_command_with_ids(
             &event_context,
         );
         write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
-        let mut error_events = events.clone();
-        error_events.push(event);
+        record_event(&mut events, event, &mut event_sink);
 
         return Err(RunSealError::with_details(
             if requires_approval {
@@ -187,7 +188,7 @@ pub(crate) fn execute_command_with_ids(
                 "backend": event_context.backend,
             }),
         )
-        .with_events(error_events));
+        .with_events(events));
     }
 
     let plan = match backend.compile_plan(&ids.execution_id, cwd, policy) {
@@ -212,7 +213,7 @@ pub(crate) fn execute_command_with_ids(
                             &event_context,
                         );
                         write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
-                        events.push(event);
+                        record_event(&mut events, event, &mut event_sink);
                         prepared_setup = Some(setup);
                     }
                     Err(setup_err) => {
@@ -230,7 +231,7 @@ pub(crate) fn execute_command_with_ids(
                             &event_context,
                         );
                         write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
-                        events.push(event);
+                        record_event(&mut events, event, &mut event_sink);
 
                         let mut details = details;
                         if let Some(details) = details.as_object_mut() {
@@ -268,7 +269,7 @@ pub(crate) fn execute_command_with_ids(
                 &event_context,
             );
             write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
-            events.push(event);
+            record_event(&mut events, event, &mut event_sink);
 
             if let (Some(plan), Some(setup)) = (err.plan.as_deref(), prepared_setup) {
                 match setup.cleanup(plan) {
@@ -287,7 +288,7 @@ pub(crate) fn execute_command_with_ids(
                             &event_context,
                         );
                         write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
-                        events.push(event);
+                        record_event(&mut events, event, &mut event_sink);
                     }
                     Err(cleanup_err) => {
                         let event = execution_event_now(
@@ -304,7 +305,7 @@ pub(crate) fn execute_command_with_ids(
                             &event_context,
                         );
                         write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
-                        events.push(event);
+                        record_event(&mut events, event, &mut event_sink);
 
                         let mut details = details;
                         if let Some(details) = details.as_object_mut() {
@@ -356,7 +357,7 @@ pub(crate) fn execute_command_with_ids(
         &event_context,
     );
     write_audit_event_with_metadata(&mut audit, &allowed, &metadata)?;
-    events.push(allowed);
+    record_event(&mut events, allowed, &mut event_sink);
     let started_at = timestamp_now();
     let started = execution_event_at(
         json!({
@@ -385,7 +386,7 @@ pub(crate) fn execute_command_with_ids(
         &event_context,
     );
     write_audit_event_with_metadata(&mut audit, &started, &metadata)?;
-    events.push(started);
+    record_event(&mut events, started, &mut event_sink);
 
     let timer = Instant::now();
     let execution_output =
@@ -417,7 +418,7 @@ pub(crate) fn execute_command_with_ids(
                 }
                 let failed = execution_event_now(failed_payload, &event_context);
                 write_audit_event_with_metadata(&mut audit, &failed, &metadata)?;
-                events.push(failed);
+                record_event(&mut events, failed, &mut event_sink);
 
                 if let Some((code, reason, setup_status)) = backend_error {
                     let mut details = json!({
@@ -467,15 +468,14 @@ pub(crate) fn execute_command_with_ids(
                 .with_events(events));
             }
         };
-    let backend_events = execution_output
+    for event in execution_output
         .events
         .iter()
         .map(|event| execution_event_now(event.clone(), &event_context))
-        .collect::<Vec<_>>();
-    for event in &backend_events {
-        write_audit_event_with_metadata(&mut audit, event, &metadata)?;
+    {
+        write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
+        record_event(&mut events, event, &mut event_sink);
     }
-    events.extend(backend_events);
     let mut output = execution_output.output;
     let original_stdout_bytes = output.stdout.len();
     let original_stderr_bytes = output.stderr.len();
@@ -494,7 +494,7 @@ pub(crate) fn execute_command_with_ids(
             &event_context,
         );
         write_audit_event_with_metadata(&mut audit, &limit_exceeded, &metadata)?;
-        events.push(limit_exceeded);
+        record_event(&mut events, limit_exceeded, &mut event_sink);
         let failed = execution_event_now(
             json!({
                 "type": "execution.failed",
@@ -510,7 +510,7 @@ pub(crate) fn execute_command_with_ids(
             &event_context,
         );
         write_audit_event_with_metadata(&mut audit, &failed, &metadata)?;
-        events.push(failed);
+        record_event(&mut events, failed, &mut event_sink);
 
         return Err(RunSealError::with_details(
             "EXECUTION_TIMEOUT",
@@ -555,7 +555,7 @@ pub(crate) fn execute_command_with_ids(
             &event_context,
         );
         write_audit_event_with_metadata(&mut audit, &cancelled, &metadata)?;
-        events.push(cancelled);
+        record_event(&mut events, cancelled, &mut event_sink);
 
         return Err(RunSealError::with_details(
             "EXECUTION_CANCELLED",
@@ -585,13 +585,13 @@ pub(crate) fn execute_command_with_ids(
         let event = stream_event("execution.stdout", &event_context, &output.stdout, 0);
         let audit_event = audit_stream_event_metadata(&event);
         write_audit_event_with_metadata(&mut audit, &audit_event, &metadata)?;
-        events.push(event);
+        record_event(&mut events, event, &mut event_sink);
     }
     if !output.stderr.is_empty() {
         let event = stream_event("execution.stderr", &event_context, &output.stderr, 0);
         let audit_event = audit_stream_event_metadata(&event);
         write_audit_event_with_metadata(&mut audit, &audit_event, &metadata)?;
-        events.push(event);
+        record_event(&mut events, event, &mut event_sink);
     }
     if output_truncated {
         let event = execution_event_now(
@@ -611,7 +611,7 @@ pub(crate) fn execute_command_with_ids(
             &event_context,
         );
         write_audit_event_with_metadata(&mut audit, &event, &metadata)?;
-        events.push(event);
+        record_event(&mut events, event, &mut event_sink);
     }
     let exit_code = output.status.code().unwrap_or(1);
     let output_program = command.first().map(String::as_str).unwrap_or("");
@@ -630,7 +630,7 @@ pub(crate) fn execute_command_with_ids(
         &event_context,
     );
     write_audit_event_with_metadata(&mut audit, &resource_sample, &metadata)?;
-    events.push(resource_sample);
+    record_event(&mut events, resource_sample, &mut event_sink);
     if output_truncated {
         let limit_exceeded = execution_event_at(
             json!({
@@ -647,7 +647,7 @@ pub(crate) fn execute_command_with_ids(
             &event_context,
         );
         write_audit_event_with_metadata(&mut audit, &limit_exceeded, &metadata)?;
-        events.push(limit_exceeded);
+        record_event(&mut events, limit_exceeded, &mut event_sink);
         let failed = execution_event_at(
             json!({
                 "type": "execution.failed",
@@ -665,7 +665,7 @@ pub(crate) fn execute_command_with_ids(
             &event_context,
         );
         write_audit_event_with_metadata(&mut audit, &failed, &metadata)?;
-        events.push(failed);
+        record_event(&mut events, failed, &mut event_sink);
 
         return Err(RunSealError::with_details(
             "OUTPUT_LIMIT_EXCEEDED",
@@ -705,7 +705,7 @@ pub(crate) fn execute_command_with_ids(
         &event_context,
     );
     write_audit_event_with_metadata(&mut audit, &finished, &metadata)?;
-    events.push(finished);
+    record_event(&mut events, finished, &mut event_sink);
 
     let result = json!({
         "execution_id": ids.execution_id,
@@ -752,6 +752,17 @@ fn network_audit_json(policy: &SandboxPolicy) -> Value {
     })
 }
 
+fn record_event(
+    events: &mut Vec<Value>,
+    event: Value,
+    event_sink: &mut Option<&mut dyn FnMut(&Value)>,
+) {
+    if let Some(sink) = event_sink.as_deref_mut() {
+        sink(&event);
+    }
+    events.push(event);
+}
+
 #[cfg(test)]
 mod tests {
     use super::execute_command_with_ids;
@@ -789,6 +800,7 @@ mod tests {
             &policy,
             ExecutionStdin::Empty,
             ExecutionEnv::default(),
+            None,
             None,
             None,
             None,

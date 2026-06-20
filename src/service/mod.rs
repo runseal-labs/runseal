@@ -155,6 +155,7 @@ impl Service {
                 request.metadata,
                 request.timeout,
                 None,
+                None,
             )
         });
         self.record_execute_result(id, result)
@@ -173,7 +174,14 @@ impl Service {
         );
 
         let service = self.clone();
+        let execution_id = ids.execution_id.clone();
         std::thread::spawn(move || {
+            let event_service = service.clone();
+            let mut event_sink = move |event: &Value| {
+                event_service
+                    .state()
+                    .record_execution_event(&execution_id, event);
+            };
             let result = execute_command_with_ids(
                 ids,
                 &request.command,
@@ -184,6 +192,7 @@ impl Service {
                 request.metadata,
                 request.timeout,
                 Some(cancellation),
+                Some(&mut event_sink),
             );
             let _ = sender.send(service.record_execute_result(id, result));
         });

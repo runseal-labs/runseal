@@ -1908,6 +1908,33 @@ fn service_stdio_cancels_running_execution() -> Result<()> {
     assert_eq!(running_response["result"]["execution_id"], execution_id);
     assert_eq!(running_response["result"]["status"], "running");
 
+    let started = Instant::now();
+    let mut subscribe_id = 100;
+    loop {
+        if started.elapsed() > Duration::from_secs(3) {
+            bail!("runseal service did not retain active execution.started event");
+        }
+        stdin.write_all(
+            rpc_request_with_id(
+                subscribe_id,
+                "subscribeEvents",
+                json!({ "execution_id": execution_id, "types": ["execution.started"] }),
+            )
+            .as_bytes(),
+        )?;
+        stdin.flush()?;
+        let (running_events, subscribe_response) = read_rpc_response(&mut stdout, subscribe_id)?;
+        assert_eq!(subscribe_response["result"]["execution_id"], execution_id);
+        if running_events
+            .iter()
+            .any(|event| event["params"]["type"] == "execution.started")
+        {
+            break;
+        }
+        subscribe_id += 1;
+        std::thread::sleep(Duration::from_millis(25));
+    }
+
     stdin.write_all(
         rpc_request_with_id(
             4,

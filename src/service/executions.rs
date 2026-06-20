@@ -184,6 +184,12 @@ impl ExecutionStore {
             .collect()
     }
 
+    pub(super) fn record_active_event(&mut self, execution_id: &str, event: &Value) {
+        if let Some(active) = self.active.get_mut(execution_id) {
+            active.events.push(event.clone());
+        }
+    }
+
     pub(super) fn cancel_active(&mut self, execution_id: &str) -> Option<Value> {
         let active = self.active.get_mut(execution_id)?;
         active.cancellation.cancel();
