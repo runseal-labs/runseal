@@ -1,4 +1,5 @@
 use super::*;
+use std::time::Duration;
 
 impl WindowsReferenceBackend {
     pub(super) fn fail_closed_plan(

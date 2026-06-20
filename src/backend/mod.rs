@@ -7,6 +7,7 @@ use crate::windows::policy::{
 };
 use crate::windows::vendor_adapter::WindowsVendorSandboxProfile;
 mod capability;
+mod core;
 mod error;
 mod execution;
 mod filesystem;
@@ -16,6 +17,7 @@ mod plan;
 #[cfg(windows)]
 mod policy_epoch;
 mod process;
+mod registry;
 mod runtime;
 mod skeleton;
 mod windows;
@@ -46,7 +48,6 @@ use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::process::Output;
-use std::time::Duration;
 #[cfg(windows)]
 use {
     codex_protocol::models::PermissionProfile,
@@ -57,7 +58,10 @@ use {
 };
 
 pub use capability::CapabilityStatus;
-use capability::{capabilities_json_for, missing_backend_features};
+use capability::capabilities_json_for;
+#[cfg(test)]
+use capability::missing_backend_features;
+pub use core::SandboxBackend;
 pub use error::BackendError;
 #[cfg(all(test, windows))]
 pub(crate) use error::policy_transition_busy_error_for_test;
@@ -76,120 +80,16 @@ use plan::protected_filesystem_labels;
 use policy_epoch::windows_sandbox_execution_gate;
 #[cfg(all(test, windows))]
 use policy_epoch::{WindowsSandboxPolicyCohortKey, windows_sandbox_execution_gate_for_key};
-pub use skeleton::{LinuxCommunityBackend, LocalBackend, MacosExperimentalBackend};
-pub use windows::WindowsReferenceBackend;
+pub use registry::active_backend;
+#[cfg(test)]
+use skeleton::{LinuxCommunityBackend, MacosExperimentalBackend};
+#[cfg(test)]
+use windows::WindowsReferenceBackend;
 use windows::has_single_user_setup_payload;
 #[cfg(windows)]
 pub(crate) use windows::windows_sandbox_home;
 #[cfg(all(test, windows))]
 use windows::*;
-pub trait SandboxBackend {
-    fn name(&self) -> &'static str;
-    fn status(&self) -> &'static str;
-    fn platform(&self) -> &'static str;
-    fn supported_features(&self) -> &'static [BackendFeature];
-    fn missing_features(&self, policy: &SandboxPolicy) -> Vec<BackendFeature> {
-        missing_backend_features(policy, self.supported_features())
-    }
-    fn missing_feature_names(&self, policy: &SandboxPolicy) -> Vec<&'static str> {
-        self.missing_features(policy)
-            .into_iter()
-            .map(BackendFeature::as_str)
-            .collect()
-    }
-    fn compile_plan(
-        &self,
-        execution_id: &str,
-        cwd: &Path,
-        policy: &SandboxPolicy,
-    ) -> Result<PlatformSandboxPlan, BackendError>;
-    fn execute_plan(
-        &self,
-        plan: &PlatformSandboxPlan,
-        command: &[String],
-        cwd: &Path,
-        stdin: ExecutionStdin,
-        env: &ExecutionEnv,
-        timeout: Option<Duration>,
-    ) -> io::Result<BackendExecutionOutput>;
-    fn capabilities_json(&self) -> Value;
-}
-
-#[derive(Clone, Copy, Debug)]
-pub enum ActiveBackend {
-    Local(LocalBackend),
-    WindowsReference(WindowsReferenceBackend),
-    MacosExperimental(MacosExperimentalBackend),
-    LinuxCommunity(LinuxCommunityBackend),
-}
-
-impl ActiveBackend {
-    fn as_backend(&self) -> &dyn SandboxBackend {
-        match self {
-            Self::Local(backend) => backend,
-            Self::WindowsReference(backend) => backend,
-            Self::MacosExperimental(backend) => backend,
-            Self::LinuxCommunity(backend) => backend,
-        }
-    }
-}
-
-impl SandboxBackend for ActiveBackend {
-    fn name(&self) -> &'static str {
-        self.as_backend().name()
-    }
-
-    fn status(&self) -> &'static str {
-        self.as_backend().status()
-    }
-
-    fn platform(&self) -> &'static str {
-        self.as_backend().platform()
-    }
-
-    fn supported_features(&self) -> &'static [BackendFeature] {
-        self.as_backend().supported_features()
-    }
-
-    fn compile_plan(
-        &self,
-        execution_id: &str,
-        cwd: &Path,
-        policy: &SandboxPolicy,
-    ) -> Result<PlatformSandboxPlan, BackendError> {
-        self.as_backend().compile_plan(execution_id, cwd, policy)
-    }
-
-    fn execute_plan(
-        &self,
-        plan: &PlatformSandboxPlan,
-        command: &[String],
-        cwd: &Path,
-        stdin: ExecutionStdin,
-        env: &ExecutionEnv,
-        timeout: Option<Duration>,
-    ) -> io::Result<BackendExecutionOutput> {
-        self.as_backend()
-            .execute_plan(plan, command, cwd, stdin, env, timeout)
-    }
-
-    fn capabilities_json(&self) -> Value {
-        self.as_backend().capabilities_json()
-    }
-}
-
-pub fn active_backend() -> ActiveBackend {
-    if cfg!(windows) {
-        ActiveBackend::WindowsReference(WindowsReferenceBackend)
-    } else if cfg!(target_os = "macos") {
-        ActiveBackend::MacosExperimental(MacosExperimentalBackend)
-    } else if cfg!(target_os = "linux") {
-        ActiveBackend::LinuxCommunity(LinuxCommunityBackend)
-    } else {
-        ActiveBackend::Local(LocalBackend)
-    }
-}
-
 fn host_platform() -> &'static str {
     match std::env::consts::OS {
         "windows" => "windows",
