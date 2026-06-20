@@ -232,6 +232,7 @@ fn assert_portable_capability_probe_contract(payload: &Value) {
             "seccomp",
             "landlock",
             "bubblewrap",
+            "max_user_namespaces",
             "unprivileged_user_namespace",
         ] {
             assert!(probes["runtime"][key].as_str().is_some(), "{key}");

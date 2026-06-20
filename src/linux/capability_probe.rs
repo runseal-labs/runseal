@@ -17,6 +17,7 @@ pub(crate) fn payload() -> Value {
             "landlock": file_status("/sys/kernel/security/landlock"),
             "landlock_abi": landlock_abi(),
             "bubblewrap": path_status("bwrap"),
+            "max_user_namespaces": positive_sysctl_status("/proc/sys/user/max_user_namespaces"),
             "unprivileged_user_namespace": unprivileged_user_namespace_status(),
         },
     })
@@ -69,14 +70,60 @@ fn landlock_abi() -> Value {
 }
 
 fn unprivileged_user_namespace_status() -> &'static str {
-    fs::read_to_string("/proc/sys/kernel/unprivileged_userns_clone")
+    let quota_allows = positive_sysctl("/proc/sys/user/max_user_namespaces");
+    let clone_allows = fs::read_to_string("/proc/sys/kernel/unprivileged_userns_clone")
         .ok()
-        .map(|raw| {
-            if raw.trim() == "1" {
-                "available"
-            } else {
-                "unavailable"
-            }
-        })
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .map(|value| value > 0);
+
+    unprivileged_user_namespace_status_for(quota_allows, clone_allows)
+}
+
+fn unprivileged_user_namespace_status_for(
+    quota_allows: Option<bool>,
+    clone_allows: Option<bool>,
+) -> &'static str {
+    match (quota_allows, clone_allows) {
+        (Some(false), _) | (_, Some(false)) => "unavailable",
+        (Some(true), _) | (_, Some(true)) => "available",
+        _ => "unavailable",
+    }
+}
+
+fn positive_sysctl_status(path: &str) -> &'static str {
+    positive_sysctl(path)
+        .map(|enabled| if enabled { "available" } else { "unavailable" })
         .unwrap_or("unavailable")
+}
+
+fn positive_sysctl(path: &str) -> Option<bool> {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .map(|value| value > 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unprivileged_user_namespace_status_for;
+
+    #[test]
+    fn user_namespace_probe_combines_quota_and_distro_toggle() {
+        assert_eq!(
+            unprivileged_user_namespace_status_for(Some(true), None),
+            "available"
+        );
+        assert_eq!(
+            unprivileged_user_namespace_status_for(Some(true), Some(false)),
+            "unavailable"
+        );
+        assert_eq!(
+            unprivileged_user_namespace_status_for(Some(false), Some(true)),
+            "unavailable"
+        );
+        assert_eq!(
+            unprivileged_user_namespace_status_for(None, None),
+            "unavailable"
+        );
+    }
 }
