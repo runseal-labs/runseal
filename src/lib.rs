@@ -592,10 +592,12 @@ fn windows_sandbox_setup_failed_error_with_detail(cwd: &Path, detail: &str) -> R
     RunSealError::with_details(code, reason, details)
 }
 
+#[cfg(windows)]
 fn windows_sandbox_setup_can_run_now(setup_status: &Value) -> bool {
     setup_status["can_run_setup_now"].as_bool().unwrap_or(false)
 }
 
+#[cfg(windows)]
 fn windows_sandbox_setup_requires_setup(setup_status: &Value) -> bool {
     setup_status["requires_setup"].as_bool().unwrap_or(true)
 }
@@ -635,6 +637,7 @@ fn windows_sandbox_setup_status_payload(
     })
 }
 
+#[cfg(windows)]
 fn windows_sandbox_setup_success_payload(cwd: &Path) -> Value {
     let mut payload = json!({
         "status": "ok",
