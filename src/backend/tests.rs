@@ -10,7 +10,6 @@ use super::filesystem::{
     apply_private_filesystem_acl_transaction,
 };
 use super::path_string;
-use super::plan::environment_runtime_json;
 #[cfg(all(test, windows))]
 use super::policy_epoch::{WindowsSandboxPolicyCohortKey, windows_sandbox_execution_gate_for_key};
 #[cfg(all(test, windows))]
@@ -609,7 +608,8 @@ fn windows_fail_closed_preview_includes_runtime_environment_redirects() -> io::R
     let policy = normalize_policy(&json!("read-only"), &cwd, None).unwrap();
 
     let plan = WindowsReferenceBackend.fail_closed_plan("exec_env", &cwd, &policy);
-    let runtime_env = environment_runtime_json(&plan.environment_runtime);
+    let plan_json = plan.json();
+    let runtime_env = &plan_json["environment"]["runtime"];
 
     assert_eq!(
         runtime_env["RUNSEAL_HOME"],
@@ -658,10 +658,9 @@ fn windows_runtime_roots_are_per_execution() -> io::Result<()> {
     assert_ne!(first.profile_root, second.profile_root);
     assert_ne!(first.synthetic_home, second.synthetic_home);
     assert_ne!(first.temp_root, second.temp_root);
-    assert_ne!(
-        environment_runtime_json(&first.environment_runtime),
-        environment_runtime_json(&second.environment_runtime)
-    );
+    let first_runtime = first.json()["environment"]["runtime"].clone();
+    let second_runtime = second.json()["environment"]["runtime"].clone();
+    assert_ne!(first_runtime, second_runtime);
     Ok(())
 }
 

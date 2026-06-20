@@ -560,7 +560,7 @@ fn extend_unique(target: &mut Vec<String>, source: Vec<String>) {
         }
     }
 }
-pub(super) fn environment_runtime_json(entries: &[(String, String)]) -> Value {
+fn environment_runtime_json(entries: &[(String, String)]) -> Value {
     let mut object = Map::new();
     for (key, value) in entries {
         object.insert(key.clone(), json!(value));
