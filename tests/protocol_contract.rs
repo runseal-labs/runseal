@@ -4075,6 +4075,53 @@ fn execute_timeout_returns_stable_error_and_audit_event() -> Result<()> {
 }
 
 #[test]
+fn read_only_timeout_returns_stable_error_when_supported_or_fails_closed() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let output = run_rpc(&rpc_request(
+        "execute",
+        json!({
+            "command": [python_bin(), "-c", "import time; time.sleep(1)"],
+            "cwd": tmp.path(),
+            "policy": "read-only",
+            "timeout_ms": 10
+        }),
+    ))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = response_with_id(&messages, 1)?;
+
+    if response["error"]["data"]["code"] == "BACKEND_CAPABILITY_MISSING" {
+        assert_eq!(
+            response["error"]["data"]["missing_features"],
+            json!(expected_missing_features(&["network_disabled"]))
+        );
+        return Ok(());
+    }
+    if response["error"]["data"]["code"] == "BACKEND_UNAVAILABLE" {
+        assert_backend_unavailable(response, tmp.path())?;
+        return Ok(());
+    }
+
+    assert_eq!(response["error"]["data"]["code"], "EXECUTION_TIMEOUT");
+    assert_error_execution_binding(&response["error"]["data"]);
+    assert_eq!(response["error"]["data"]["timeout_ms"], 10);
+    let audit_path = response["error"]["data"]["audit_path"]
+        .as_str()
+        .expect("timeout error must return audit_path");
+    let audit_events = read_audit_events(tmp.path(), audit_path)?;
+    assert!(audit_events.iter().any(
+        |event| event["type"] == "execution.failed" && event["reason"] == "execution timed out"
+    ));
+    assert_no_private_linux_backend_terms(&json!(audit_events));
+    Ok(())
+}
+
+#[test]
 fn execute_start_failure_returns_audit_path_and_failed_event() -> Result<()> {
     let tmp = TempDir::new()?;
     let output = run_rpc(&rpc_request(
