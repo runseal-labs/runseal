@@ -186,6 +186,7 @@ impl ExecutionStore {
 
     pub(super) fn record_active_event(&mut self, execution_id: &str, event: &Value) {
         if let Some(active) = self.active.get_mut(execution_id) {
+            update_active_result_from_event(&mut active.result, event);
             active.events.push(event.clone());
         }
     }
@@ -268,6 +269,26 @@ fn execution_summary(result: &Value) -> Value {
         }
     }
     Value::Object(summary)
+}
+
+fn update_active_result_from_event(result: &mut Value, event: &Value) {
+    if event.get("type").and_then(Value::as_str) != Some("execution.started") {
+        return;
+    }
+    let Some(result) = result.as_object_mut() else {
+        return;
+    };
+    for (event_key, result_key) in [
+        ("time", "started_at"),
+        ("backend", "backend"),
+        ("platform_plan", "platform_plan"),
+        ("sandbox", "sandbox"),
+        ("network", "network"),
+    ] {
+        if let Some(value) = event.get(event_key) {
+            result.insert(result_key.to_string(), value.clone());
+        }
+    }
 }
 
 fn event_time(events: &[Value], event_type: &str) -> Option<Value> {

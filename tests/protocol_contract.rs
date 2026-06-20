@@ -2026,16 +2026,32 @@ fn service_stdio_streams_events_before_execution_finishes() -> Result<()> {
         .as_str()
         .context("streamed event must include execution_id")?
         .to_string();
+    let mut started_event = first_message["params"].clone();
+    while started_event["type"] != "execution.started" {
+        let message = read_rpc_message(&mut stdout)?;
+        assert_eq!(message["method"], "event");
+        started_event = message["params"].clone();
+    }
+
+    stdin.write_all(
+        rpc_request_with_id(2, "getExecution", json!({ "execution_id": execution_id })).as_bytes(),
+    )?;
+    let (_, active_response) = read_rpc_response(&mut stdout, 2)?;
+    assert_eq!(active_response["result"]["status"], "running");
+    assert_eq!(
+        active_response["result"]["platform_plan"],
+        started_event["platform_plan"]
+    );
 
     stdin.write_all(
         rpc_request_with_id(
-            2,
+            3,
             "cancelExecution",
             json!({ "execution_id": execution_id, "reason": "test" }),
         )
         .as_bytes(),
     )?;
-    let (_, cancel_response) = read_rpc_response(&mut stdout, 2)?;
+    let (_, cancel_response) = read_rpc_response(&mut stdout, 3)?;
     assert_eq!(cancel_response["result"]["status"], "cancelling");
 
     let (_, execute_response) = read_rpc_response(&mut stdout, 1)?;
