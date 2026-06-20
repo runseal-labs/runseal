@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, bail};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -125,6 +125,37 @@ const ORACLE_FIELDS: &[&str] = &[
     "events",
 ];
 const FIXTURE_FIELDS: &[&str] = &["kind", "path", "target", "name", "value", "command", "body"];
+const RESULT_FIELDS: &[&str] = &[
+    "schema_version",
+    "case_id",
+    "backend_name",
+    "backend_status",
+    "platform",
+    "capabilities_under_test",
+    "sandbox_level",
+    "network_mode",
+    "expected_result",
+    "observed_result",
+    "severity",
+    "passed",
+    "skipped",
+    "skip_reason",
+    "policy_hash_present",
+    "policy_epoch_present",
+    "audit_present",
+    "events_present",
+    "public_safe_output",
+    "status",
+];
+const RESULT_STATUS: &[&str] = &[
+    "passed",
+    "failed",
+    "skipped",
+    "xfailed",
+    "invalid_case",
+    "unsupported_fixture",
+    "harness_error",
+];
 
 #[test]
 fn adversarial_case_manifests_match_rfc0016_shape() -> Result<()> {
@@ -149,6 +180,40 @@ fn adversarial_result_gate_rejects_non_promotable_results() {
     assert!(!promotion_gate_allows("S2", "S1", true, false));
     assert!(!promotion_gate_allows("S0", "S1", false, false));
     assert!(!promotion_gate_allows("S0", "S1", true, true));
+}
+
+#[test]
+fn adversarial_result_schema_requires_public_skip_reason() -> Result<()> {
+    let mut result = json!({
+        "schema_version": "runseal.adversarial-result/v1",
+        "case_id": "adv.audit.audit-path-traversal.v1",
+        "backend_name": "runseal-windows-reference",
+        "backend_status": "reference",
+        "platform": "windows",
+        "capabilities_under_test": ["audit_jsonl"],
+        "sandbox_level": "danger-full-access",
+        "network_mode": "disabled",
+        "expected_result": "deny",
+        "observed_result": "deny",
+        "severity": "S0",
+        "passed": true,
+        "skipped": false,
+        "skip_reason": null,
+        "policy_hash_present": true,
+        "policy_epoch_present": true,
+        "audit_present": true,
+        "events_present": true,
+        "public_safe_output": true,
+        "status": "passed"
+    });
+    validate_result(&result)?;
+
+    result["skipped"] = json!(true);
+    result["status"] = json!("skipped");
+    assert!(validate_result(&result).is_err());
+    result["skip_reason"] = json!("unsupported fixture kind");
+    validate_result(&result)?;
+    Ok(())
 }
 
 fn manifest_paths() -> Result<Vec<PathBuf>> {
@@ -316,6 +381,66 @@ fn validate_fixtures(fixtures: &Value, path: &Path) -> Result<()> {
             .and_then(Value::as_str)
             .context("case.fixtures entries must include kind")?;
         assert_member(kind, FIXTURE_KINDS, path)?;
+    }
+    Ok(())
+}
+
+fn validate_result(result: &Value) -> Result<()> {
+    let path = Path::new("adversarial-result");
+    assert_allowed_fields(result, "result", RESULT_FIELDS, path)?;
+    assert_eq!(
+        required_string(result, "schema_version", path)?,
+        "runseal.adversarial-result/v1"
+    );
+    assert_member(
+        required_string(result, "backend_status", path)?,
+        BACKEND_STATUS,
+        path,
+    )?;
+    assert_member(required_string(result, "platform", path)?, PLATFORMS, path)?;
+    assert_members(result, "capabilities_under_test", CAPABILITIES, path)?;
+    assert_member(
+        required_string(result, "sandbox_level", path)?,
+        SANDBOX_LEVELS,
+        path,
+    )?;
+    assert_member(
+        required_string(result, "network_mode", path)?,
+        NETWORK_MODES,
+        path,
+    )?;
+    assert_member(
+        required_string(result, "expected_result", path)?,
+        EXPECTED_RESULTS,
+        path,
+    )?;
+    assert_member(
+        required_string(result, "observed_result", path)?,
+        EXPECTED_RESULTS,
+        path,
+    )?;
+    assert_member(required_string(result, "severity", path)?, SEVERITIES, path)?;
+    assert_member(
+        required_string(result, "status", path)?,
+        RESULT_STATUS,
+        path,
+    )?;
+    for field in [
+        "passed",
+        "skipped",
+        "policy_hash_present",
+        "policy_epoch_present",
+        "audit_present",
+        "events_present",
+        "public_safe_output",
+    ] {
+        result
+            .get(field)
+            .and_then(Value::as_bool)
+            .with_context(|| format!("result.{field} must be a boolean"))?;
+    }
+    if result["skipped"] == true && result.get("skip_reason").and_then(Value::as_str).is_none() {
+        bail!("skipped adversarial results must include skip_reason");
     }
     Ok(())
 }
