@@ -470,6 +470,26 @@ fn validate_case(case: &Value, path: &Path, case_ids: &mut HashSet<String>) -> R
         REQUEST_METHODS,
         path,
     )?;
+    if required_string(&request, "method", path)? == "execute" {
+        match request
+            .get("command")
+            .context("case.request.command must be present")?
+        {
+            Value::Array(command) => {
+                if command.is_empty() {
+                    bail!("case.request.command must not be empty");
+                }
+                for arg in command {
+                    assert_string_value(arg, "case.request.command[]", path)?;
+                }
+            }
+            Value::String(command)
+                if primary_class == "execution_injection" && !command.trim().is_empty() => {}
+            _ => bail!(
+                "case.request.command must be an argv array outside execution_injection cases"
+            ),
+        }
+    }
     if let Some(timeout_ms) = request.get("timeout_ms") {
         assert_positive_u64(timeout_ms, "case.request.timeout_ms", path)?;
     }
