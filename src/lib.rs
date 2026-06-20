@@ -68,6 +68,11 @@ fn run() -> Result<(), String> {
         [command, flag] if command == "rpc" && flag == "--stdio" => {
             protocol::rpc_handler::run_rpc_stdio()
         }
+        [command, flag] if command == "service" && (flag == "--pipe" || flag == "--socket") => {
+            Err(format!(
+                "service {flag} requires same-user IPC peer authentication and is not implemented"
+            ))
+        }
         [command, rest @ ..] if command == "setup" => commands::setup::run(rest),
         [command, rest @ ..] if command == "explain-policy" => commands::explain_policy::run(rest),
         [command, rest @ ..] if command == "exec" => commands::exec::run(rest),

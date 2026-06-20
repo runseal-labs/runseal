@@ -239,6 +239,23 @@ fn help_lists_core_commands() -> Result<()> {
 }
 
 #[test]
+fn service_local_ipc_modes_fail_closed() -> Result<()> {
+    for flag in ["--pipe", "--socket"] {
+        let output = run_cli(&["service", flag])?;
+
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8(output.stderr)?;
+        assert!(
+            stderr.contains("same-user IPC peer authentication"),
+            "{stderr}"
+        );
+        assert_no_private_windows_setup_terms(&stderr);
+    }
+    Ok(())
+}
+
+#[test]
 fn setup_help_describes_explicit_windows_setup() -> Result<()> {
     for args in [
         &["setup", "--help"][..],
