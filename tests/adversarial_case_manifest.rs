@@ -389,16 +389,17 @@ fn validate_case(case: &Value, path: &Path, case_ids: &mut HashSet<String>) -> R
         required_string(case, "schema_version", path)?,
         "runseal.adversarial-case/v1"
     );
-    assert!(
-        case_id.starts_with("adv.") && case_id.ends_with(".v1"),
-        "case_id must use adv.<class>.<name>.v1 format: {case_id}"
-    );
     let primary_class = required_string(case, "primary_class", path)?;
     assert_member(primary_class, CLASSES, path)?;
-    let case_class = case_id
-        .split('.')
-        .nth(1)
-        .context("case_id must include a class segment")?;
+    let case_id_parts = case_id.split('.').collect::<Vec<_>>();
+    if case_id_parts.len() != 4
+        || case_id_parts[0] != "adv"
+        || case_id_parts[2].is_empty()
+        || case_id_parts[3] != "v1"
+    {
+        bail!("case_id must use adv.<class>.<name>.v1 format: {case_id}");
+    }
+    let case_class = case_id_parts[1];
     if case_class != primary_class {
         bail!("case_id class {case_class} must match primary_class {primary_class}");
     }
