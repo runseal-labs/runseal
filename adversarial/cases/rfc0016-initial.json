@@ -622,6 +622,31 @@
   },
   {
     "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.runtime.cleanup-partial-failure.v1",
+    "title": "Runtime cleanup failures must preserve inspectable state",
+    "primary_class": "runtime",
+    "capabilities_under_test": ["runtime_roots", "audit_jsonl"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "read-only",
+    "network_mode": "disabled",
+    "fixtures": [{"kind": "readonly_file", "path": "workspace/.runseal/runtime/cleanup-failure/.runseal-runtime-root", "body": "cleanup-failure"}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('runtime cleanup')"],
+      "policy": {"sandbox_level": "read-only"}
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["path_not_modified", "event_not_contains_private_detail"]
+    },
+    "public_report_labels": ["runtime_roots"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
     "case_id": "adv.process.orphan-child-after-cancel.v1",
     "title": "Cancellation must not leave child processes running",
     "primary_class": "process",
