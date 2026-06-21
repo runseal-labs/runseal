@@ -103,6 +103,7 @@ const PRIVATE_TERMS: &[&str] = &[
     "helper",
     "handle",
 ];
+const RESULT_ONLY_PRIVATE_TERMS: &[&str] = &["authorization", "cookie", "token", "bearer"];
 const CASE_FIELDS: &[&str] = &[
     "schema_version",
     "case_id",
@@ -380,6 +381,10 @@ fn adversarial_result_schema_requires_public_skip_reason() -> Result<()> {
     result["skip_reason"] = json!("mentions ACL detail");
     assert!(validate_result(&result).is_err());
     result["skip_reason"] = json!("mentions namespace flag");
+    assert!(validate_result(&result).is_err());
+    result["skip_reason"] = json!("mentions authorization header");
+    assert!(validate_result(&result).is_err());
+    result["skip_reason"] = json!("mentions token value");
     assert!(validate_result(&result).is_err());
 
     result["skip_reason"] = Value::Null;
@@ -840,7 +845,9 @@ fn validate_oracle_flag(value: Option<&Value>, label: &str, path: &Path) -> Resu
 
 fn validate_result(result: &Value) -> Result<()> {
     let path = Path::new("adversarial-result");
-    assert_public_safe(&serde_json::to_string(result)?, path)?;
+    let result_json = serde_json::to_string(result)?;
+    assert_public_safe(&result_json, path)?;
+    assert_public_safe_with_terms(&result_json, RESULT_ONLY_PRIVATE_TERMS, path)?;
     assert_allowed_fields(result, "result", RESULT_FIELDS, path)?;
     assert_eq!(
         required_string(result, "schema_version", path)?,
@@ -959,11 +966,19 @@ fn assert_member(value: &str, allowed: &[&str], path: &Path) -> Result<()> {
 }
 
 fn assert_public_safe(manifest: &str, path: &Path) -> Result<()> {
+    assert_public_safe_with_terms(manifest, PRIVATE_TERMS, path)
+}
+
+fn assert_public_safe_with_terms(
+    manifest: &str,
+    private_terms: &[&str],
+    path: &Path,
+) -> Result<()> {
     let lower = manifest.to_ascii_lowercase();
     let terms = lower
         .split(|byte: char| !byte.is_ascii_alphanumeric())
         .collect::<HashSet<_>>();
-    for term in PRIVATE_TERMS {
+    for term in private_terms {
         if terms.contains(term) {
             bail!(
                 "manifest contains non-public term {term} in {}",
