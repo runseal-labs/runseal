@@ -410,6 +410,7 @@ mod tests {
                 BackendFeature::NetworkDisabled,
                 BackendFeature::NetworkProxy,
                 BackendFeature::ManagedProxy,
+                BackendFeature::PolicyEpoch,
             ]
         } else {
             &[
@@ -435,6 +436,21 @@ mod tests {
                 BackendFeature::DirectNetworkDeny,
                 BackendFeature::NetworkProxy,
                 BackendFeature::ManagedProxy,
+            ]
+        );
+    }
+
+    #[test]
+    fn capability_status_words_match_public_contract() {
+        let statuses = CapabilityStatus::ALL.map(CapabilityStatus::as_str);
+        assert_eq!(
+            statuses,
+            [
+                "supported",
+                "experimental",
+                "unsupported",
+                "unavailable",
+                "requires_setup"
             ]
         );
     }
@@ -531,6 +547,9 @@ mod tests {
         assert_eq!(LinuxCommunityBackend.name(), "runseal-linux-community");
         assert_eq!(LinuxCommunityBackend.status(), "future-community");
         assert!(LinuxCommunityBackend.supported_features().is_empty());
+        let capabilities = LinuxCommunityBackend.capabilities_json();
+        assert_eq!(capabilities["features"]["process_isolation"], false);
+        assert!(capabilities.get("capability_probes").is_none());
     }
 
     #[test]
@@ -541,6 +560,9 @@ mod tests {
         );
         assert_eq!(MacosExperimentalBackend.status(), "experimental");
         assert!(MacosExperimentalBackend.supported_features().is_empty());
+        let capabilities = MacosExperimentalBackend.capabilities_json();
+        assert_eq!(capabilities["features"]["process_isolation"], false);
+        assert!(capabilities.get("capability_probes").is_none());
     }
 
     #[test]

@@ -3,14 +3,28 @@ use super::*;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CapabilityStatus {
     Supported,
+    Experimental,
     Unsupported,
+    Unavailable,
+    RequiresSetup,
 }
 
 impl CapabilityStatus {
+    pub const ALL: [Self; 5] = [
+        Self::Supported,
+        Self::Experimental,
+        Self::Unsupported,
+        Self::Unavailable,
+        Self::RequiresSetup,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Supported => "supported",
+            Self::Experimental => "experimental",
             Self::Unsupported => "unsupported",
+            Self::Unavailable => "unavailable",
+            Self::RequiresSetup => "requires_setup",
         }
     }
 }
@@ -63,6 +77,7 @@ pub(super) fn capabilities_json_for(backend: &dyn SandboxBackend, notes: &[&'sta
         "backend": backend.name(),
         "backend_status": backend.status(),
         "platform": backend.platform(),
+        "capability_statuses": CapabilityStatus::ALL.map(CapabilityStatus::as_str),
         "features": {
             "local_execution": true,
             "filesystem_policy": supported_features.contains(&BackendFeature::FilesystemPolicy),
@@ -74,6 +89,10 @@ pub(super) fn capabilities_json_for(backend: &dyn SandboxBackend, notes: &[&'sta
             "network_disabled": supported_features.contains(&BackendFeature::NetworkDisabled),
             "network_proxy": supported_features.contains(&BackendFeature::NetworkProxy),
             "managed_proxy": supported_features.contains(&BackendFeature::ManagedProxy),
+            "policy_epoch": supported_features.contains(&BackendFeature::PolicyEpoch),
+            "setup_readiness": true,
+            "stdin_bytes": true,
+            "stdin_file": true,
             "resource_limits": supported_features.contains(&BackendFeature::ResourceLimits),
             "audit_jsonl": true,
             "otel_export": false,

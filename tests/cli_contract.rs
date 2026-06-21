@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -206,6 +206,10 @@ fn assert_no_private_windows_setup_terms(text: &str) {
             "CLI output must not expose private Windows setup term {private_term}"
         );
     }
+}
+
+fn assert_portable_capability_probe_contract(payload: &Value) {
+    assert!(payload.get("capability_probes").is_none());
 }
 
 #[test]
@@ -543,6 +547,16 @@ fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
     assert_eq!(payload["backend"], expected_backend_name());
     assert_eq!(payload["backend_status"], expected_backend_status());
     assert!(payload["platform"].as_str().is_some());
+    assert_eq!(
+        payload["capability_statuses"],
+        json!([
+            "supported",
+            "experimental",
+            "unsupported",
+            "unavailable",
+            "requires_setup"
+        ])
+    );
     assert_eq!(payload["features"]["local_execution"], true);
     assert_eq!(
         payload["features"]["filesystem_policy"],
@@ -581,6 +595,13 @@ fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
         expected_windows_sandbox_supported()
     );
     assert_eq!(
+        payload["features"]["policy_epoch"],
+        expected_windows_sandbox_supported()
+    );
+    assert_eq!(payload["features"]["setup_readiness"], true);
+    assert_eq!(payload["features"]["stdin_bytes"], true);
+    assert_eq!(payload["features"]["stdin_file"], true);
+    assert_eq!(
         payload["features"]["resource_limits"],
         expected_resource_limits_supported()
     );
@@ -601,6 +622,7 @@ fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
     );
     assert_eq!(payload["setup_status"]["setup"], "windows-sandbox");
     assert!(payload["setup_status"]["next_action"].as_str().is_some());
+    assert_portable_capability_probe_contract(&payload);
     assert_no_private_windows_setup_terms(&payload.to_string());
     Ok(())
 }
