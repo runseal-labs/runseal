@@ -207,6 +207,31 @@
   },
   {
     "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.execution_injection.program-resolution-confusion.v1",
+    "title": "Program resolution must not execute a different command",
+    "primary_class": "execution_injection",
+    "capabilities_under_test": ["stdin_bytes"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "danger-full-access",
+    "network_mode": "disabled",
+    "fixtures": [{"kind": "executable_script", "path": "tools/runseal-test"}],
+    "request": {
+      "method": "execute",
+      "command": ["runseal-test"],
+      "policy": "danger-full-access",
+      "network": "disabled"
+    },
+    "oracle": {
+      "expected_result": "deny",
+      "max_severity": "S0",
+      "audit": {"required": false},
+      "events": {"required": false}
+    },
+    "public_report_labels": ["protocol_contract"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
     "case_id": "adv.audit.secret-metadata-redaction.v1",
     "title": "Sensitive metadata keys must be redacted from audit",
     "primary_class": "audit",
