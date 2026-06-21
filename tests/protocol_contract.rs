@@ -734,6 +734,10 @@ fn service_stdio_returns_audit_events_by_execution() -> Result<()> {
                 "command": [python_bin(), "-c", "print('audit-query')"],
                 "cwd": tmp.path(),
                 "policy": "danger-full-access",
+                "metadata": {
+                    "agent_id": "audit-query-agent",
+                    "Authorization": "audit-query-secret"
+                }
             }),
         )
         .as_bytes(),
@@ -771,6 +775,17 @@ fn service_stdio_returns_audit_events_by_execution() -> Result<()> {
     );
     assert!(events.iter().any(|event| event["type"] == "policy.allowed"));
     assert!(!audit_response["result"].to_string().contains("audit-query"));
+    assert!(events.iter().all(|event| event.get("metadata").is_none()));
+    assert!(
+        !audit_response["result"]
+            .to_string()
+            .contains("audit-query-secret")
+    );
+    assert!(
+        !audit_response["result"]
+            .to_string()
+            .contains("audit-query-agent")
+    );
 
     stdin.write_all(
         rpc_request_with_id(
@@ -823,6 +838,10 @@ fn service_stdio_tails_retained_audit_events() -> Result<()> {
                 "command": [python_bin(), "-c", "print('audit-tail')"],
                 "cwd": tmp.path(),
                 "policy": "danger-full-access",
+                "metadata": {
+                    "agent_id": "audit-tail-agent",
+                    "Authorization": "audit-tail-secret"
+                }
             }),
         )
         .as_bytes(),
@@ -850,6 +869,17 @@ fn service_stdio_tails_retained_audit_events() -> Result<()> {
     );
     assert!(events.iter().any(|event| event["type"] == "policy.allowed"));
     assert!(!tail_response["result"].to_string().contains("audit-tail"));
+    assert!(events.iter().all(|event| event.get("metadata").is_none()));
+    assert!(
+        !tail_response["result"]
+            .to_string()
+            .contains("audit-tail-secret")
+    );
+    assert!(
+        !tail_response["result"]
+            .to_string()
+            .contains("audit-tail-agent")
+    );
 
     stdin.write_all(
         rpc_request_with_id(3, "tailAudit", json!({ "types": ["execution.stdout"] })).as_bytes(),
