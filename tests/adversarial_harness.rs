@@ -5,6 +5,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::OnceLock;
 use tempfile::TempDir;
 
 const PRIVATE_TERMS: &[&str] = &["sid", "acl", "wfp", "seatbelt", "seccomp", "landlock"];
@@ -24,6 +25,35 @@ fn rpc_request(method: &str, params: Value) -> String {
 
 fn harmless_command() -> Value {
     json!([runseal_bin(), "version"])
+}
+
+fn python_bin() -> &'static str {
+    static PYTHON: OnceLock<String> = OnceLock::new();
+    PYTHON.get_or_init(resolve_python_bin)
+}
+
+fn resolve_python_bin() -> String {
+    if let Some(path) = env::var_os("RUNSEAL_TEST_PYTHON") {
+        return PathBuf::from(path).to_string_lossy().into_owned();
+    }
+    let output = match if cfg!(windows) {
+        Command::new("where.exe").arg("python").output()
+    } else {
+        Command::new("sh")
+            .args(["-c", "command -v python3"])
+            .output()
+    } {
+        Ok(output) => output,
+        Err(err) => panic!("failed to locate python: {err}"),
+    };
+    let stdout = match String::from_utf8(output.stdout) {
+        Ok(stdout) => stdout,
+        Err(err) => panic!("python path must be utf-8: {err}"),
+    };
+    match stdout.lines().next() {
+        Some(path) => path.to_string(),
+        None => panic!("python must exist"),
+    }
 }
 
 fn run_rpc(message: &str) -> Result<std::process::Output> {
@@ -424,6 +454,52 @@ fn adversarial_audit_deny_event_cases_run() -> Result<()> {
 }
 
 #[test]
+fn adversarial_filesystem_path_denial_cases_run() -> Result<()> {
+    let cases = load_cases()?;
+    let filesystem_cases = cases.iter().filter(|case| {
+        matches!(
+            case["case_id"].as_str(),
+            Some(
+                "adv.filesystem.parent-traversal.v1"
+                    | "adv.filesystem.absolute-path-confusion.v1"
+                    | "adv.filesystem.relative-cwd-confusion.v1"
+                    | "adv.filesystem.case-folding-bypass.v1"
+                    | "adv.filesystem.path-normalization-difference.v1"
+                    | "adv.filesystem.external-write-from-workspace-write.v1"
+                    | "adv.filesystem.external-read-from-workspace-contained.v1"
+            )
+        ) && string_array_contains(&case["platforms"], current_platform())
+            && string_array_contains(&case["backend_status"], "local-baseline")
+    });
+
+    let mut ran = 0;
+    for case in filesystem_cases {
+        ran += 1;
+        let tmp = TempDir::new()?;
+        materialize_supported_fixtures(tmp.path(), case)?;
+        let workspace = tmp.path().join("workspace");
+        fs::create_dir_all(&workspace)?;
+
+        let command = command_with_local_python(case)?;
+        let response = run_case_with_command(case, &workspace, command)?;
+        assert_eq!(
+            observed_filesystem_denial_result(&response),
+            "deny_or_fail_closed",
+            "case {} must deny or fail closed: {response}",
+            case["case_id"]
+        );
+        assert_forbidden_file_side_effects_hold(tmp.path(), case)?;
+
+        let result = emit_result(case, "deny_or_fail_closed", true)?;
+        assert_eq!(result["status"], "passed", "{result}");
+        assert_public_safe(&result.to_string())?;
+    }
+
+    assert!(ran >= 6, "filesystem path denial cases must run");
+    Ok(())
+}
+
+#[test]
 fn adversarial_harness_materializes_file_fixtures_before_execution() -> Result<()> {
     let cases = load_cases()?;
     let mut materialized = 0;
@@ -443,6 +519,32 @@ fn adversarial_harness_materializes_file_fixtures_before_execution() -> Result<(
     }
 
     assert!(materialized >= 2, "harness must materialize file fixtures");
+    Ok(())
+}
+
+#[test]
+fn adversarial_harness_materializes_directory_fixtures_before_execution() -> Result<()> {
+    let cases = load_cases()?;
+    let mut materialized = 0;
+    for case in cases.iter() {
+        for fixture in case["fixtures"].as_array().into_iter().flatten() {
+            if fixture["kind"] != "directory" {
+                continue;
+            }
+            materialized += 1;
+            let tmp = TempDir::new()?;
+            let path = materialize_directory_fixture(tmp.path(), fixture)?;
+            let pre_state = fs::metadata(&path)
+                .with_context(|| format!("fixture must exist at {}", path.display()))?;
+            assert!(pre_state.is_dir());
+            assert!(!path.starts_with(Path::new(env!("CARGO_MANIFEST_DIR"))));
+        }
+    }
+
+    assert!(
+        materialized >= 2,
+        "harness must materialize directory fixtures"
+    );
     Ok(())
 }
 
@@ -712,14 +814,7 @@ fn materialize_file_fixture(root: &Path, fixture: &Value) -> Result<PathBuf> {
     let relative = fixture["path"]
         .as_str()
         .context("file fixture path must be a string")?;
-    let relative_path = Path::new(relative);
-    if relative_path.is_absolute()
-        || relative_path
-            .components()
-            .any(|component| matches!(component, std::path::Component::ParentDir))
-    {
-        bail!("file fixture path must stay inside the isolated workspace");
-    }
+    let relative_path = safe_fixture_relative_path(relative, "file")?;
     let path = root.join(relative_path);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
@@ -728,6 +823,95 @@ fn materialize_file_fixture(root: &Path, fixture: &Value) -> Result<PathBuf> {
     fs::write(&path, fixture["body"].as_str().unwrap_or(""))
         .with_context(|| format!("failed to write {}", path.display()))?;
     Ok(path)
+}
+
+fn materialize_directory_fixture(root: &Path, fixture: &Value) -> Result<PathBuf> {
+    let relative = fixture["path"]
+        .as_str()
+        .context("directory fixture path must be a string")?;
+    let relative_path = safe_fixture_relative_path(relative, "directory")?;
+    let path = root.join(relative_path);
+    fs::create_dir_all(&path).with_context(|| format!("failed to create {}", path.display()))?;
+    Ok(path)
+}
+
+fn materialize_supported_fixtures(root: &Path, case: &Value) -> Result<Vec<PathBuf>> {
+    case["fixtures"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|fixture| match fixture["kind"].as_str() {
+            Some("file") => materialize_file_fixture(root, fixture),
+            Some("directory") => materialize_directory_fixture(root, fixture),
+            Some(kind) => bail!("unsupported fixture kind: {kind}"),
+            None => bail!("fixture kind must be a string"),
+        })
+        .collect()
+}
+
+fn safe_fixture_relative_path<'a>(relative: &'a str, kind: &str) -> Result<&'a Path> {
+    let relative_path = Path::new(relative);
+    if relative_path.is_absolute()
+        || relative_path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        bail!("{kind} fixture path must stay inside the isolated workspace");
+    }
+    Ok(relative_path)
+}
+
+fn command_with_local_python(case: &Value) -> Result<Value> {
+    let mut command = case["request"]["command"]
+        .as_array()
+        .context("case.request.command must be an array")?
+        .clone();
+    if command.first().and_then(Value::as_str) == Some("python") {
+        command[0] = json!(python_bin());
+    }
+    Ok(Value::Array(command))
+}
+
+fn observed_filesystem_denial_result(response: &Value) -> &'static str {
+    match response["error"]["data"]["code"].as_str() {
+        Some("BACKEND_UNAVAILABLE" | "POLICY_DENIED" | "EXECUTION_FAILED_TO_START") => {
+            "deny_or_fail_closed"
+        }
+        _ if response["result"]["status"] == "finished" && response["result"]["exit_code"] != 0 => {
+            "deny_or_fail_closed"
+        }
+        _ => "harness_error",
+    }
+}
+
+fn assert_forbidden_file_side_effects_hold(root: &Path, case: &Value) -> Result<()> {
+    if !string_array_contains(
+        &case["oracle"]["forbidden_side_effects"],
+        "path_not_modified",
+    ) {
+        return Ok(());
+    }
+
+    for fixture in case["fixtures"].as_array().into_iter().flatten() {
+        if fixture["kind"] != "file" {
+            continue;
+        }
+        let relative = fixture["path"]
+            .as_str()
+            .context("file fixture path must be a string")?;
+        let path = root.join(safe_fixture_relative_path(relative, "file")?);
+        let expected = fixture["body"].as_str().unwrap_or("");
+        let actual = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        assert_eq!(
+            actual,
+            expected,
+            "case {} must not modify {}",
+            case["case_id"],
+            path.display()
+        );
+    }
+    Ok(())
 }
 
 fn run_case(case: &Value, cwd: &Path) -> Result<Value> {
