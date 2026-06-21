@@ -338,7 +338,22 @@ fn assert_backend_unavailable(response: &Value, root: &std::path::Path) -> Resul
 }
 
 fn assert_portable_capability_probe_contract(payload: &Value) {
+    #[cfg(windows)]
     assert!(payload.get("capability_probes").is_none());
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        let probes = payload["capability_probes"]
+            .as_array()
+            .expect("portable backend must report diagnostic capability probes");
+        assert!(!probes.is_empty());
+        for probe in probes {
+            assert!(probe["capability"].as_str().is_some());
+            assert!(probe["mechanism"].as_str().is_some());
+            assert_eq!(probe["status"], "unsupported");
+            assert_eq!(probe["diagnostic_only"], true);
+        }
+    }
 }
 
 #[test]

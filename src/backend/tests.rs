@@ -450,7 +450,10 @@ fn linux_skeleton_reports_community_track_without_sandbox_features() {
     assert!(LinuxCommunityBackend.supported_features().is_empty());
     let capabilities = LinuxCommunityBackend.capabilities_json();
     assert_eq!(capabilities["features"]["process_isolation"], false);
-    assert!(capabilities.get("capability_probes").is_none());
+    let probes = capabilities["capability_probes"].as_array().unwrap();
+    assert_eq!(probes.len(), 3);
+    assert!(probes.iter().all(|probe| probe["status"] == "unsupported"));
+    assert!(probes.iter().all(|probe| probe["diagnostic_only"] == true));
 }
 
 #[test]
@@ -463,7 +466,10 @@ fn macos_skeleton_reports_experimental_track_without_sandbox_features() {
     assert!(MacosExperimentalBackend.supported_features().is_empty());
     let capabilities = MacosExperimentalBackend.capabilities_json();
     assert_eq!(capabilities["features"]["process_isolation"], false);
-    assert!(capabilities.get("capability_probes").is_none());
+    let probes = capabilities["capability_probes"].as_array().unwrap();
+    assert_eq!(probes.len(), 1);
+    assert_eq!(probes[0]["status"], "unsupported");
+    assert_eq!(probes[0]["diagnostic_only"], true);
 }
 
 #[test]
