@@ -191,7 +191,7 @@ fn expected_read_only_status() -> &'static str {
 }
 
 fn expected_workspace_write_status() -> &'static str {
-    if cfg!(target_os = "linux") {
+    if cfg!(any(target_os = "linux", target_os = "macos")) {
         "experimental"
     } else {
         expected_status(expected_windows_sandbox_supported())

@@ -248,6 +248,17 @@ impl PlatformSandboxPlan {
         plan
     }
 
+    pub(super) fn macos_workspace_write_experimental(
+        backend: &dyn SandboxBackend,
+        execution_id: &str,
+        cwd: &Path,
+        policy: &SandboxPolicy,
+    ) -> Self {
+        let mut plan = Self::linux_experimental(backend, execution_id, cwd, policy);
+        plan.enforcement = "macos-experimental";
+        plan
+    }
+
     pub fn json(&self) -> Value {
         json!({
             "backend": {

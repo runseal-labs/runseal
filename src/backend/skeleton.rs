@@ -98,10 +98,12 @@ impl SandboxBackend for MacosExperimentalBackend {
             self,
             &[
                 "macOS backend is an experimental contribution track",
-                "sandboxed policies fail closed until conformance tests prove enforcement",
+                "unsupported sandboxed policies fail closed until conformance tests prove enforcement",
             ],
         );
         payload["sandbox_levels"]["read-only"] = json!(CapabilityStatus::Experimental.as_str());
+        payload["sandbox_levels"]["workspace-write"] =
+            json!(CapabilityStatus::Experimental.as_str());
         payload["network_modes"]["disabled"] = json!(CapabilityStatus::Experimental.as_str());
         payload["capability_probes"] = crate::macos::capability_probe::capability_probes();
         payload
@@ -202,6 +204,16 @@ fn compile_macos_plan(
         && policy.network.mode == NetworkMode::Disabled
     {
         return Ok(PlatformSandboxPlan::macos_read_only_experimental(
+            backend,
+            execution_id,
+            cwd,
+            policy,
+        ));
+    }
+    if policy.sandbox_level == SandboxLevel::WorkspaceWrite
+        && policy.network.mode == NetworkMode::Disabled
+    {
+        return Ok(PlatformSandboxPlan::macos_workspace_write_experimental(
             backend,
             execution_id,
             cwd,
@@ -334,7 +346,7 @@ fn spawn_macos_sandbox_exec(
     env: &ExecutionEnv,
     timeout: Option<Duration>,
 ) -> io::Result<BackendExecutionOutput> {
-    let profile = macos_read_only_profile(plan)?;
+    let profile = macos_profile(plan, cwd)?;
     let mut sandbox_command = vec![
         "/usr/bin/sandbox-exec".to_string(),
         "-p".to_string(),
@@ -349,8 +361,14 @@ fn spawn_macos_sandbox_exec(
     spawn_local_command(&runner_plan, &sandbox_command, cwd, stdin, env, timeout)
 }
 
-fn macos_read_only_profile(plan: &PlatformSandboxPlan) -> io::Result<String> {
+fn macos_profile(plan: &PlatformSandboxPlan, cwd: &Path) -> io::Result<String> {
     let mut writable_roots = Vec::new();
+    if plan.sandbox_level == SandboxLevel::WorkspaceWrite.as_str() {
+        writable_roots.push(format!(
+            "(subpath \"{}\")",
+            macos_profile_path_literal(cwd)?
+        ));
+    }
     for root in [
         plan.runtime_root.as_deref(),
         plan.profile_root.as_deref(),
@@ -360,18 +378,38 @@ fn macos_read_only_profile(plan: &PlatformSandboxPlan) -> io::Result<String> {
     .into_iter()
     .flatten()
     {
-        writable_roots.push(format!("(subpath \"{}\")", macos_profile_literal(root)));
+        writable_roots.push(format!(
+            "(subpath \"{}\")",
+            macos_profile_path_literal(root)?
+        ));
     }
     if writable_roots.is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "macOS read-only plan requires runtime roots",
+            "macOS plan requires writable roots",
         ));
     }
-    Ok(format!(
+    let mut profile = format!(
         "(version 1)(deny default)(allow process*)(allow sysctl-read)(allow mach-lookup)(allow file-read*)(allow file-write* {})",
         writable_roots.join(" ")
-    ))
+    );
+    if plan.sandbox_level == SandboxLevel::WorkspaceWrite.as_str() {
+        for protected in [".git", ".agents", ".codex"] {
+            let protected_root = cwd.join(protected);
+            if protected_root.exists() {
+                profile.push_str(&format!(
+                    "(deny file-write* (subpath \"{}\"))",
+                    macos_profile_path_literal(&protected_root)?
+                ));
+            }
+        }
+    }
+    Ok(profile)
+}
+
+fn macos_profile_path_literal(path: impl AsRef<Path>) -> io::Result<String> {
+    let path = std::fs::canonicalize(path)?;
+    Ok(macos_profile_literal(&path_string(&path)))
 }
 
 fn macos_profile_literal(value: &str) -> String {
