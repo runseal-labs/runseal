@@ -186,6 +186,33 @@
   },
   {
     "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.policy.policy-hash-plan-event-audit-mismatch.v1",
+    "title": "Policy hashes must match across plan, execution, event, and audit",
+    "primary_class": "policy",
+    "secondary_classes": ["audit"],
+    "capabilities_under_test": ["policy_epoch", "audit_jsonl"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "danger-full-access",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('policy hash consistency')"],
+      "policy": "danger-full-access",
+      "network": "disabled"
+    },
+    "oracle": {
+      "expected_result": "allow_no_side_effect_outside_policy",
+      "max_severity": "S0",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["policy_hash_consistent", "policy_epoch_consistent"]
+    },
+    "public_report_labels": ["protocol_contract"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
     "case_id": "adv.execution_injection.argv-shell-metacharacters.v1",
     "title": "Command strings must not imply shell execution",
     "primary_class": "execution_injection",
