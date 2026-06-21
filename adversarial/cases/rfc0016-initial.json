@@ -724,6 +724,32 @@
   },
   {
     "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.process.shell-trampoline-child.v1",
+    "title": "Shell trampoline children must not outlive execution",
+    "primary_class": "process",
+    "capabilities_under_test": ["process_cleanup"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "workspace-write",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "import subprocess, sys, time; subprocess.Popen(f'\"{sys.executable}\" -c \"import time; time.sleep(60)\"', shell=True); time.sleep(60)"],
+      "policy": {"sandbox_level": "workspace-write"},
+      "timeout_ms": 100
+    },
+    "oracle": {
+      "expected_result": "timeout",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["process_not_running"]
+    },
+    "public_report_labels": ["process_cleanup"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
     "case_id": "adv.network.direct-egress-disabled.v1",
     "title": "Disabled network policy must block direct egress",
     "primary_class": "network",
