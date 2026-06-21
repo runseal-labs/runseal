@@ -192,6 +192,32 @@ fn adversarial_execution_injection_deny_cases_run() -> Result<()> {
 }
 
 #[test]
+fn adversarial_stdin_file_outside_cwd_case_runs() -> Result<()> {
+    let case = load_cases()?
+        .into_iter()
+        .find(|case| case["case_id"] == "adv.execution_injection.stdin-file-outside-cwd.v1")
+        .context("stdin file outside cwd adversarial case must exist")?;
+    let tmp = TempDir::new()?;
+    for fixture in case["fixtures"].as_array().into_iter().flatten() {
+        materialize_file_fixture(tmp.path(), fixture)?;
+    }
+    let workspace = tmp.path().join("workspace");
+    fs::create_dir(&workspace)?;
+
+    let response = run_case(&case, &workspace)?;
+    assert_eq!(
+        observed_denial_result(&response),
+        "deny",
+        "case {} must deny: {response}",
+        case["case_id"]
+    );
+    let result = emit_result(&case, "deny", true)?;
+    assert_eq!(result["status"], "passed", "{result}");
+    assert_public_safe(&result.to_string())?;
+    Ok(())
+}
+
+#[test]
 fn adversarial_harness_materializes_file_fixtures_before_execution() -> Result<()> {
     let cases = load_cases()?;
     let mut materialized = 0;
