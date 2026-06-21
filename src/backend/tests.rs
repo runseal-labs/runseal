@@ -461,10 +461,19 @@ fn linux_skeleton_reports_community_track_without_sandbox_features() {
     let capabilities = LinuxCommunityBackend.capabilities_json();
     assert_eq!(capabilities["features"]["process_isolation"], false);
     let probes = capabilities["capability_probes"].as_array().unwrap();
-    assert_eq!(probes.len(), 3);
+    assert_eq!(probes.len(), 8);
     assert_probe_schema(&probes[0], "filesystem_policy", "landlock");
     assert_probe_schema(&probes[1], "process_isolation", "user_namespaces");
-    assert_probe_schema(&probes[2], "process_isolation", "bubblewrap");
+    assert_probe_schema(&probes[2], "process_isolation", "mount_namespaces");
+    assert_probe_schema(&probes[3], "process_isolation", "pid_namespaces");
+    assert_probe_schema(&probes[4], "network_disabled", "network_namespaces");
+    assert_probe_schema(&probes[5], "process_isolation", "seccomp");
+    assert_probe_schema(&probes[6], "process_isolation", "bubblewrap");
+    assert_probe_schema(
+        &probes[7],
+        "process_isolation",
+        "unprivileged_user_namespaces",
+    );
 }
 
 #[test]
