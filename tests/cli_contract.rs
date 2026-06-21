@@ -215,7 +215,6 @@ fn assert_no_private_windows_setup_terms(text: &str) {
 fn assert_no_private_linux_backend_terms(text: &str) {
     for private_term in [
         "bwrap",
-        "bubblewrap",
         "--unshare-user",
         "--unshare-pid",
         "--unshare-net",

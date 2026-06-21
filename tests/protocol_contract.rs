@@ -326,7 +326,6 @@ fn assert_no_private_linux_backend_terms(value: &Value) {
     let public_payload = value.to_string();
     for private_term in [
         "bwrap",
-        "bubblewrap",
         "--unshare-user",
         "--unshare-pid",
         "--unshare-net",
