@@ -93,6 +93,13 @@ fn stdout_json_lines(output: &Output) -> Result<Vec<Value>> {
         .collect()
 }
 
+fn response_with_id(messages: &[Value], id: u64) -> Result<&Value> {
+    messages
+        .iter()
+        .find(|message| message.get("id") == Some(&json!(id)))
+        .with_context(|| format!("response id {id} must exist"))
+}
+
 fn decode_stream_event(event: &Value) -> Result<String> {
     assert_rfc3339_timestamp(&event["time"])?;
     assert_eq!(event["encoding"], "base64");
@@ -540,6 +547,94 @@ fn rpc_stdio_does_not_keep_completed_execution_state() -> Result<()> {
     drop(stdin);
     let status = child.wait().context("failed to wait for runseal rpc")?;
     assert!(status.success());
+    Ok(())
+}
+
+#[test]
+fn service_stdio_lists_execution_summaries() -> Result<()> {
+    #[cfg(windows)]
+    let _guard = windows_protocol_lock()?;
+
+    let tmp = TempDir::new()?;
+    let mut child = Command::new(require_runseal_bin()?)
+        .args(["service", "--stdio"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to spawn runseal service")?;
+    let mut stdin = child.stdin.take().context("stdin unavailable")?;
+    let stdout = child.stdout.take().context("stdout unavailable")?;
+    let mut stdout = BufReader::new(stdout);
+
+    stdin.write_all(
+        rpc_request_with_id(
+            1,
+            "execute",
+            json!({
+                "command": [python_bin(), "-c", "print('secret-output')"],
+                "cwd": tmp.path(),
+                "policy": "danger-full-access",
+            }),
+        )
+        .as_bytes(),
+    )?;
+    let (_, execute_response) = read_rpc_response(&mut stdout, 1)?;
+    let execution_id = execute_response["result"]["execution_id"]
+        .as_str()
+        .context("execute result must include execution_id")?
+        .to_string();
+
+    stdin.write_all(rpc_request_with_id(2, "listExecutions", json!({})).as_bytes())?;
+    let (_, list_response) = read_rpc_response(&mut stdout, 2)?;
+    assert_eq!(list_response["result"]["count"], 1);
+    let executions = list_response["result"]["executions"]
+        .as_array()
+        .context("executions must be an array")?;
+    let summary = &executions[0];
+    assert_eq!(summary["execution_id"], execution_id);
+    assert_eq!(summary["status"], "finished");
+    assert_eq!(summary["policy_id"], "danger-full-access");
+    assert!(summary["stdout_bytes"].as_u64().is_some());
+    assert_rfc3339_timestamp(&summary["started_at"])?;
+    assert_rfc3339_timestamp(&summary["finished_at"])?;
+    assert!(summary.get("stdout").is_none());
+    assert!(summary.get("stderr").is_none());
+    assert!(summary.get("platform_plan").is_none());
+    assert!(!summary.to_string().contains("secret-output"));
+
+    drop(stdin);
+    let status = child.wait().context("failed to wait for runseal service")?;
+    assert!(status.success());
+    Ok(())
+}
+
+#[test]
+fn rpc_stdio_lists_no_cross_request_executions() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let output = run_rpc(&format!(
+        "{}{}",
+        rpc_request_with_id(
+            1,
+            "execute",
+            json!({
+                "command": [python_bin(), "-c", "print('direct-output')"],
+                "cwd": tmp.path(),
+                "policy": "danger-full-access",
+            }),
+        ),
+        rpc_request_with_id(2, "listExecutions", json!({}))
+    ))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = response_with_id(&messages, 2)?;
+    assert_eq!(response["result"]["count"], 0);
+    assert_eq!(response["result"]["executions"], json!([]));
     Ok(())
 }
 

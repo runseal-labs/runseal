@@ -31,6 +31,10 @@ impl ServiceState {
         self.executions.contains(execution_id)
     }
 
+    pub(super) fn execution_summaries(&self) -> Vec<Value> {
+        self.executions.summaries()
+    }
+
     pub(super) fn execution_events(
         &self,
         execution_id: &str,

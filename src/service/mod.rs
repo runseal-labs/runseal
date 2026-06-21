@@ -82,6 +82,10 @@ impl Service {
             }
             "execute" => self.execute(id, &params),
             "getExecution" => self.get_execution(id, &params),
+            "listExecutions" => match validate_empty_params(&params, "listExecutions") {
+                Ok(()) => vec![rpc::result(id, self.list_executions())],
+                Err(err) => vec![rpc::error(id, err)],
+            },
             "cancelExecution" => self.cancel_execution(id, &params),
             "subscribeEvents" => self.subscribe_events(id, &params),
             "disposeSession" => self.dispose_session(id, &params),
@@ -128,6 +132,14 @@ impl Service {
             Some(result) => vec![rpc::result(id, result)],
             None => vec![rpc::error(id, execution_not_found(&execution_id))],
         }
+    }
+
+    fn list_executions(&self) -> Value {
+        let executions = self.state.execution_summaries();
+        json!({
+            "count": executions.len(),
+            "executions": executions,
+        })
     }
 
     fn cancel_execution(&self, id: Value, params: &Value) -> Vec<Value> {
