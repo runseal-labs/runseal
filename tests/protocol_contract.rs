@@ -774,6 +774,11 @@ fn service_stdio_returns_audit_events_by_execution() -> Result<()> {
             .any(|event| event["type"] == "policy.resolved")
     );
     assert!(events.iter().any(|event| event["type"] == "policy.allowed"));
+    let event_types = events
+        .iter()
+        .filter_map(|event| event["type"].as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(event_types, vec!["policy.resolved", "policy.allowed"]);
     assert!(!audit_response["result"].to_string().contains("audit-query"));
     assert!(events.iter().all(|event| event.get("metadata").is_none()));
     assert!(
