@@ -428,6 +428,40 @@ fn adversarial_result_schema_requires_public_skip_reason() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn adversarial_case_schema_rejects_invalid_negative_side_effects() -> Result<()> {
+    let mut case = json!({
+        "schema_version": "runseal.adversarial-case/v1",
+        "case_id": "adv.filesystem.optional-side-effect.v1",
+        "title": "Optional side effect names must be public categories",
+        "primary_class": "filesystem",
+        "capabilities_under_test": ["filesystem_policy"],
+        "platforms": ["windows"],
+        "backend_status": ["reference"],
+        "sandbox_level": "workspace-contained",
+        "network_mode": "disabled",
+        "request": {
+            "method": "execute",
+            "command": ["python", "-c", "print('check')"],
+            "policy": "workspace-contained"
+        },
+        "oracle": {
+            "expected_result": "deny_or_fail_closed",
+            "max_severity": "S1",
+            "audit": {"required": true},
+            "events": {"required": true}
+        },
+        "negative_side_effects": ["file_not_exists"]
+    });
+    let mut case_ids = HashSet::new();
+    validate_case(&case, Path::new("test-case"), &mut case_ids)?;
+
+    case["negative_side_effects"] = json!(["raw_acl_mutation"]);
+    let mut case_ids = HashSet::new();
+    assert!(validate_case(&case, Path::new("test-case"), &mut case_ids).is_err());
+    Ok(())
+}
+
 fn manifest_paths() -> Result<Vec<PathBuf>> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("adversarial/cases");
     let mut paths = fs::read_dir(&root)
@@ -477,6 +511,14 @@ fn validate_case(case: &Value, path: &Path, case_ids: &mut HashSet<String>) -> R
     }
     if let Some(labels) = case.get("public_report_labels") {
         assert_array_members(labels, "case.public_report_labels", REPORT_LABELS, path)?;
+    }
+    if let Some(side_effects) = case.get("negative_side_effects") {
+        assert_array_members(
+            side_effects,
+            "case.negative_side_effects",
+            SIDE_EFFECTS,
+            path,
+        )?;
     }
     assert_non_empty_string(case, "title", path)?;
     assert_members(case, "capabilities_under_test", CAPABILITIES, path)?;
