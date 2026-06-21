@@ -78,6 +78,36 @@ def probe_available(payload: dict, mechanism: str) -> bool:
     return False
 
 
+def assert_network_disabled_blocks_direct_egress(system: str, command: str) -> None:
+    policy = "workspace-write"
+    with tempfile.TemporaryDirectory(prefix="runseal-network-disabled-") as cwd:
+        _, result = run_json(
+            [
+                "exec",
+                "--json",
+                "--policy",
+                policy,
+                "--network",
+                "disabled",
+                "--cwd",
+                cwd,
+                "--",
+                command,
+                "-c",
+                "import socket; socket.create_connection(('1.1.1.1', 53), timeout=0.5); print('direct-network-ok')",
+            ],
+            expect_success=True,
+        )
+    expected_enforcement = {
+        "Darwin": "macos-experimental",
+        "Linux": "linux-experimental",
+    }[system]
+    if result.get("platform_plan", {}).get("enforcement") != expected_enforcement:
+        raise SystemExit(f"unexpected network.disabled plan: {result}")
+    if result.get("exit_code") == 0 or "direct-network-ok" in result.get("stdout", ""):
+        raise SystemExit(f"{system} network.disabled allowed direct egress: {result}")
+
+
 def assert_linux_read_only(payload: dict) -> None:
     if payload.get("backend_status") != "experimental":
         raise SystemExit(f"unexpected Linux backend status: {payload}")
@@ -115,6 +145,7 @@ def assert_linux_read_only(payload: dict) -> None:
             if result.get("exit_code") == 0 or write_target.exists():
                 raise SystemExit(f"Linux read-only did not block workspace write: {result}")
             assert_linux_workspace_write(command)
+            assert_network_disabled_blocks_direct_egress("Linux", command)
             assert_linux_proxy_fail_closed(command)
         elif result.get("error", {}).get("data", {}).get("code") != "BACKEND_UNAVAILABLE":
             raise SystemExit(f"expected Linux backend unavailable without bubblewrap: {result}")
@@ -291,6 +322,7 @@ def assert_macos_read_only(payload: dict) -> None:
         if result.get("exit_code") == 0 or write_target.exists():
             raise SystemExit(f"macOS read-only did not block workspace write: {result}")
         assert_macos_workspace_write(command)
+        assert_network_disabled_blocks_direct_egress("Darwin", command)
         assert_portable_workspace_contained_fail_closed("Darwin", command)
         assert_fail_closed("Darwin")
 
