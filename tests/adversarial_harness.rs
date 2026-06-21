@@ -48,7 +48,6 @@ fn adversarial_tier0_policy_cases_emit_public_safe_results() -> Result<()> {
     let cases = load_cases()?;
     let tier0_cases = cases.iter().filter(|case| {
         case["primary_class"] == "policy"
-            && case["sandbox_level"] == "malformed"
             && case["oracle"]["expected_result"] == "policy_rejected"
             && string_array_contains(&case["platforms"], current_platform())
             && string_array_contains(&case["backend_status"], "local-baseline")
@@ -71,8 +70,8 @@ fn adversarial_tier0_policy_cases_emit_public_safe_results() -> Result<()> {
     }
 
     assert!(
-        ran >= 2,
-        "tier0 policy harness must run malformed policy cases"
+        ran >= 4,
+        "tier0 policy harness must run policy rejection cases"
     );
     Ok(())
 }
