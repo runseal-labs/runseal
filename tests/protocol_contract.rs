@@ -198,6 +198,18 @@ fn expected_backend_status() -> &'static str {
     }
 }
 
+fn expected_backend_platform() -> &'static str {
+    if cfg!(windows) {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else if cfg!(target_os = "linux") {
+        "linux"
+    } else {
+        "unknown"
+    }
+}
+
 fn expected_process_cleanup_supported() -> bool {
     cfg!(windows)
 }
@@ -3378,6 +3390,14 @@ fn sandboxed_policy_uses_platform_backend_or_reports_unavailable() -> Result<()>
     assert_eq!(
         response["error"]["data"]["backend"]["name"],
         expected_backend_name()
+    );
+    assert_eq!(
+        response["error"]["data"]["backend"]["status"],
+        expected_backend_status()
+    );
+    assert_eq!(
+        response["error"]["data"]["backend"]["platform"],
+        expected_backend_platform()
     );
     assert_eq!(response["error"]["data"]["support"], "unsupported");
     assert_eq!(
