@@ -1,0 +1,1638 @@
+[
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.policy.unknown-top-level-field.v1",
+    "title": "Unknown policy fields must be rejected",
+    "primary_class": "policy",
+    "capabilities_under_test": ["policy_epoch"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "malformed",
+    "network_mode": "malformed",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('policy')"],
+      "policy": {"sandbox_level": "danger-full-access", "unexpected": true}
+    },
+    "oracle": {
+      "expected_result": "policy_rejected",
+      "max_severity": "S0",
+      "audit": {"required": false},
+      "events": {"required": false}
+    },
+    "public_report_labels": ["protocol_contract"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.policy.network-override-hash-drift.v1",
+    "title": "Network overrides must change policy binding",
+    "primary_class": "policy",
+    "secondary_classes": ["audit"],
+    "capabilities_under_test": ["policy_epoch", "audit_jsonl"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "danger-full-access",
+    "network_mode": "proxy",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('network')"],
+      "policy": "danger-full-access",
+      "network": "proxy"
+    },
+    "oracle": {
+      "expected_result": "allow_no_side_effect_outside_policy",
+      "max_severity": "S0",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["policy_hash_consistent", "policy_epoch_consistent"]
+    },
+    "public_report_labels": ["protocol_contract"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.policy.malformed-json.v1",
+    "title": "Malformed policy JSON must be rejected",
+    "primary_class": "policy",
+    "capabilities_under_test": ["policy_epoch"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "malformed",
+    "network_mode": "malformed",
+    "fixtures": [{"kind": "malformed_request", "body": "policy null"}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('policy')"],
+      "policy": null
+    },
+    "oracle": {
+      "expected_result": "policy_rejected",
+      "max_severity": "S0",
+      "audit": {"required": false},
+      "events": {"required": false}
+    },
+    "public_report_labels": ["protocol_contract"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.policy.unsupported-nonempty-section.v1",
+    "title": "Unsupported non-empty policy sections must be rejected",
+    "primary_class": "policy",
+    "capabilities_under_test": ["resource_limits"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "danger-full-access",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('resources')"],
+      "policy": {
+        "version": "runseal.policy/v1",
+        "sandbox_level": "danger-full-access",
+        "resources": {"memory_bytes": 1000}
+      }
+    },
+    "oracle": {
+      "expected_result": "policy_rejected",
+      "max_severity": "S0",
+      "audit": {"required": false},
+      "events": {"required": false}
+    },
+    "public_report_labels": ["protocol_contract"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.policy.merge-ambiguity.v1",
+    "title": "Ambiguous policy merges must be rejected",
+    "primary_class": "policy",
+    "capabilities_under_test": ["policy_epoch"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "malformed",
+    "network_mode": "malformed",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('policy merge')"],
+      "policy": {
+        "version": "runseal.policy/v1",
+        "sandbox_level": "workspace-write",
+        "sandbox": {"level": "danger-full-access"}
+      }
+    },
+    "oracle": {
+      "expected_result": "policy_rejected",
+      "max_severity": "S0",
+      "audit": {"required": false},
+      "events": {"required": false}
+    },
+    "public_report_labels": ["protocol_contract"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.policy.stale-policy-epoch.v1",
+    "title": "Executions must not reuse stale policy epochs",
+    "primary_class": "policy",
+    "secondary_classes": ["audit"],
+    "capabilities_under_test": ["policy_epoch", "audit_jsonl"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "danger-full-access",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('epoch')"],
+      "policy": "danger-full-access",
+      "network": "disabled"
+    },
+    "oracle": {
+      "expected_result": "allow_no_side_effect_outside_policy",
+      "max_severity": "S0",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["policy_hash_consistent", "policy_epoch_consistent"]
+    },
+    "public_report_labels": ["protocol_contract"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.policy.policy-hash-spoof.v1",
+    "title": "Client supplied policy hashes must not spoof policy binding",
+    "primary_class": "policy",
+    "secondary_classes": ["audit"],
+    "capabilities_under_test": ["policy_epoch", "audit_jsonl"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "danger-full-access",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('policy hash')"],
+      "policy": "danger-full-access",
+      "network": "disabled",
+      "policy_hash": "runseal_policy_hash_spoof"
+    },
+    "oracle": {
+      "expected_result": "deny",
+      "max_severity": "S0",
+      "audit": {"required": false},
+      "events": {"required": false}
+    },
+    "public_report_labels": ["protocol_contract"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.policy.policy-hash-plan-event-audit-mismatch.v1",
+    "title": "Policy hashes must match across plan, execution, event, and audit",
+    "primary_class": "policy",
+    "secondary_classes": ["audit"],
+    "capabilities_under_test": ["policy_epoch", "audit_jsonl"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "danger-full-access",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('policy hash consistency')"],
+      "policy": "danger-full-access",
+      "network": "disabled"
+    },
+    "oracle": {
+      "expected_result": "allow_no_side_effect_outside_policy",
+      "max_severity": "S0",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["policy_hash_consistent", "policy_epoch_consistent"]
+    },
+    "public_report_labels": ["protocol_contract"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.execution_injection.argv-shell-metacharacters.v1",
+    "title": "Command strings must not imply shell execution",
+    "primary_class": "execution_injection",
+    "capabilities_under_test": ["stdin_bytes"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "danger-full-access",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": "echo unsafe && echo shell",
+      "policy": "danger-full-access",
+      "network": "disabled"
+    },
+    "oracle": {
+      "expected_result": "deny",
+      "max_severity": "S0",
+      "audit": {"required": false},
+      "events": {"required": false}
+    },
+    "public_report_labels": ["protocol_contract"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.execution_injection.stdin-file-outside-cwd.v1",
+    "title": "File stdin must not read outside cwd",
+    "primary_class": "execution_injection",
+    "secondary_classes": ["filesystem"],
+    "capabilities_under_test": ["stdin_file", "filesystem_policy"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "danger-full-access",
+    "network_mode": "disabled",
+    "fixtures": [{"kind": "file", "path": "outside/input.txt"}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "import sys; sys.stdin.read()"],
+      "policy": "danger-full-access",
+      "network": "disabled",
+      "stdin": {"mode": "file", "path": "../outside/input.txt"}
+    },
+    "oracle": {
+      "expected_result": "deny",
+      "max_severity": "S0",
+      "audit": {"required": false},
+      "events": {"required": false}
+    },
+    "public_report_labels": ["protocol_contract"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.execution_injection.stdin-mode-confusion.v1",
+    "title": "Stdin mode confusion must be rejected",
+    "primary_class": "execution_injection",
+    "capabilities_under_test": ["stdin_bytes", "stdin_file"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "danger-full-access",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "import sys; sys.stdin.buffer.read()"],
+      "policy": "danger-full-access",
+      "network": "disabled",
+      "stdin": {"mode": "bytes", "path": "input.txt", "data": "aGVsbG8="}
+    },
+    "oracle": {
+      "expected_result": "deny",
+      "max_severity": "S0",
+      "audit": {"required": false},
+      "events": {"required": false}
+    },
+    "public_report_labels": ["protocol_contract"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.execution_injection.invalid-base64-stdin.v1",
+    "title": "Invalid bytes stdin payloads must be rejected",
+    "primary_class": "execution_injection",
+    "capabilities_under_test": ["stdin_bytes"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "danger-full-access",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "import sys; sys.stdin.buffer.read()"],
+      "stdin": {"mode": "bytes", "encoding": "base64", "data": "not base64"}
+    },
+    "oracle": {
+      "expected_result": "deny",
+      "max_severity": "S0",
+      "audit": {"required": false},
+      "events": {"required": false}
+    },
+    "public_report_labels": ["protocol_contract"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.execution_injection.encoding-divergence.v1",
+    "title": "Ambiguous stdin encodings must be rejected consistently",
+    "primary_class": "execution_injection",
+    "capabilities_under_test": ["stdin_bytes"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "danger-full-access",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "import sys; sys.stdin.buffer.read()"],
+      "policy": "danger-full-access",
+      "network": "disabled",
+      "stdin": {"mode": "bytes", "encoding": "utf-16", "data": "aGVsbG8="}
+    },
+    "oracle": {
+      "expected_result": "deny",
+      "max_severity": "S0",
+      "audit": {"required": false},
+      "events": {"required": false}
+    },
+    "public_report_labels": ["protocol_contract"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.execution_injection.environment-variable-injection.v1",
+    "title": "Environment variables must not change command authority",
+    "primary_class": "execution_injection",
+    "capabilities_under_test": ["stdin_bytes"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "danger-full-access",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('env injection')"],
+      "policy": "danger-full-access",
+      "network": "disabled",
+      "env": {"PYTHONPATH": "../outside"}
+    },
+    "oracle": {
+      "expected_result": "deny",
+      "max_severity": "S0",
+      "audit": {"required": false},
+      "events": {"required": false}
+    },
+    "public_report_labels": ["protocol_contract"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.execution_injection.secret-env-key.v1",
+    "title": "Secret environment keys must be rejected",
+    "primary_class": "execution_injection",
+    "secondary_classes": ["audit"],
+    "capabilities_under_test": ["audit_jsonl"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "danger-full-access",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('env')"],
+      "policy": "danger-full-access",
+      "network": "disabled",
+      "env": {"SECRET_TOKEN": "value"}
+    },
+    "oracle": {
+      "expected_result": "deny",
+      "max_severity": "S0",
+      "audit": {"required": false},
+      "events": {"required": false}
+    },
+    "public_report_labels": ["protocol_contract"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.execution_injection.program-resolution-confusion.v1",
+    "title": "Program resolution must not execute a different command",
+    "primary_class": "execution_injection",
+    "capabilities_under_test": ["stdin_bytes"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "danger-full-access",
+    "network_mode": "disabled",
+    "fixtures": [{"kind": "executable_script", "path": "tools/runseal-test"}],
+    "request": {
+      "method": "execute",
+      "command": ["runseal-test"],
+      "policy": "danger-full-access",
+      "network": "disabled"
+    },
+    "oracle": {
+      "expected_result": "deny",
+      "max_severity": "S0",
+      "audit": {"required": false},
+      "events": {"required": false}
+    },
+    "public_report_labels": ["protocol_contract"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.audit.secret-metadata-redaction.v1",
+    "title": "Sensitive metadata keys must be redacted from audit",
+    "primary_class": "audit",
+    "capabilities_under_test": ["audit_jsonl"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "danger-full-access",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('metadata')"],
+      "policy": "danger-full-access",
+      "network": "disabled",
+      "metadata": {"Authorization": "value", "safe": "visible"}
+    },
+    "oracle": {
+      "expected_result": "audit_redacted",
+      "max_severity": "S0",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["audit_not_contains_secret"]
+    },
+    "public_report_labels": ["protocol_contract"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.audit.authorization-header-leakage.v1",
+    "title": "Authorization headers must be redacted from audit",
+    "primary_class": "audit",
+    "capabilities_under_test": ["audit_jsonl"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "danger-full-access",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('authorization')"],
+      "policy": "danger-full-access",
+      "network": "disabled",
+      "metadata": {"Authorization": "Bearer secret", "safe": "visible"}
+    },
+    "oracle": {
+      "expected_result": "audit_redacted",
+      "max_severity": "S0",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["audit_not_contains_secret"]
+    },
+    "public_report_labels": ["protocol_contract"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.audit.proxy-credential-leakage.v1",
+    "title": "Proxy credentials must be redacted from audit",
+    "primary_class": "audit",
+    "secondary_classes": ["network"],
+    "capabilities_under_test": ["audit_jsonl", "network_proxy", "managed_proxy"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "danger-full-access",
+    "network_mode": "proxy",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('proxy audit')"],
+      "policy": "danger-full-access",
+      "network": "proxy",
+      "metadata": {"proxy_url": "http://user:secret@example.invalid:8080", "safe": "visible"}
+    },
+    "oracle": {
+      "expected_result": "audit_redacted",
+      "max_severity": "S0",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["audit_not_contains_secret", "event_not_contains_private_detail"]
+    },
+    "public_report_labels": ["protocol_contract", "network_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.audit.missing-deny-event.v1",
+    "title": "Policy denials must be visible in audit and events",
+    "primary_class": "audit",
+    "secondary_classes": ["policy"],
+    "capabilities_under_test": ["audit_jsonl", "policy_epoch"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "read-only",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('deny')"],
+      "policy": {"sandbox_level": "read-only"}
+    },
+    "oracle": {
+      "expected_result": "policy_rejected",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["audit_contains_event_type", "event_contains_type"]
+    },
+    "public_report_labels": ["protocol_contract"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.audit.missing-fail-closed-event.v1",
+    "title": "Fail-closed outcomes must be visible in audit and events",
+    "primary_class": "audit",
+    "secondary_classes": ["policy"],
+    "capabilities_under_test": ["audit_jsonl", "policy_epoch"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "read-only",
+    "network_mode": "proxy",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('fail closed')"],
+      "policy": {"sandbox_level": "read-only"},
+      "network": "proxy"
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["audit_contains_event_type", "event_contains_type"]
+    },
+    "public_report_labels": ["protocol_contract"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.audit.event-ordering-drift.v1",
+    "title": "Audit and execution events must preserve ordering",
+    "primary_class": "audit",
+    "secondary_classes": ["policy"],
+    "capabilities_under_test": ["audit_jsonl", "policy_epoch"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "danger-full-access",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('event order')"],
+      "policy": "danger-full-access",
+      "network": "disabled"
+    },
+    "oracle": {
+      "expected_result": "allow_no_side_effect_outside_policy",
+      "max_severity": "S0",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["event_order_consistent", "policy_hash_consistent", "policy_epoch_consistent"]
+    },
+    "public_report_labels": ["protocol_contract"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.audit.audit-path-traversal.v1",
+    "title": "Audit lookup must not accept path parameters",
+    "primary_class": "audit",
+    "capabilities_under_test": ["audit_jsonl"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "danger-full-access",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('audit')"],
+      "policy": "danger-full-access",
+      "audit_path": ".runseal/audit/fake.jsonl"
+    },
+    "oracle": {
+      "expected_result": "deny",
+      "max_severity": "S0",
+      "audit": {"required": false},
+      "events": {"required": false}
+    },
+    "public_report_labels": ["protocol_contract"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.audit.audit-lookup-by-path.v1",
+    "title": "Audit lookup must reject path-like identifiers",
+    "primary_class": "audit",
+    "capabilities_under_test": ["audit_jsonl"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "danger-full-access",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "request": {
+      "method": "getAuditEvents",
+      "execution_id": "../audit/session.jsonl"
+    },
+    "oracle": {
+      "expected_result": "deny",
+      "max_severity": "S0",
+      "audit": {"required": false},
+      "events": {"required": false}
+    },
+    "public_report_labels": ["protocol_contract"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.audit.policy-hash-consistency.v1",
+    "title": "Audit events must preserve the execution policy hash",
+    "primary_class": "audit",
+    "secondary_classes": ["policy"],
+    "capabilities_under_test": ["audit_jsonl", "policy_epoch"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "danger-full-access",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('policy hash')"],
+      "policy": "danger-full-access",
+      "network": "disabled"
+    },
+    "oracle": {
+      "expected_result": "allow_no_side_effect_outside_policy",
+      "max_severity": "S0",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["policy_hash_consistent", "policy_epoch_consistent"]
+    },
+    "public_report_labels": ["protocol_contract"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.audit.backend-private-redaction.v1",
+    "title": "Audit output must not expose backend-private details",
+    "primary_class": "audit",
+    "capabilities_under_test": ["audit_jsonl"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "read-only",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('redaction')"],
+      "policy": {"sandbox_level": "read-only"},
+      "network": "disabled"
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["event_not_contains_private_detail"]
+    },
+    "public_report_labels": ["protocol_contract"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.filesystem.parent-traversal.v1",
+    "title": "Workspace-contained execution must not read parent paths",
+    "primary_class": "filesystem",
+    "capabilities_under_test": ["filesystem_policy"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "workspace-contained",
+    "network_mode": "disabled",
+    "fixtures": [{"kind": "file", "path": "outside/secret.txt"}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "open('../outside/secret.txt', 'rb').read()"],
+      "policy": {"sandbox_level": "workspace-contained"}
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["path_not_accessible"]
+    },
+    "public_report_labels": ["filesystem_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.filesystem.absolute-path-confusion.v1",
+    "title": "Workspace-contained execution must not read absolute outside paths",
+    "primary_class": "filesystem",
+    "capabilities_under_test": ["filesystem_policy"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "workspace-contained",
+    "network_mode": "disabled",
+    "fixtures": [{"kind": "file", "path": "outside/secret.txt"}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "import os; open(os.path.abspath('../outside/secret.txt'), 'rb').read()"],
+      "policy": {"sandbox_level": "workspace-contained"}
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["path_not_accessible"]
+    },
+    "public_report_labels": ["filesystem_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.filesystem.relative-cwd-confusion.v1",
+    "title": "Workspace-contained execution must not escape after cwd changes",
+    "primary_class": "filesystem",
+    "capabilities_under_test": ["filesystem_policy"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "workspace-contained",
+    "network_mode": "disabled",
+    "fixtures": [
+      {"kind": "directory", "path": "workspace/subdir"},
+      {"kind": "file", "path": "outside/secret.txt"}
+    ],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "import os; os.chdir('subdir'); open('../../outside/secret.txt', 'rb').read()"],
+      "policy": {"sandbox_level": "workspace-contained"}
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["path_not_accessible"]
+    },
+    "public_report_labels": ["filesystem_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.filesystem.symlink-parent-traversal.v1",
+    "title": "Workspace-contained execution must not follow links to parent paths",
+    "primary_class": "filesystem",
+    "capabilities_under_test": ["filesystem_policy"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "workspace-contained",
+    "network_mode": "disabled",
+    "fixtures": [
+      {"kind": "file", "path": "outside/secret.txt"},
+      {"kind": "symlink", "path": "workspace/link-to-secret", "target": "../outside/secret.txt"}
+    ],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "open('link-to-secret', 'rb').read()"],
+      "policy": {"sandbox_level": "workspace-contained"}
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["path_not_accessible"]
+    },
+    "public_report_labels": ["filesystem_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.filesystem.junction-parent-traversal.v1",
+    "title": "Workspace-contained execution must not follow junctions to parent paths",
+    "primary_class": "filesystem",
+    "capabilities_under_test": ["filesystem_policy"],
+    "platforms": ["windows"],
+    "backend_status": ["reference", "local-baseline"],
+    "sandbox_level": "workspace-contained",
+    "network_mode": "disabled",
+    "fixtures": [
+      {"kind": "file", "path": "outside/secret.txt"},
+      {"kind": "junction", "path": "workspace/junction-to-outside", "target": "../outside"}
+    ],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "open('junction-to-outside/secret.txt', 'rb').read()"],
+      "policy": {"sandbox_level": "workspace-contained"}
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["path_not_accessible"]
+    },
+    "public_report_labels": ["filesystem_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.filesystem.symlink-swap-race.v1",
+    "title": "Workspace-contained execution must not escape after symlink swaps",
+    "primary_class": "filesystem",
+    "capabilities_under_test": ["filesystem_policy"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "workspace-contained",
+    "network_mode": "disabled",
+    "fixtures": [
+      {"kind": "file", "path": "workspace/safe.txt", "body": "safe"},
+      {"kind": "file", "path": "outside/secret.txt", "body": "secret"},
+      {"kind": "symlink", "path": "workspace/race-link", "target": "safe.txt"}
+    ],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "import os; os.unlink('race-link'); os.symlink('../outside/secret.txt', 'race-link'); open('race-link', 'rb').read()"],
+      "policy": {"sandbox_level": "workspace-contained"}
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["path_not_accessible"]
+    },
+    "public_report_labels": ["filesystem_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.filesystem.case-folding-bypass.v1",
+    "title": "Workspace-contained execution must not escape through path case changes",
+    "primary_class": "filesystem",
+    "capabilities_under_test": ["filesystem_policy"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "workspace-contained",
+    "network_mode": "disabled",
+    "fixtures": [{"kind": "file", "path": "outside/Secret.txt", "body": "secret"}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "open('../OUTSIDE/secret.txt', 'rb').read()"],
+      "policy": {"sandbox_level": "workspace-contained"}
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["path_not_accessible"]
+    },
+    "public_report_labels": ["filesystem_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.filesystem.path-normalization-difference.v1",
+    "title": "Workspace-contained execution must not escape through path normalization",
+    "primary_class": "filesystem",
+    "capabilities_under_test": ["filesystem_policy"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "workspace-contained",
+    "network_mode": "disabled",
+    "fixtures": [
+      {"kind": "directory", "path": "workspace/subdir"},
+      {"kind": "file", "path": "outside/secret.txt", "body": "secret"}
+    ],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "open('subdir/../../outside/secret.txt', 'rb').read()"],
+      "policy": {"sandbox_level": "workspace-contained"}
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["path_not_accessible"]
+    },
+    "public_report_labels": ["filesystem_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.filesystem.reserved-device-name.v1",
+    "title": "Workspace-contained execution must not treat reserved device names as files",
+    "primary_class": "filesystem",
+    "capabilities_under_test": ["filesystem_policy"],
+    "platforms": ["windows"],
+    "backend_status": ["reference", "local-baseline"],
+    "sandbox_level": "workspace-contained",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "open('CON', 'rb').read(1)"],
+      "policy": {"sandbox_level": "workspace-contained"}
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["path_not_accessible"]
+    },
+    "public_report_labels": ["filesystem_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.filesystem.unc-path-injection.v1",
+    "title": "Workspace-contained execution must not read injected network paths",
+    "primary_class": "filesystem",
+    "secondary_classes": ["network"],
+    "capabilities_under_test": ["filesystem_policy", "direct_network_deny"],
+    "platforms": ["windows"],
+    "backend_status": ["reference", "local-baseline"],
+    "sandbox_level": "workspace-contained",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "open('\\\\\\\\localhost\\\\runseal-test\\\\secret.txt', 'rb').read()"],
+      "policy": {"sandbox_level": "workspace-contained"},
+      "network": "disabled"
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["path_not_accessible", "network_connection_absent"]
+    },
+    "public_report_labels": ["filesystem_conformance", "network_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.filesystem.preexisting-symlinked-runtime-root.v1",
+    "title": "Runtime roots must not follow preexisting workspace links",
+    "primary_class": "filesystem",
+    "secondary_classes": ["runtime"],
+    "capabilities_under_test": ["filesystem_policy", "runtime_roots"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "workspace-contained",
+    "network_mode": "disabled",
+    "fixtures": [
+      {"kind": "directory", "path": "outside/runtime-root"},
+      {"kind": "symlink", "path": "workspace/.runseal/runtime", "target": "../../outside/runtime-root"}
+    ],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('runtime')"],
+      "policy": {"sandbox_level": "workspace-contained"}
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["path_not_modified", "event_not_contains_private_detail"]
+    },
+    "public_report_labels": ["filesystem_conformance", "runtime_roots"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.filesystem.protected-subpath-write.v1",
+    "title": "Workspace-write execution must not modify protected workspace metadata",
+    "primary_class": "filesystem",
+    "capabilities_under_test": ["filesystem_policy"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "workspace-write",
+    "network_mode": "disabled",
+    "fixtures": [{"kind": "file", "path": "workspace/.runseal/audit.jsonl", "body": "before"}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "open('.runseal/audit.jsonl', 'wb').write(b'after')"],
+      "policy": {"sandbox_level": "workspace-write"}
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["path_not_modified"]
+    },
+    "public_report_labels": ["filesystem_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.filesystem.external-write-from-workspace-write.v1",
+    "title": "Workspace-write execution must not write parent paths",
+    "primary_class": "filesystem",
+    "capabilities_under_test": ["filesystem_policy"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "workspace-write",
+    "network_mode": "disabled",
+    "fixtures": [{"kind": "file", "path": "outside/target.txt", "body": "before"}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "open('../outside/target.txt', 'wb').write(b'after')"],
+      "policy": {"sandbox_level": "workspace-write"}
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["path_not_modified"]
+    },
+    "public_report_labels": ["filesystem_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.filesystem.external-read-from-workspace-contained.v1",
+    "title": "Workspace-contained execution must not read external files",
+    "primary_class": "filesystem",
+    "capabilities_under_test": ["filesystem_policy"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "workspace-contained",
+    "network_mode": "disabled",
+    "fixtures": [{"kind": "file", "path": "outside/external.txt", "body": "outside"}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "open('../outside/external.txt', 'rb').read()"],
+      "policy": {"sandbox_level": "workspace-contained"}
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["path_not_accessible"]
+    },
+    "public_report_labels": ["filesystem_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.runtime.precreated-runtime-root.v1",
+    "title": "Preexisting runtime roots must not be trusted",
+    "primary_class": "runtime",
+    "capabilities_under_test": ["runtime_roots"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "read-only",
+    "network_mode": "disabled",
+    "fixtures": [{"kind": "preexisting_runtime_root", "path": ".runseal/runtime/precreated"}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('runtime')"],
+      "policy": {"sandbox_level": "read-only"}
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["event_not_contains_private_detail"]
+    },
+    "public_report_labels": ["runtime_roots"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.runtime.runtime-marker-spoof.v1",
+    "title": "Runtime marker spoofing must not claim a runtime root",
+    "primary_class": "runtime",
+    "capabilities_under_test": ["runtime_roots"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "read-only",
+    "network_mode": "disabled",
+    "fixtures": [{"kind": "file", "path": "workspace/.runseal/runtime/spoofed/.runseal-runtime-root", "body": "spoofed-execution"}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('runtime')"],
+      "policy": {"sandbox_level": "read-only"}
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["path_not_modified", "event_not_contains_private_detail"]
+    },
+    "public_report_labels": ["runtime_roots"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.runtime.runtime-root-symlink-replacement.v1",
+    "title": "Runtime root parents must not be replaced with links",
+    "primary_class": "runtime",
+    "secondary_classes": ["filesystem"],
+    "capabilities_under_test": ["runtime_roots", "filesystem_policy"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "read-only",
+    "network_mode": "disabled",
+    "fixtures": [
+      {"kind": "directory", "path": "outside/runtime-root"},
+      {"kind": "symlink", "path": "workspace/.runseal/runtime", "target": "../../outside/runtime-root"}
+    ],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('runtime replacement')"],
+      "policy": {"sandbox_level": "read-only"}
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["path_not_modified", "event_not_contains_private_detail"]
+    },
+    "public_report_labels": ["runtime_roots", "filesystem_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.runtime.execution-id-reuse.v1",
+    "title": "Execution identifiers must not reuse runtime roots",
+    "primary_class": "runtime",
+    "capabilities_under_test": ["runtime_roots", "policy_epoch"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "read-only",
+    "network_mode": "disabled",
+    "fixtures": [{"kind": "file", "path": "workspace/.runseal/runtime/exec_reused/.runseal-runtime-root", "body": "exec_reused"}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('runtime')"],
+      "policy": {"sandbox_level": "read-only"}
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["path_not_modified", "policy_epoch_consistent"]
+    },
+    "public_report_labels": ["runtime_roots"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.runtime.partial-setup-continuation.v1",
+    "title": "Partial runtime setup must not continue execution",
+    "primary_class": "runtime",
+    "capabilities_under_test": ["runtime_roots", "setup_readiness"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "read-only",
+    "network_mode": "disabled",
+    "fixtures": [{"kind": "file", "path": "workspace/.runseal/runtime/partial/.runseal-runtime-root", "body": "partial"}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('partial setup')"],
+      "policy": {"sandbox_level": "read-only"}
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["path_not_modified", "event_not_contains_private_detail"]
+    },
+    "public_report_labels": ["runtime_roots"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.runtime.cleanup-partial-failure.v1",
+    "title": "Runtime cleanup failures must preserve inspectable state",
+    "primary_class": "runtime",
+    "capabilities_under_test": ["runtime_roots", "audit_jsonl"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "read-only",
+    "network_mode": "disabled",
+    "fixtures": [{"kind": "readonly_file", "path": "workspace/.runseal/runtime/cleanup-failure/.runseal-runtime-root", "body": "cleanup-failure"}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('runtime cleanup')"],
+      "policy": {"sandbox_level": "read-only"}
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["path_not_modified", "event_not_contains_private_detail"]
+    },
+    "public_report_labels": ["runtime_roots"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.runtime.cross-execution-contamination.v1",
+    "title": "Executions must not observe prior runtime state",
+    "primary_class": "runtime",
+    "capabilities_under_test": ["runtime_roots", "runtime_environment"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "read-only",
+    "network_mode": "disabled",
+    "fixtures": [{"kind": "file", "path": "workspace/.runseal/runtime/exec_previous/home/prior-state.txt", "body": "prior"}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "open('.runseal/runtime/exec_previous/home/prior-state.txt', 'rb').read()"],
+      "policy": {"sandbox_level": "read-only"}
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["path_not_accessible", "event_not_contains_private_detail"]
+    },
+    "public_report_labels": ["runtime_roots"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.process.orphan-child-after-cancel.v1",
+    "title": "Cancellation must not leave child processes running",
+    "primary_class": "process",
+    "capabilities_under_test": ["process_cleanup"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "workspace-write",
+    "network_mode": "disabled",
+    "fixtures": [{"kind": "background_process", "command": ["python", "-c", "import time; time.sleep(60)"]}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "import time; time.sleep(60)"],
+      "policy": {"sandbox_level": "workspace-write"},
+      "timeout_ms": 100
+    },
+    "oracle": {
+      "expected_result": "timeout",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["process_not_running"]
+    },
+    "public_report_labels": ["process_cleanup"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.process.background-daemon-after-timeout.v1",
+    "title": "Timeout must not leave background processes running",
+    "primary_class": "process",
+    "capabilities_under_test": ["process_cleanup"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "workspace-write",
+    "network_mode": "disabled",
+    "fixtures": [{"kind": "background_process", "command": ["python", "-c", "import time; time.sleep(60)"]}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "import subprocess, sys, time; subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); time.sleep(60)"],
+      "policy": {"sandbox_level": "workspace-write"},
+      "timeout_ms": 100
+    },
+    "oracle": {
+      "expected_result": "timeout",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["process_not_running"]
+    },
+    "public_report_labels": ["process_cleanup"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.process.process-tree-cleanup-bypass.v1",
+    "title": "Timeout must not leave nested process trees running",
+    "primary_class": "process",
+    "capabilities_under_test": ["process_cleanup", "process_isolation"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "workspace-write",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "import subprocess, sys, time; subprocess.Popen([sys.executable, '-c', \"import subprocess, sys, time; subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); time.sleep(60)\"]); time.sleep(60)"],
+      "policy": {"sandbox_level": "workspace-write"},
+      "timeout_ms": 100
+    },
+    "oracle": {
+      "expected_result": "timeout",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["process_not_running"]
+    },
+    "public_report_labels": ["process_cleanup"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.process.shell-trampoline-child.v1",
+    "title": "Shell trampoline children must not outlive execution",
+    "primary_class": "process",
+    "capabilities_under_test": ["process_cleanup"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "workspace-write",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "import subprocess, sys, time; subprocess.Popen(f'\"{sys.executable}\" -c \"import time; time.sleep(60)\"', shell=True); time.sleep(60)"],
+      "policy": {"sandbox_level": "workspace-write"},
+      "timeout_ms": 100
+    },
+    "oracle": {
+      "expected_result": "timeout",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["process_not_running"]
+    },
+    "public_report_labels": ["process_cleanup"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.process.helper-process-reuse.v1",
+    "title": "Executions must not reuse helper process state",
+    "primary_class": "process",
+    "secondary_classes": ["runtime"],
+    "capabilities_under_test": ["process_isolation", "process_cleanup", "runtime_roots"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "workspace-write",
+    "network_mode": "disabled",
+    "fixtures": [{"kind": "background_process", "command": ["python", "-c", "import time; time.sleep(60)"]}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('helper reuse')"],
+      "policy": {"sandbox_level": "workspace-write"}
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["process_not_running", "event_not_contains_private_detail"]
+    },
+    "public_report_labels": ["process_cleanup", "runtime_roots"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.process.interactive-disabled.v1",
+    "title": "Interactive process requests must be rejected",
+    "primary_class": "process",
+    "capabilities_under_test": ["process_isolation"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "workspace-write",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('interactive')"],
+      "policy": {
+        "version": "runseal.policy/v1",
+        "sandbox_level": "workspace-write",
+        "process": {"interactive": true}
+      }
+    },
+    "oracle": {
+      "expected_result": "policy_rejected",
+      "max_severity": "S1",
+      "audit": {"required": false},
+      "events": {"required": false}
+    },
+    "public_report_labels": ["process_cleanup"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.network.direct-egress-disabled.v1",
+    "title": "Disabled network policy must block direct egress",
+    "primary_class": "network",
+    "capabilities_under_test": ["network_disabled", "direct_network_deny"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "workspace-contained",
+    "network_mode": "disabled",
+    "fixtures": [{"kind": "network_listener", "name": "direct-egress-target"}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "import socket; socket.create_connection(('127.0.0.1', 9), 1)"],
+      "policy": {"sandbox_level": "workspace-contained"},
+      "network": "disabled"
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["network_connection_absent"]
+    },
+    "public_report_labels": ["network_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.network.managed-proxy-bypass.v1",
+    "title": "Proxy mode must not allow direct socket bypass",
+    "primary_class": "network",
+    "capabilities_under_test": ["network_proxy", "managed_proxy", "direct_network_deny"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "workspace-contained",
+    "network_mode": "proxy",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "import socket; socket.create_connection(('example.invalid', 443), 1)"],
+      "policy": {
+        "version": "runseal.policy/v1",
+        "sandbox_level": "workspace-contained",
+        "network": {"mode": "proxy"},
+        "environment": {"proxy": true}
+      },
+      "network": "proxy"
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["network_connection_absent", "event_not_contains_private_detail"]
+    },
+    "public_report_labels": ["network_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.network.proxy-env-override.v1",
+    "title": "Proxy environment overrides must not bypass managed proxy",
+    "primary_class": "network",
+    "capabilities_under_test": ["network_proxy", "managed_proxy"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "workspace-contained",
+    "network_mode": "proxy",
+    "fixtures": [{"kind": "environment", "name": "HTTP_PROXY", "value": "http://127.0.0.1:9"}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "import urllib.request; urllib.request.urlopen('http://example.invalid', timeout=1).read()"],
+      "policy": {
+        "version": "runseal.policy/v1",
+        "sandbox_level": "workspace-contained",
+        "network": {"mode": "proxy"},
+        "environment": {"proxy": true}
+      },
+      "network": "proxy"
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["network_connection_absent", "event_not_contains_private_detail"]
+    },
+    "public_report_labels": ["network_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.network.proxy-credential-redaction.v1",
+    "title": "Proxy credentials must be redacted from public output",
+    "primary_class": "network",
+    "secondary_classes": ["audit"],
+    "capabilities_under_test": ["network_proxy", "managed_proxy", "audit_jsonl"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "workspace-contained",
+    "network_mode": "proxy",
+    "fixtures": [{"kind": "environment", "name": "HTTPS_PROXY", "value": "http://user:secret@example.invalid:8080"}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "import urllib.request; urllib.request.urlopen('https://example.invalid', timeout=1).read()"],
+      "policy": {
+        "version": "runseal.policy/v1",
+        "sandbox_level": "workspace-contained",
+        "network": {"mode": "proxy"},
+        "environment": {"proxy": true}
+      },
+      "network": "proxy"
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["audit_not_contains_secret", "event_not_contains_private_detail"]
+    },
+    "public_report_labels": ["network_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.network.dns-fallback-leakage.v1",
+    "title": "Proxy mode must not allow direct DNS fallback",
+    "primary_class": "network",
+    "capabilities_under_test": ["network_proxy", "managed_proxy", "direct_network_deny"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "workspace-contained",
+    "network_mode": "proxy",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "import socket; socket.getaddrinfo('dns-leak.invalid', 443)"],
+      "policy": {
+        "version": "runseal.policy/v1",
+        "sandbox_level": "workspace-contained",
+        "network": {"mode": "proxy"},
+        "environment": {"proxy": true}
+      },
+      "network": "proxy"
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["network_connection_absent", "event_not_contains_private_detail"]
+    },
+    "public_report_labels": ["network_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.network.localhost-tunnel-abuse.v1",
+    "title": "Proxy mode must not allow localhost tunnel bypass",
+    "primary_class": "network",
+    "capabilities_under_test": ["network_proxy", "managed_proxy", "direct_network_deny"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "workspace-contained",
+    "network_mode": "proxy",
+    "fixtures": [{"kind": "network_listener", "name": "localhost-tunnel-target"}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "import socket; socket.create_connection(('127.0.0.1', 9), 1)"],
+      "policy": {
+        "version": "runseal.policy/v1",
+        "sandbox_level": "workspace-contained",
+        "network": {"mode": "proxy"},
+        "environment": {"proxy": true}
+      },
+      "network": "proxy"
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["network_connection_absent", "event_not_contains_private_detail"]
+    },
+    "public_report_labels": ["network_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.network.pre-opened-socket-inheritance.v1",
+    "title": "Network policy must not allow inherited socket bypass",
+    "primary_class": "network",
+    "secondary_classes": ["process"],
+    "capabilities_under_test": ["network_proxy", "direct_network_deny", "process_isolation"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "workspace-contained",
+    "network_mode": "proxy",
+    "fixtures": [{"kind": "preopened_socket", "name": "inherited-network-handle"}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "import os, socket; socket.socket(fileno=int(os.environ['RUNSEAL_TEST_SOCKET_FD'])).send(b'leak')"],
+      "policy": {
+        "version": "runseal.policy/v1",
+        "sandbox_level": "workspace-contained",
+        "network": {"mode": "proxy"},
+        "environment": {"proxy": true}
+      },
+      "network": "proxy"
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["network_connection_absent", "event_not_contains_private_detail"]
+    },
+    "public_report_labels": ["network_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.network.route-allowlist-bypass.v1",
+    "title": "Proxy mode must not allow route allowlist bypass",
+    "primary_class": "network",
+    "secondary_classes": ["audit"],
+    "capabilities_under_test": ["network_proxy", "managed_proxy", "audit_jsonl"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "workspace-contained",
+    "network_mode": "proxy",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "import urllib.request; urllib.request.urlopen('https://not-allowlisted.invalid', timeout=1).read()"],
+      "policy": {
+        "version": "runseal.policy/v1",
+        "sandbox_level": "workspace-contained",
+        "network": {"mode": "proxy", "routes": ["allowed-route"]},
+        "environment": {"proxy": true}
+      },
+      "network": "proxy"
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["network_connection_absent", "event_not_contains_private_detail"]
+    },
+    "public_report_labels": ["network_conformance"]
+  }
+]
