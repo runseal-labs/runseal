@@ -812,6 +812,36 @@ fn service_stdio_returns_audit_events_by_execution() -> Result<()> {
             .contains("audit-query")
     );
 
+    stdin.write_all(
+        rpc_request_with_id(4, "getAuditEvents", json!({ "execution_id": execution_id }))
+            .as_bytes(),
+    )?;
+    let (_, all_audit_response) = read_rpc_response(&mut stdout, 4)?;
+    assert!(all_audit_response["result"]["count"].as_u64().unwrap_or(0) >= 5);
+    let all_events = all_audit_response["result"]["events"]
+        .as_array()
+        .context("events must be an array")?;
+    assert!(
+        all_events
+            .iter()
+            .any(|event| event["type"] == "policy.resolved")
+    );
+    assert!(
+        all_events
+            .iter()
+            .any(|event| event["type"] == "policy.allowed")
+    );
+    assert!(
+        all_events
+            .iter()
+            .any(|event| event["type"] == "execution.started")
+    );
+    assert!(
+        all_events
+            .iter()
+            .any(|event| event["type"] == "execution.finished")
+    );
+
     drop(stdin);
     let status = child.wait().context("failed to wait for runseal service")?;
     assert!(status.success());
@@ -899,6 +929,33 @@ fn service_stdio_tails_retained_audit_events() -> Result<()> {
         !stdout_tail_response["result"]
             .to_string()
             .contains("audit-tail")
+    );
+
+    stdin.write_all(rpc_request_with_id(4, "tailAudit", json!({})).as_bytes())?;
+    let (_, all_tail_response) = read_rpc_response(&mut stdout, 4)?;
+    assert!(all_tail_response["result"]["count"].as_u64().unwrap_or(0) >= 5);
+    let all_events = all_tail_response["result"]["events"]
+        .as_array()
+        .context("events must be an array")?;
+    assert!(
+        all_events
+            .iter()
+            .any(|event| event["type"] == "policy.resolved")
+    );
+    assert!(
+        all_events
+            .iter()
+            .any(|event| event["type"] == "policy.allowed")
+    );
+    assert!(
+        all_events
+            .iter()
+            .any(|event| event["type"] == "execution.started")
+    );
+    assert!(
+        all_events
+            .iter()
+            .any(|event| event["type"] == "execution.finished")
     );
 
     drop(stdin);
