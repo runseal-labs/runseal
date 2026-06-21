@@ -501,8 +501,13 @@ fn macos_skeleton_reports_experimental_track_without_sandbox_features() {
     let capabilities = MacosExperimentalBackend.capabilities_json();
     assert_eq!(capabilities["features"]["process_isolation"], false);
     let probes = capabilities["capability_probes"].as_array().unwrap();
-    assert_eq!(probes.len(), 1);
-    assert_probe_schema(&probes[0], "filesystem_policy", "seatbelt");
+    assert_eq!(probes.len(), 6);
+    assert_probe_schema(&probes[0], "filesystem_policy", "sandbox_exec");
+    assert_probe_schema(&probes[1], "filesystem_policy", "sandbox_exec_executable");
+    assert_probe_schema(&probes[2], "platform_version", "macos_version");
+    assert_probe_schema(&probes[3], "filesystem_policy", "temporary_profile");
+    assert_probe_schema(&probes[4], "filesystem_policy", "canonical_paths");
+    assert_probe_schema(&probes[5], "filesystem_policy", "symlink_path_model");
 }
 
 #[test]
