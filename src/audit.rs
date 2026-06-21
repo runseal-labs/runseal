@@ -117,8 +117,31 @@ fn redact_audit_value(value: &Value) -> Value {
                 .collect(),
         ),
         Value::Array(items) => Value::Array(items.iter().map(redact_audit_value).collect()),
+        Value::String(value) => Value::String(redact_url_userinfo(value)),
         _ => value.clone(),
     }
+}
+
+fn redact_url_userinfo(value: &str) -> String {
+    let Some(scheme_end) = value.find("://") else {
+        return value.to_string();
+    };
+    let authority_start = scheme_end + "://".len();
+    let authority_end = value[authority_start..]
+        .find(['/', '?', '#'])
+        .map(|offset| authority_start + offset)
+        .unwrap_or(value.len());
+    let Some(at_offset) = value[authority_start..authority_end].rfind('@') else {
+        return value.to_string();
+    };
+    let userinfo_end = authority_start + at_offset;
+
+    format!(
+        "{}{}{}",
+        &value[..authority_start],
+        REDACTED,
+        &value[userinfo_end..]
+    )
 }
 
 fn is_sensitive_audit_key(key: &str) -> bool {
@@ -225,7 +248,8 @@ mod tests {
                 {"token": "secret"},
                 {"github_token": "secret"},
                 {"service_api_key": "secret"},
-                {"aws_region": "secret"}
+                {"aws_region": "secret"},
+                {"proxy_url": "http://user:secret@example.invalid:8080/path"}
             ]
         });
 
@@ -242,7 +266,8 @@ mod tests {
                     {"token": REDACTED},
                     {"github_token": REDACTED},
                     {"service_api_key": REDACTED},
-                    {"aws_region": REDACTED}
+                    {"aws_region": REDACTED},
+                    {"proxy_url": "http://[REDACTED]@example.invalid:8080/path"}
                 ]
             })
         );
