@@ -1,10 +1,29 @@
-use super::*;
+use super::{
+    BackendFeature, CapabilityStatus, ExecutionEnv, ExecutionStdin, LinuxCommunityBackend,
+    MacosExperimentalBackend, RUNTIME_ROOT_MARKER, SandboxBackend, WindowsFilesystemAclDriver,
+    WindowsFilesystemAclSubject, WindowsReferenceBackend, apply_private_filesystem_acl_transaction,
+    cleanup_child_after_setup_error, environment_runtime_json, execute_windows_sandbox_plan,
+    minimal_environment, missing_backend_features, path_string, policy_transition_busy_reason,
+    spawn_local_command,
+};
+#[cfg(windows)]
+use super::{
+    POLICY_TRANSITION_BUSY_REASON, WindowsKillOnCloseJob, WindowsSandboxPolicyCohortKey,
+    collect_workspace_contained_profile_denies, public_windows_setup_unavailable_reason,
+    windows_explicit_deny_read_paths, windows_sandbox_command,
+    windows_sandbox_execution_gate_for_key, windows_sandbox_path_key,
+    windows_sandbox_workspace_roots_for_plan, windows_sandbox_write_roots_for_plan,
+    windows_sensitive_profile_deny_read_paths_for_profile,
+};
 use crate::policy::{NetworkMode, normalize_policy};
 use crate::windows::policy::{
     WindowsFilesystemAccess, WindowsFilesystemAclEntry, WindowsFilesystemAclPlan,
     WindowsFilesystemAclTransactionPlan, WindowsFilesystemRule, WindowsFilesystemRuleSource,
+    WindowsHostRoots,
 };
-use serde_json::json;
+use serde_json::{Value, json};
+#[cfg(windows)]
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::fs;
 use std::io;
