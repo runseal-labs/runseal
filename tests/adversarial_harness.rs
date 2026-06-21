@@ -313,6 +313,64 @@ fn adversarial_audit_lookup_deny_cases_run() -> Result<()> {
 }
 
 #[test]
+fn adversarial_audit_consistency_cases_run() -> Result<()> {
+    let cases = load_cases()?;
+    let audit_cases = cases.iter().filter(|case| {
+        matches!(
+            case["case_id"].as_str(),
+            Some("adv.audit.event-ordering-drift.v1" | "adv.audit.policy-hash-consistency.v1")
+        ) && string_array_contains(&case["platforms"], current_platform())
+            && string_array_contains(&case["backend_status"], "local-baseline")
+    });
+
+    let mut ran = 0;
+    for case in audit_cases {
+        ran += 1;
+        let tmp = TempDir::new()?;
+        let messages = run_case_messages_with_command(case, tmp.path(), harmless_command())?;
+        let response = response_message(&messages)?;
+        let result = response["result"].clone();
+        assert_eq!(result["status"], "finished", "{response}");
+        assert_eq!(result["policy_epoch"], result["policy_hash"]);
+
+        let event_types = messages
+            .iter()
+            .filter_map(|message| message["params"]["type"].as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            &event_types[..3],
+            &["execution.requested", "policy.resolved", "policy.allowed"]
+        );
+        assert!(event_types.contains(&"execution.finished"));
+        for event in messages.iter().filter_map(|message| message.get("params")) {
+            assert_eq!(event["policy_hash"], result["policy_hash"]);
+            assert_eq!(event["policy_epoch"], result["policy_epoch"]);
+        }
+
+        let audit_path = result["audit_path"]
+            .as_str()
+            .context("audit consistency case must return audit_path")?;
+        let audit_events = read_audit_events(tmp.path(), audit_path)?;
+        assert!(
+            audit_events
+                .iter()
+                .any(|event| event["type"] == "execution.finished")
+        );
+        for event in &audit_events {
+            assert_eq!(event["policy_hash"], result["policy_hash"]);
+            assert_eq!(event["policy_epoch"], result["policy_epoch"]);
+        }
+
+        let result = emit_result(case, "allow_no_side_effect_outside_policy", true)?;
+        assert_eq!(result["status"], "passed", "{result}");
+        assert_public_safe(&result.to_string())?;
+    }
+
+    assert!(ran >= 2, "audit consistency cases must run");
+    Ok(())
+}
+
+#[test]
 fn adversarial_harness_materializes_file_fixtures_before_execution() -> Result<()> {
     let cases = load_cases()?;
     let mut materialized = 0;
@@ -629,11 +687,25 @@ fn run_case_with_command(case: &Value, cwd: &Path, command: Value) -> Result<Val
     })
 }
 
+fn run_case_messages_with_command(case: &Value, cwd: &Path, command: Value) -> Result<Vec<Value>> {
+    run_case_messages_with_overrides(case, cwd, |params| {
+        params.insert("command".to_string(), command);
+    })
+}
+
 fn run_case_with_overrides(
     case: &Value,
     cwd: &Path,
     apply: impl FnOnce(&mut serde_json::Map<String, Value>),
 ) -> Result<Value> {
+    Ok(response_message(&run_case_messages_with_overrides(case, cwd, apply)?)?.clone())
+}
+
+fn run_case_messages_with_overrides(
+    case: &Value,
+    cwd: &Path,
+    apply: impl FnOnce(&mut serde_json::Map<String, Value>),
+) -> Result<Vec<Value>> {
     let request = case["request"]
         .as_object()
         .context("case.request must be an object")?;
@@ -646,7 +718,7 @@ fn run_case_with_overrides(
     params.insert("cwd".to_string(), json!(cwd));
     apply(&mut params);
 
-    rpc_response(&rpc_request(method, Value::Object(params)))
+    rpc_messages(&rpc_request(method, Value::Object(params)))
 }
 
 fn observed_denial_result(response: &Value) -> &'static str {
@@ -668,6 +740,10 @@ fn rpc_response_result(message: &str) -> Result<Value> {
 }
 
 fn rpc_response(message: &str) -> Result<Value> {
+    response_message(&rpc_messages(message)?).cloned()
+}
+
+fn rpc_messages(message: &str) -> Result<Vec<Value>> {
     let output = run_rpc(message)?;
     if !output.status.success() {
         bail!("{}", String::from_utf8_lossy(&output.stderr));
@@ -678,10 +754,21 @@ fn rpc_response(message: &str) -> Result<Value> {
         .filter(|line| !line.trim().is_empty())
         .map(serde_json::from_str::<Value>)
         .collect::<Result<Vec<_>, _>>()
-        .context("rpc response must be JSON")?
-        .into_iter()
+        .context("rpc response must be JSON")
+}
+
+fn response_message(messages: &[Value]) -> Result<&Value> {
+    messages
+        .iter()
         .find(|message| message.get("id") == Some(&json!(1)))
         .context("rpc response must exist")
+}
+
+fn read_audit_events(root: &Path, audit_path: &str) -> Result<Vec<Value>> {
+    fs::read_to_string(root.join(audit_path))?
+        .lines()
+        .map(|line| serde_json::from_str(line).context("audit line must be JSON"))
+        .collect()
 }
 
 fn current_platform() -> &'static str {
