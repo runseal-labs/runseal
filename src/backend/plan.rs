@@ -155,6 +155,75 @@ impl PlatformSandboxPlan {
         }
     }
 
+    pub(super) fn linux_read_only_experimental(
+        backend: &dyn SandboxBackend,
+        execution_id: &str,
+        cwd: &Path,
+        policy: &SandboxPolicy,
+    ) -> Self {
+        let runtime_root = cwd.join(".runseal").join("runtime").join(execution_id);
+        let profile_root = runtime_root.join("profile");
+        let synthetic_home = runtime_root.join("home");
+        let temp_root = runtime_root.join("tmp");
+        Self {
+            backend: backend.name(),
+            backend_status: backend.status(),
+            platform: backend.platform(),
+            execution_id: execution_id.to_string(),
+            policy_id: policy.id.clone(),
+            policy_hash: policy.hash(),
+            sandbox_level: policy.sandbox_level.as_str(),
+            enforcement: "linux-read-only-experimental",
+            cwd: path_string(cwd),
+            runtime_root: Some(path_string(&runtime_root)),
+            profile_root: Some(path_string(&profile_root)),
+            synthetic_home: Some(path_string(&synthetic_home)),
+            temp_root: Some(path_string(&temp_root)),
+            filesystem_read: vec!["workspace".to_string()],
+            filesystem_write: vec![
+                "runtime_root".to_string(),
+                "profile_root".to_string(),
+                "synthetic_home".to_string(),
+                "temp_root".to_string(),
+            ],
+            filesystem_deny: if policy.filesystem.deny.is_empty() {
+                Vec::new()
+            } else {
+                vec!["policy_denied_roots".to_string()]
+            },
+            filesystem_protected: protected_filesystem_labels(policy),
+            private_filesystem_deny: Vec::new(),
+            private_filesystem_rules: Vec::new(),
+            process_boundary: "platform-sandbox",
+            process_identity: "current-user",
+            process_cleanup: "process-tree",
+            private_process_sandbox_user_model: "none",
+            private_process_token: "none",
+            private_process_job: "none",
+            private_setup_account_name: "none",
+            private_setup_group_name: "none",
+            private_setup_identity_artifacts: "none",
+            private_setup_payload: None,
+            private_vendor_permission_profile: None,
+            network_mode: policy.network.mode.as_str(),
+            network_direct_egress: "deny",
+            network_managed_proxy: "none",
+            environment_inherit: policy.environment.inherit.clone(),
+            environment_scrub: policy.environment.scrub.clone(),
+            environment_proxy: policy.environment.proxy,
+            environment_runtime: vec![
+                (
+                    "RUNSEAL_HOME".to_string(),
+                    path_string(synthetic_home.as_path()),
+                ),
+                ("RUNSEAL_TMP".to_string(), path_string(temp_root.as_path())),
+                ("HOME".to_string(), path_string(synthetic_home.as_path())),
+                ("TMPDIR".to_string(), path_string(temp_root.as_path())),
+            ],
+            required_backend_features: policy.required_backend_feature_names(),
+        }
+    }
+
     pub fn json(&self) -> Value {
         json!({
             "backend": {

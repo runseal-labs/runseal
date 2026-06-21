@@ -455,12 +455,19 @@ fn local_spawn_rejects_sandboxed_plan() -> io::Result<()> {
 }
 
 #[test]
-fn linux_skeleton_reports_community_track_without_sandbox_features() {
+fn linux_skeleton_reports_experimental_read_only_without_general_sandbox_features() {
     assert_eq!(LinuxCommunityBackend.name(), "runseal-linux-community");
-    assert_eq!(LinuxCommunityBackend.status(), "future-community");
+    assert_eq!(LinuxCommunityBackend.status(), "experimental");
     assert!(LinuxCommunityBackend.supported_features().is_empty());
     let capabilities = LinuxCommunityBackend.capabilities_json();
     assert_eq!(capabilities["features"]["process_isolation"], false);
+    assert_eq!(capabilities["sandbox_levels"]["read-only"], "experimental");
+    assert_eq!(
+        capabilities["sandbox_levels"]["workspace-contained"],
+        "unsupported"
+    );
+    assert_eq!(capabilities["network_modes"]["disabled"], "experimental");
+    assert_eq!(capabilities["network_modes"]["proxy"], "unsupported");
     let probes = capabilities["capability_probes"].as_array().unwrap();
     assert_eq!(probes.len(), 10);
     assert_probe_schema(&probes[0], "filesystem_policy", "landlock");
@@ -480,12 +487,55 @@ fn linux_skeleton_reports_community_track_without_sandbox_features() {
 }
 
 #[test]
-fn linux_skeleton_fails_closed_for_sandboxed_policy() {
+fn linux_skeleton_compiles_experimental_read_only_policy() {
     let cwd = PathBuf::from("/workspace");
     let policy = normalize_policy(&json!("read-only"), &cwd, None).unwrap();
 
-    let err = LinuxCommunityBackend
+    let plan = LinuxCommunityBackend
         .compile_plan("exec_linux_read_only", &cwd, &policy)
+        .unwrap();
+
+    assert_eq!(plan.backend, LinuxCommunityBackend.name());
+    assert_eq!(plan.platform, "linux");
+    assert_eq!(plan.enforcement, "linux-read-only-experimental");
+    assert_eq!(plan.sandbox_level, "read-only");
+    assert_eq!(plan.cwd, path_string(&cwd));
+    assert_eq!(
+        plan.runtime_root.as_deref(),
+        Some(
+            path_string(
+                &cwd.join(".runseal")
+                    .join("runtime")
+                    .join("exec_linux_read_only")
+            )
+            .as_str()
+        )
+    );
+    assert_eq!(plan.filesystem_read, vec!["workspace".to_string()]);
+    assert_eq!(
+        plan.filesystem_write,
+        vec![
+            "runtime_root".to_string(),
+            "profile_root".to_string(),
+            "synthetic_home".to_string(),
+            "temp_root".to_string(),
+        ]
+    );
+    assert_eq!(plan.process_boundary, "platform-sandbox");
+    assert_eq!(plan.network_direct_egress, "deny");
+    let public_plan = plan.json().to_string();
+    assert!(!public_plan.contains("bubblewrap"));
+    assert!(!public_plan.contains("landlock"));
+    assert!(!public_plan.contains("namespace"));
+}
+
+#[test]
+fn linux_skeleton_fails_closed_for_workspace_contained_policy() {
+    let cwd = PathBuf::from("/workspace");
+    let policy = normalize_policy(&json!("workspace-contained"), &cwd, None).unwrap();
+
+    let err = LinuxCommunityBackend
+        .compile_plan("exec_linux_workspace_contained", &cwd, &policy)
         .unwrap_err();
 
     assert_eq!(err.code, "BACKEND_CAPABILITY_MISSING");
@@ -498,7 +548,7 @@ fn linux_skeleton_fails_closed_for_sandboxed_policy() {
     assert_eq!(plan.backend, LinuxCommunityBackend.name());
     assert_eq!(plan.platform, "linux");
     assert_eq!(plan.enforcement, "fail-closed-preview");
-    assert_eq!(plan.sandbox_level, "read-only");
+    assert_eq!(plan.sandbox_level, "workspace-contained");
     assert_eq!(plan.cwd, "workspace");
     assert_eq!(plan.runtime_root.as_deref(), Some("runtime_root"));
     assert_eq!(plan.profile_root.as_deref(), Some("profile_root"));

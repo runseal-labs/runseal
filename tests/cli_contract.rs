@@ -135,10 +135,8 @@ fn expected_backend_name() -> &'static str {
 fn expected_backend_status() -> &'static str {
     if cfg!(windows) {
         "reference"
-    } else if cfg!(target_os = "macos") {
+    } else if cfg!(any(target_os = "macos", target_os = "linux")) {
         "experimental"
-    } else if cfg!(target_os = "linux") {
-        "future-community"
     } else {
         "local-baseline"
     }
@@ -181,6 +179,22 @@ fn expected_status(supported: bool) -> &'static str {
         "supported"
     } else {
         "unsupported"
+    }
+}
+
+fn expected_read_only_status() -> &'static str {
+    if cfg!(target_os = "linux") {
+        "experimental"
+    } else {
+        expected_status(expected_windows_sandbox_supported())
+    }
+}
+
+fn expected_network_disabled_status() -> &'static str {
+    if cfg!(target_os = "linux") {
+        "experimental"
+    } else {
+        expected_status(expected_windows_sandbox_supported())
     }
 }
 
@@ -729,7 +743,7 @@ fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
     assert_eq!(payload["sandbox_levels"]["danger-full-access"], "supported");
     assert_eq!(
         payload["sandbox_levels"]["read-only"],
-        expected_status(expected_windows_sandbox_supported())
+        expected_read_only_status()
     );
     assert_eq!(
         payload["network_modes"]["proxy"],
@@ -737,7 +751,7 @@ fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
     );
     assert_eq!(
         payload["network_modes"]["disabled"],
-        expected_status(expected_windows_sandbox_supported())
+        expected_network_disabled_status()
     );
     assert_eq!(payload["setup_status"]["setup"], "windows-sandbox");
     assert!(payload["setup_status"]["next_action"].as_str().is_some());
@@ -1036,6 +1050,8 @@ fn sandboxed_exec_cli_uses_backend_or_reports_unavailable() -> Result<()> {
     ];
     if cfg!(windows) {
         args.extend(["cmd", "/d", "/c", "echo sandbox-ok"]);
+    } else if cfg!(target_os = "linux") {
+        args.extend([python_bin(), "-c", "print('sandbox-ok')"]);
     } else {
         args.extend([python_bin(), "-c", "print('must not run')"]);
     }
@@ -1083,6 +1099,37 @@ fn sandboxed_exec_cli_uses_backend_or_reports_unavailable() -> Result<()> {
             .with_context(|| format!("runtime dir must exist at {}", runtime_dir.display()))?
             .collect::<Result<Vec<_>, _>>()?;
         assert_eq!(runtime_entries.len(), 0);
+        return Ok(());
+    }
+
+    if cfg!(target_os = "linux") {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.is_empty(), "{stderr}");
+        let payload = stdout_json(&output)?;
+        if output.status.success() {
+            assert_eq!(payload["status"], "finished");
+            assert_eq!(payload["exit_code"], 0);
+            assert_eq!(payload["sandbox"]["enforced"], true);
+            assert_eq!(
+                payload["platform_plan"]["enforcement"],
+                "linux-read-only-experimental"
+            );
+        } else {
+            assert_eq!(payload["error"]["data"]["code"], "BACKEND_UNAVAILABLE");
+            assert_eq!(
+                payload["error"]["data"]["backend"]["name"],
+                expected_backend_name()
+            );
+            assert_eq!(
+                payload["error"]["data"]["backend"]["status"],
+                expected_backend_status()
+            );
+            assert_eq!(
+                payload["error"]["data"]["backend"]["platform"],
+                expected_backend_platform()
+            );
+        }
+        assert_no_private_windows_setup_terms(&payload.to_string());
         return Ok(());
     }
 

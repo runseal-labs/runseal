@@ -189,10 +189,8 @@ fn expected_backend_name() -> &'static str {
 fn expected_backend_status() -> &'static str {
     if cfg!(windows) {
         "reference"
-    } else if cfg!(target_os = "macos") {
+    } else if cfg!(any(target_os = "macos", target_os = "linux")) {
         "experimental"
-    } else if cfg!(target_os = "linux") {
-        "future-community"
     } else {
         "local-baseline"
     }
@@ -235,6 +233,14 @@ fn expected_status(supported: bool) -> &'static str {
         "supported"
     } else {
         "unsupported"
+    }
+}
+
+fn expected_network_disabled_status() -> &'static str {
+    if cfg!(target_os = "linux") {
+        "experimental"
+    } else {
+        expected_status(expected_windows_sandbox_supported())
     }
 }
 
@@ -1267,7 +1273,7 @@ fn get_capabilities_rpc_contract() -> Result<()> {
     );
     assert_eq!(
         payload["network_modes"]["disabled"],
-        expected_status(expected_windows_sandbox_supported())
+        expected_network_disabled_status()
     );
     assert_eq!(
         payload["features"]["runtime_roots"],
@@ -3737,6 +3743,34 @@ fn sandboxed_policy_uses_platform_backend_or_reports_unavailable() -> Result<()>
             );
             assert_no_private_windows_setup_terms(response);
         }
+        return Ok(());
+    }
+
+    if cfg!(target_os = "linux") {
+        if response.get("error").is_some() {
+            assert_eq!(response["error"]["data"]["code"], "BACKEND_UNAVAILABLE");
+            assert_eq!(
+                response["error"]["data"]["backend"]["name"],
+                expected_backend_name()
+            );
+            assert_eq!(
+                response["error"]["data"]["backend"]["status"],
+                expected_backend_status()
+            );
+            assert_eq!(
+                response["error"]["data"]["backend"]["platform"],
+                expected_backend_platform()
+            );
+        } else {
+            assert_eq!(response["result"]["status"], "finished");
+            assert_eq!(response["result"]["exit_code"], 0);
+            assert_eq!(response["result"]["sandbox"]["enforced"], true);
+            assert_eq!(
+                response["result"]["platform_plan"]["enforcement"],
+                "linux-read-only-experimental"
+            );
+        }
+        assert_no_private_windows_setup_terms(response);
         return Ok(());
     }
 
