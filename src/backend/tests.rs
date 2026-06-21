@@ -606,7 +606,6 @@ fn linux_skeleton_reports_community_track_without_sandbox_features() {
         "bubblewrap",
         "bubblewrap_read_only_candidate",
         "user_namespace_quota",
-        "max_user_namespaces",
         "unprivileged_user_namespace",
     ] {
         assert!(

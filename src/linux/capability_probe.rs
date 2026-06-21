@@ -19,10 +19,9 @@ pub(crate) fn payload() -> Value {
             "landlock": file_status("/sys/kernel/security/landlock"),
             "landlock_abi": landlock_abi(),
             "bubblewrap": path_status("bwrap"),
-        "bubblewrap_read_only_candidate": bubblewrap_read_only_candidate_status(),
+            "bubblewrap_read_only_candidate": bubblewrap_read_only_candidate_status(),
             "cgroup_version": cgroup_version(),
             "user_namespace_quota": positive_sysctl_status("/proc/sys/user/max_user_namespaces"),
-            "max_user_namespaces": positive_sysctl_status("/proc/sys/user/max_user_namespaces"),
             "unprivileged_user_namespace": unprivileged_user_namespace_status(),
         },
     })

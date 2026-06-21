@@ -428,7 +428,6 @@ fn assert_portable_capability_probe_contract(payload: &Value) {
             "bubblewrap",
             "bubblewrap_read_only_candidate",
             "user_namespace_quota",
-            "max_user_namespaces",
             "unprivileged_user_namespace",
         ] {
             assert!(probes["runtime"][key].as_str().is_some(), "{key}");
