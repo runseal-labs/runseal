@@ -160,6 +160,7 @@ const RESULT_STATUS: &[&str] = &[
 #[test]
 fn adversarial_case_manifests_match_rfc0016_shape() -> Result<()> {
     let mut case_ids = HashSet::new();
+    let mut primary_classes = HashSet::new();
     for path in manifest_paths()? {
         let manifest = fs::read_to_string(&path)
             .with_context(|| format!("failed to read {}", path.display()))?;
@@ -168,7 +169,14 @@ fn adversarial_case_manifests_match_rfc0016_shape() -> Result<()> {
             .with_context(|| format!("manifest must be a JSON array: {}", path.display()))?;
         for case in cases {
             validate_case(&case, &path, &mut case_ids)?;
+            primary_classes.insert(required_string(&case, "primary_class", &path)?.to_string());
         }
+    }
+    for class in CLASSES {
+        assert!(
+            primary_classes.contains(*class),
+            "adversarial manifests must include primary_class {class}"
+        );
     }
     Ok(())
 }
