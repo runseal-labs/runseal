@@ -169,6 +169,8 @@ Integrators should start with one of these surfaces:
 Service stdio is a local stateful execution coordinator. It is not a network
 server, remote API, installable system service, or replacement for direct
 `runseal exec` execution.
+`runseal service --pipe`, `--socket`, `--tcp`, and `--http` currently fail
+closed; only `runseal service --stdio` is supported.
 
 Clients should gate sandboxed execution on `getCapabilities` and fail closed
 when a requested feature is unsupported or setup is unavailable. `getSetupStatus`

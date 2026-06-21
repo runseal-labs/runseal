@@ -102,7 +102,7 @@ Windows enforcement baseline 位于专用 Windows sandbox 实现之后。RunSeal
 - Service stdio：当一个本地进程需要跨 JSON-RPC 请求持有已完成 execution 状态时，启动 `runseal service --stdio`。
 - Conformance：设置 `RUNSEAL_BIN=/path/to/runseal`，运行 `tests/` 下的黑盒测试。
 
-Service stdio 是本地 stateful execution coordinator，不是 network server、remote API、可安装系统服务，也不是 direct `runseal exec` 的替代品。
+Service stdio 是本地 stateful execution coordinator，不是 network server、remote API、可安装系统服务，也不是 direct `runseal exec` 的替代品。`runseal service --pipe`、`--socket`、`--tcp` 和 `--http` 当前都会 fail closed；目前只支持 `runseal service --stdio`。
 
 客户端应基于 `getCapabilities` 判断沙箱能力，并在请求能力不支持或 setup 不可用时 fail closed。`getSetupStatus` 可查询 setup readiness，且不会改变 setup state。`getServiceStatus` 可判断当前 stdio control plane 是 direct 还是 stateful service mode。Service mode 会为 `getExecution` 保留 execution 状态，为 active execution 通过 `subscribeEvents` 推送后续匹配事件，并回放已保留事件；`listExecutions`、`getAuditEvents`、`tailAudit` 和 session disposal 会保留已完成 execution 的公开状态与审计查询结果；已结束 execution 的取消请求返回 `EXECUTION_NOT_CANCELLABLE`。
 
