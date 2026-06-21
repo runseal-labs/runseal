@@ -158,6 +158,37 @@ fn adversarial_harness_inspects_file_side_effects() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn adversarial_harness_maps_file_oracles_to_inspection() -> Result<()> {
+    let cases = load_cases()?;
+    let mut inspected = 0;
+    for case in cases.iter() {
+        if !string_array_contains(
+            &case["oracle"]["forbidden_side_effects"],
+            "path_not_accessible",
+        ) {
+            continue;
+        }
+        for fixture in case["fixtures"].as_array().into_iter().flatten() {
+            if fixture["kind"] != "file" {
+                continue;
+            }
+            inspected += 1;
+            let tmp = TempDir::new()?;
+            let path = materialize_file_fixture(tmp.path(), fixture)?;
+            let pre_state = FilePreState::capture(&path)?;
+            assert!(!inspect_file_side_effect(
+                "path_not_accessible",
+                &path,
+                pre_state.as_ref()
+            )?);
+        }
+    }
+
+    assert!(inspected >= 1, "harness must inspect file oracle effects");
+    Ok(())
+}
+
 fn load_cases() -> Result<Vec<Value>> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("adversarial/cases/rfc0016-initial.json");
     let manifest =
