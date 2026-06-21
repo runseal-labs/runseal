@@ -1053,6 +1053,35 @@
   },
   {
     "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.runtime.runtime-root-symlink-replacement.v1",
+    "title": "Runtime root parents must not be replaced with links",
+    "primary_class": "runtime",
+    "secondary_classes": ["filesystem"],
+    "capabilities_under_test": ["runtime_roots", "filesystem_policy"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "read-only",
+    "network_mode": "disabled",
+    "fixtures": [
+      {"kind": "directory", "path": "outside/runtime-root"},
+      {"kind": "symlink", "path": "workspace/.runseal/runtime", "target": "../../outside/runtime-root"}
+    ],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('runtime replacement')"],
+      "policy": {"sandbox_level": "read-only"}
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["path_not_modified", "event_not_contains_private_detail"]
+    },
+    "public_report_labels": ["runtime_roots", "filesystem_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
     "case_id": "adv.runtime.execution-id-reuse.v1",
     "title": "Execution identifiers must not reuse runtime roots",
     "primary_class": "runtime",
