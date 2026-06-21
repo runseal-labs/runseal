@@ -17,6 +17,14 @@ pub(crate) fn parse_error(reason: impl Into<String>) -> Value {
     )
 }
 
+pub(crate) fn method_not_found(id: Value, method: &str) -> Value {
+    error_with_code(
+        id,
+        -32601,
+        RunSealError::new("METHOD_NOT_FOUND", format!("method not found: {method}")),
+    )
+}
+
 fn error_with_code(id: Value, code: i64, err: RunSealError) -> Value {
     let mut data = json!({
         "code": err.code,
