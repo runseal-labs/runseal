@@ -2,14 +2,14 @@ use super::{
     BackendFeature, CapabilityStatus, ExecutionEnv, ExecutionStdin, LinuxCommunityBackend,
     MacosExperimentalBackend, RUNTIME_ROOT_MARKER, SandboxBackend, WindowsFilesystemAclDriver,
     WindowsFilesystemAclSubject, WindowsReferenceBackend, apply_private_filesystem_acl_transaction,
-    cleanup_child_after_setup_error, environment_runtime_json, execute_windows_sandbox_plan,
-    minimal_environment, missing_backend_features, path_string, policy_transition_busy_reason,
-    spawn_local_command,
+    cleanup_child_after_setup_error, environment_runtime_json, minimal_environment,
+    missing_backend_features, path_string, spawn_local_command,
 };
 #[cfg(windows)]
 use super::{
     POLICY_TRANSITION_BUSY_REASON, WindowsKillOnCloseJob, WindowsSandboxPolicyCohortKey,
-    collect_workspace_contained_profile_denies, public_windows_setup_unavailable_reason,
+    collect_workspace_contained_profile_denies, execute_windows_sandbox_plan,
+    policy_transition_busy_reason, public_windows_setup_unavailable_reason,
     windows_explicit_deny_read_paths, windows_sandbox_command,
     windows_sandbox_execution_gate_for_key, windows_sandbox_path_key,
     windows_sandbox_workspace_roots_for_plan, windows_sandbox_write_roots_for_plan,
@@ -461,16 +461,18 @@ fn linux_skeleton_reports_community_track_without_sandbox_features() {
     let capabilities = LinuxCommunityBackend.capabilities_json();
     assert_eq!(capabilities["features"]["process_isolation"], false);
     let probes = capabilities["capability_probes"].as_array().unwrap();
-    assert_eq!(probes.len(), 8);
+    assert_eq!(probes.len(), 10);
     assert_probe_schema(&probes[0], "filesystem_policy", "landlock");
-    assert_probe_schema(&probes[1], "process_isolation", "user_namespaces");
-    assert_probe_schema(&probes[2], "process_isolation", "mount_namespaces");
-    assert_probe_schema(&probes[3], "process_isolation", "pid_namespaces");
-    assert_probe_schema(&probes[4], "network_disabled", "network_namespaces");
-    assert_probe_schema(&probes[5], "process_isolation", "seccomp");
-    assert_probe_schema(&probes[6], "process_isolation", "bubblewrap");
+    assert_probe_schema(&probes[1], "filesystem_policy", "landlock_abi_version");
+    assert_probe_schema(&probes[2], "process_isolation", "user_namespaces");
+    assert_probe_schema(&probes[3], "process_isolation", "user_namespace_quota");
+    assert_probe_schema(&probes[4], "process_isolation", "mount_namespaces");
+    assert_probe_schema(&probes[5], "process_isolation", "pid_namespaces");
+    assert_probe_schema(&probes[6], "network_disabled", "network_namespaces");
+    assert_probe_schema(&probes[7], "process_isolation", "seccomp");
+    assert_probe_schema(&probes[8], "process_isolation", "bubblewrap");
     assert_probe_schema(
-        &probes[7],
+        &probes[9],
         "process_isolation",
         "unprivileged_user_namespaces",
     );

@@ -9,8 +9,20 @@ pub(crate) fn capability_probes() -> Value {
             "diagnostic_only": true
         },
         {
+            "capability": "filesystem_policy",
+            "mechanism": "landlock_abi_version",
+            "status": "unsupported",
+            "diagnostic_only": true
+        },
+        {
             "capability": "process_isolation",
             "mechanism": "user_namespaces",
+            "status": "unsupported",
+            "diagnostic_only": true
+        },
+        {
+            "capability": "process_isolation",
+            "mechanism": "user_namespace_quota",
             "status": "unsupported",
             "diagnostic_only": true
         },
