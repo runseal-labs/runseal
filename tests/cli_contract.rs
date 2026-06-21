@@ -183,7 +183,7 @@ fn expected_status(supported: bool) -> &'static str {
 }
 
 fn expected_read_only_status() -> &'static str {
-    if cfg!(target_os = "linux") {
+    if cfg!(any(target_os = "linux", target_os = "macos")) {
         "experimental"
     } else {
         expected_status(expected_windows_sandbox_supported())
@@ -199,7 +199,7 @@ fn expected_workspace_write_status() -> &'static str {
 }
 
 fn expected_network_disabled_status() -> &'static str {
-    if cfg!(target_os = "linux") {
+    if cfg!(any(target_os = "linux", target_os = "macos")) {
         "experimental"
     } else {
         expected_status(expected_windows_sandbox_supported())
@@ -1062,7 +1062,7 @@ fn sandboxed_exec_cli_uses_backend_or_reports_unavailable() -> Result<()> {
     ];
     if cfg!(windows) {
         args.extend(["cmd", "/d", "/c", "echo sandbox-ok"]);
-    } else if cfg!(target_os = "linux") {
+    } else if cfg!(any(target_os = "linux", target_os = "macos")) {
         args.extend([python_bin(), "-c", "print('sandbox-ok')"]);
     } else {
         args.extend([python_bin(), "-c", "print('must not run')"]);
@@ -1114,17 +1114,22 @@ fn sandboxed_exec_cli_uses_backend_or_reports_unavailable() -> Result<()> {
         return Ok(());
     }
 
-    if cfg!(target_os = "linux") {
+    if cfg!(any(target_os = "linux", target_os = "macos")) {
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.is_empty(), "{stderr}");
         let payload = stdout_json(&output)?;
+        let expected_enforcement = if cfg!(target_os = "macos") {
+            "macos-experimental"
+        } else {
+            "linux-experimental"
+        };
         if output.status.success() {
             assert_eq!(payload["status"], "finished");
             assert_eq!(payload["exit_code"], 0);
             assert_eq!(payload["sandbox"]["enforced"], true);
             assert_eq!(
                 payload["platform_plan"]["enforcement"],
-                "linux-experimental"
+                expected_enforcement
             );
         } else {
             assert_eq!(payload["error"]["data"]["code"], "BACKEND_UNAVAILABLE");

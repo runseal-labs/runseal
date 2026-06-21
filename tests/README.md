@@ -20,8 +20,9 @@ On Linux or macOS, also run the portable probe smoke after building `runseal`:
 python3 scripts/portable-probe-smoke.py
 ```
 
-This checks diagnostic probe shape and fail-closed sandboxed-policy behavior
-without promoting portable backend support.
+This checks diagnostic probe shape, experimental portable enforcement where
+available, and fail-closed unsupported sandboxed-policy behavior without
+promoting portable capabilities to supported.
 
 The tests are black-box by design:
 
@@ -29,7 +30,7 @@ The tests are black-box by design:
 - Capability reporting through `runseal capabilities` and `getCapabilities`,
   without exposing private Windows account or setup identities.
 - Windows hosts select the Windows reference backend and run supported sandbox levels through the shared conformance tests.
-- macOS hosts select an explicit experimental skeleton backend and still fail closed for sandboxed policies.
+- macOS hosts select an experimental portable backend for `read-only` with `network.disabled`; unsupported sandbox levels still fail closed.
 - Linux hosts select an experimental portable backend for `read-only` and `workspace-write` with `network.disabled`; unsupported sandbox levels still fail closed.
 - Windows sandbox plans include runtime root, synthetic home, setup requirements, protected filesystem categories, process boundary state, and network guard planning.
 - Windows filesystem ACL setup must bind rules to a single sandbox user restricted process identity before any rule can be applied.
