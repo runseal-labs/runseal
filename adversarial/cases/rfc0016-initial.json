@@ -750,6 +750,34 @@
   },
   {
     "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.process.interactive-disabled.v1",
+    "title": "Interactive process requests must be rejected",
+    "primary_class": "process",
+    "capabilities_under_test": ["process_isolation"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "workspace-write",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('interactive')"],
+      "policy": {
+        "version": "runseal.policy/v1",
+        "sandbox_level": "workspace-write",
+        "process": {"interactive": true}
+      }
+    },
+    "oracle": {
+      "expected_result": "policy_rejected",
+      "max_severity": "S1",
+      "audit": {"required": false},
+      "events": {"required": false}
+    },
+    "public_report_labels": ["process_cleanup"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
     "case_id": "adv.network.direct-egress-disabled.v1",
     "title": "Disabled network policy must block direct egress",
     "primary_class": "network",
