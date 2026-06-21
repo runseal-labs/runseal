@@ -327,6 +327,7 @@ fn assert_probe_schema(probe: &Value, capability: &str, mechanism: &str) {
     assert_eq!(probe["mechanism"], mechanism);
     assert_eq!(probe["status"], "unsupported");
     assert_eq!(probe["diagnostic_only"], true);
+    assert!(probe["available"].is_boolean());
     assert!(probe.get("path").is_none());
     assert!(probe.get("argv").is_none());
     assert!(probe.get("private").is_none());

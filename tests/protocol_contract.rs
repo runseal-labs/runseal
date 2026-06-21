@@ -418,6 +418,7 @@ fn assert_portable_capability_probe_contract(payload: &Value) {
             };
             assert_eq!(probe["status"], "unsupported");
             assert_eq!(probe["diagnostic_only"], true);
+            assert!(probe["available"].is_boolean());
             mechanisms.push(mechanism);
         }
         #[cfg(target_os = "linux")]
