@@ -1107,6 +1107,31 @@
   },
   {
     "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.runtime.partial-setup-continuation.v1",
+    "title": "Partial runtime setup must not continue execution",
+    "primary_class": "runtime",
+    "capabilities_under_test": ["runtime_roots", "setup_readiness"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "read-only",
+    "network_mode": "disabled",
+    "fixtures": [{"kind": "file", "path": "workspace/.runseal/runtime/partial/.runseal-runtime-root", "body": "partial"}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('partial setup')"],
+      "policy": {"sandbox_level": "read-only"}
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["path_not_modified", "event_not_contains_private_detail"]
+    },
+    "public_report_labels": ["runtime_roots"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
     "case_id": "adv.runtime.cleanup-partial-failure.v1",
     "title": "Runtime cleanup failures must preserve inspectable state",
     "primary_class": "runtime",
