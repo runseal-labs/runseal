@@ -12,7 +12,9 @@ from pathlib import Path
 PROBES = {
     "Linux": [
         "landlock",
+        "landlock_abi_version",
         "user_namespaces",
+        "user_namespace_quota",
         "mount_namespaces",
         "pid_namespaces",
         "network_namespaces",
@@ -95,6 +97,9 @@ def assert_fail_closed(system: str) -> None:
     backend = data.get("backend", {})
     if (backend.get("name"), backend.get("status"), backend.get("platform")) != expected_backend:
         raise SystemExit(f"unexpected backend details: {backend}")
+    plan = data.get("platform_plan", {})
+    if plan.get("cwd") != "workspace" or plan.get("runtime_root") != "runtime_root":
+        raise SystemExit(f"portable fail-closed preview is not public-safe: {plan}")
 
 
 def main() -> None:
