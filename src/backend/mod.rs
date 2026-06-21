@@ -1,5 +1,5 @@
 use crate::policy::{
-    BackendFeature, SandboxLevel, SandboxPolicy, matches_environment_scrub_pattern,
+    BackendFeature, NetworkMode, SandboxLevel, SandboxPolicy, matches_environment_scrub_pattern,
 };
 use crate::windows::policy::{
     WindowsFilesystemAclPlan, WindowsFilesystemAclTransactionPlan, WindowsFilesystemRule,

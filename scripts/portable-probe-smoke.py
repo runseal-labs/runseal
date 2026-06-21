@@ -71,6 +71,49 @@ def assert_probes(payload: dict, system: str) -> None:
             raise SystemExit(f"probe availability must be boolean: {probe}")
 
 
+def probe_available(payload: dict, mechanism: str) -> bool:
+    for probe in payload.get("capability_probes", []):
+        if probe.get("mechanism") == mechanism:
+            return bool(probe.get("available"))
+    return False
+
+
+def assert_linux_read_only(payload: dict) -> None:
+    if payload.get("backend_status") != "experimental":
+        raise SystemExit(f"unexpected Linux backend status: {payload}")
+    if payload.get("sandbox_levels", {}).get("read-only") != "experimental":
+        raise SystemExit(f"Linux read-only must be experimental: {payload}")
+    if payload.get("network_modes", {}).get("disabled") != "experimental":
+        raise SystemExit(f"Linux network.disabled must be experimental: {payload}")
+
+    target = "read-only-write.txt"
+    command = shutil.which("python3") or shutil.which("python") or sys.executable
+    with tempfile.TemporaryDirectory(prefix="runseal-linux-read-only-") as cwd:
+        write_target = Path(cwd) / target
+        _, result = run_json(
+            [
+                "exec",
+                "--json",
+                "--policy",
+                "read-only",
+                "--cwd",
+                cwd,
+                "--",
+                command,
+                "-c",
+                f"from pathlib import Path; Path({str(write_target)!r}).write_text('blocked')",
+            ],
+            expect_success=probe_available(payload, "bubblewrap"),
+        )
+        if probe_available(payload, "bubblewrap"):
+            if result.get("platform_plan", {}).get("enforcement") != "linux-read-only-experimental":
+                raise SystemExit(f"unexpected Linux read-only plan: {result}")
+            if result.get("exit_code") == 0 or write_target.exists():
+                raise SystemExit(f"Linux read-only did not block workspace write: {result}")
+        elif result.get("error", {}).get("data", {}).get("code") != "BACKEND_UNAVAILABLE":
+            raise SystemExit(f"expected Linux backend unavailable without bubblewrap: {result}")
+
+
 def assert_fail_closed(system: str) -> None:
     command = shutil.which("python3") or shutil.which("python") or sys.executable
     with tempfile.TemporaryDirectory(prefix="runseal-portable-probe-") as cwd:
@@ -91,7 +134,6 @@ def assert_fail_closed(system: str) -> None:
         )
     data = payload["error"]["data"]
     expected_backend = {
-        "Linux": ("runseal-linux-community", "future-community", "linux"),
         "Darwin": ("runseal-macos-experimental", "experimental", "macos"),
     }[system]
     if data.get("code") != "BACKEND_CAPABILITY_MISSING" or data.get("support") != "unsupported":
@@ -113,7 +155,10 @@ def main() -> None:
         raise SystemExit(f"RunSeal binary not found: {runseal_bin()}")
     _, capabilities = run_json(["capabilities"], expect_success=True)
     assert_probes(capabilities, system)
-    assert_fail_closed(system)
+    if system == "Linux":
+        assert_linux_read_only(capabilities)
+    else:
+        assert_fail_closed(system)
     print("portable probe smoke ok")
 
 
