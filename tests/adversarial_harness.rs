@@ -373,6 +373,57 @@ fn adversarial_audit_consistency_cases_run() -> Result<()> {
 }
 
 #[test]
+fn adversarial_audit_deny_event_cases_run() -> Result<()> {
+    let cases = load_cases()?;
+    let audit_cases = cases.iter().filter(|case| {
+        matches!(
+            case["case_id"].as_str(),
+            Some(
+                "adv.audit.missing-deny-event.v1"
+                    | "adv.audit.missing-fail-closed-event.v1"
+                    | "adv.audit.backend-private-redaction.v1"
+            )
+        ) && string_array_contains(&case["platforms"], current_platform())
+            && string_array_contains(&case["backend_status"], "local-baseline")
+    });
+
+    let mut ran = 0;
+    for case in audit_cases {
+        ran += 1;
+        let tmp = TempDir::new()?;
+        let response = run_case_with_command(case, tmp.path(), harmless_command())?;
+        assert_eq!(
+            response["error"]["data"]["code"], "POLICY_DENIED",
+            "case {} must deny: {response}",
+            case["case_id"]
+        );
+        let audit_path = response["error"]["data"]["audit_path"]
+            .as_str()
+            .context("audit deny case must return audit_path")?;
+        let audit_jsonl = fs::read_to_string(tmp.path().join(audit_path))?;
+        assert_public_safe(&audit_jsonl)?;
+        let audit_events = read_audit_events(tmp.path(), audit_path)?;
+        assert!(
+            audit_events
+                .iter()
+                .any(|event| event["type"] == "policy.denied")
+        );
+
+        let observed = if case["oracle"]["expected_result"] == "policy_rejected" {
+            "policy_rejected"
+        } else {
+            "deny_or_fail_closed"
+        };
+        let result = emit_result(case, observed, true)?;
+        assert_eq!(result["status"], "passed", "{result}");
+        assert_public_safe(&result.to_string())?;
+    }
+
+    assert!(ran >= 3, "audit deny event cases must run");
+    Ok(())
+}
+
+#[test]
 fn adversarial_harness_materializes_file_fixtures_before_execution() -> Result<()> {
     let cases = load_cases()?;
     let mut materialized = 0;
