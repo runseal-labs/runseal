@@ -270,20 +270,20 @@ fn assert_portable_capability_probe_contract(payload: &Value) {
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        let probes = payload["capability_probes"]
-            .as_array()
-            .expect("portable backend must report diagnostic capability probes");
+        let Some(probes) = payload["capability_probes"].as_array() else {
+            panic!("portable backend must report diagnostic capability probes");
+        };
         assert!(!probes.is_empty());
+        let mut mechanisms = Vec::with_capacity(probes.len());
         for probe in probes {
             assert!(probe["capability"].as_str().is_some());
-            assert!(probe["mechanism"].as_str().is_some());
+            let Some(mechanism) = probe["mechanism"].as_str() else {
+                panic!("portable backend probe must report mechanism");
+            };
             assert_eq!(probe["status"], "unsupported");
             assert_eq!(probe["diagnostic_only"], true);
+            mechanisms.push(mechanism);
         }
-        let mechanisms = probes
-            .iter()
-            .map(|probe| probe["mechanism"].as_str().unwrap())
-            .collect::<Vec<_>>();
         #[cfg(target_os = "linux")]
         assert_eq!(
             mechanisms,
