@@ -11,9 +11,7 @@ pub(crate) fn backend_execution_error(
     if let Some(reason) = policy_transition_busy_reason(err) {
         return Some(("POLICY_TRANSITION_BUSY", reason.to_string(), None));
     }
-    if sandbox_enforced {
-        let reason =
-            backend_unavailable_reason(err).unwrap_or(generic_backend_unavailable_reason());
+    if sandbox_enforced && let Some(reason) = backend_unavailable_reason(err) {
         return Some((
             "BACKEND_UNAVAILABLE",
             reason.to_string(),
@@ -21,18 +19,6 @@ pub(crate) fn backend_execution_error(
         ));
     }
     None
-}
-
-fn generic_backend_unavailable_reason() -> &'static str {
-    #[cfg(windows)]
-    {
-        "windows sandbox setup unavailable; run `runseal setup windows-sandbox` to install or repair"
-    }
-
-    #[cfg(not(windows))]
-    {
-        "sandbox backend unavailable"
-    }
 }
 
 fn backend_unavailable_setup_status(reason: &str, cwd: &Path) -> Option<Value> {
@@ -54,6 +40,13 @@ fn backend_unavailable_setup_status(reason: &str, cwd: &Path) -> Option<Value> {
 #[cfg(all(test, windows))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sandboxed_spawn_error_is_not_backend_unavailable() {
+        let err = io::Error::other("runner failed");
+
+        assert_eq!(backend_execution_error(&err, true, Path::new(".")), None);
+    }
 
     #[cfg(windows)]
     #[test]

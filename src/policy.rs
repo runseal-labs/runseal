@@ -74,6 +74,7 @@ pub enum BackendFeature {
     NetworkDisabled,
     NetworkProxy,
     ManagedProxy,
+    PolicyEpoch,
     ResourceLimits,
 }
 
@@ -89,6 +90,7 @@ impl BackendFeature {
             Self::NetworkDisabled => "network_disabled",
             Self::NetworkProxy => "network_proxy",
             Self::ManagedProxy => "managed_proxy",
+            Self::PolicyEpoch => "policy_epoch",
             Self::ResourceLimits => "resource_limits",
         }
     }
@@ -870,6 +872,7 @@ fn default_environment(network: NetworkMode) -> EnvironmentPolicy {
             "AUTHORIZATION".to_string(),
             "COOKIE".to_string(),
             "PASSWORD".to_string(),
+            "PYTHONPATH".to_string(),
         ],
         set: Vec::new(),
         proxy: network == NetworkMode::Proxy,
