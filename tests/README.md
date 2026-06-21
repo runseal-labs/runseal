@@ -14,6 +14,15 @@ Run the suite on Windows before claiming reference-backend readiness. Other
 platforms can run the same tests to verify platform selection and fail-closed
 behavior until their backends are promoted.
 
+On Linux or macOS, also run the portable probe smoke after building `runseal`:
+
+```bash
+python3 scripts/portable-probe-smoke.py
+```
+
+This checks diagnostic probe shape and fail-closed sandboxed-policy behavior
+without promoting portable backend support.
+
 The tests are black-box by design:
 
 - CLI behavior through `runseal exec`.
