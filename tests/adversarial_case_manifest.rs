@@ -72,6 +72,7 @@ const FIXTURE_KINDS: &[&str] = &[
     "preexisting_runtime_root",
     "background_process",
     "network_listener",
+    "preopened_socket",
     "malformed_request",
 ];
 const SIDE_EFFECTS: &[&str] = &[
