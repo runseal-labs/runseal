@@ -61,29 +61,7 @@ fn adversarial_tier0_policy_cases_emit_public_safe_results() -> Result<()> {
         } else {
             "harness_error"
         };
-        let severity = severity_for_result(observed_result, true);
-        let result = json!({
-            "schema_version": "runseal.adversarial-result/v1",
-            "case_id": case["case_id"],
-            "backend_name": "runseal-local",
-            "backend_status": "local-baseline",
-            "platform": current_platform(),
-            "capabilities_under_test": case["capabilities_under_test"],
-            "sandbox_level": case["sandbox_level"],
-            "network_mode": case["network_mode"],
-            "expected_result": case["oracle"]["expected_result"],
-            "observed_result": observed_result,
-            "severity": severity,
-            "passed": observed_result == "policy_rejected",
-            "skipped": false,
-            "skip_reason": null,
-            "policy_hash_present": false,
-            "policy_epoch_present": false,
-            "audit_present": false,
-            "events_present": false,
-            "public_safe_output": true,
-            "status": if observed_result == "policy_rejected" { "passed" } else { "failed" }
-        });
+        let result = emit_result(case, observed_result, true)?;
         assert_public_safe(&result.to_string())?;
         assert_eq!(result["status"], "passed", "{result}");
     }
@@ -199,12 +177,57 @@ fn adversarial_harness_computes_result_severity() {
     assert_eq!(severity_for_result("policy_rejected", false), "S4");
 }
 
+#[test]
+fn adversarial_harness_emits_complete_public_safe_results() -> Result<()> {
+    let case = load_cases()?
+        .into_iter()
+        .find(|case| case["case_id"] == "adv.policy.unknown-top-level-field.v1")
+        .context("policy adversarial case must exist")?;
+    let result = emit_result(&case, "policy_rejected", true)?;
+
+    assert_eq!(result["schema_version"], "runseal.adversarial-result/v1");
+    assert_eq!(result["case_id"], case["case_id"]);
+    assert_eq!(result["backend_status"], "local-baseline");
+    assert_eq!(result["observed_result"], "policy_rejected");
+    assert_eq!(result["severity"], "S0");
+    assert_eq!(result["status"], "passed");
+    assert_public_safe(&result.to_string())?;
+    Ok(())
+}
+
 fn load_cases() -> Result<Vec<Value>> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("adversarial/cases/rfc0016-initial.json");
     let manifest =
         fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
     serde_json::from_str(&manifest)
         .with_context(|| format!("manifest must be JSON: {}", path.display()))
+}
+
+fn emit_result(case: &Value, observed_result: &str, public_outcome_visible: bool) -> Result<Value> {
+    let result = json!({
+        "schema_version": "runseal.adversarial-result/v1",
+        "case_id": case["case_id"],
+        "backend_name": "runseal-local",
+        "backend_status": "local-baseline",
+        "platform": current_platform(),
+        "capabilities_under_test": case["capabilities_under_test"],
+        "sandbox_level": case["sandbox_level"],
+        "network_mode": case["network_mode"],
+        "expected_result": case["oracle"]["expected_result"],
+        "observed_result": observed_result,
+        "severity": severity_for_result(observed_result, public_outcome_visible),
+        "passed": observed_result == case["oracle"]["expected_result"],
+        "skipped": false,
+        "skip_reason": null,
+        "policy_hash_present": false,
+        "policy_epoch_present": false,
+        "audit_present": case["oracle"]["audit"]["required"].as_bool().unwrap_or(false),
+        "events_present": case["oracle"]["events"]["required"].as_bool().unwrap_or(false),
+        "public_safe_output": true,
+        "status": if observed_result == case["oracle"]["expected_result"] { "passed" } else { "failed" }
+    });
+    assert_public_safe(&result.to_string())?;
+    Ok(result)
 }
 
 fn severity_for_result(observed_result: &str, public_audit_visible: bool) -> &'static str {
