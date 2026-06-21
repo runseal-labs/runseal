@@ -76,6 +76,34 @@
   },
   {
     "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.policy.unsupported-nonempty-section.v1",
+    "title": "Unsupported non-empty policy sections must be rejected",
+    "primary_class": "policy",
+    "capabilities_under_test": ["resource_limits"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "danger-full-access",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('resources')"],
+      "policy": {
+        "version": "runseal.policy/v1",
+        "sandbox_level": "danger-full-access",
+        "resources": {"memory_bytes": 1000}
+      }
+    },
+    "oracle": {
+      "expected_result": "policy_rejected",
+      "max_severity": "S0",
+      "audit": {"required": false},
+      "events": {"required": false}
+    },
+    "public_report_labels": ["protocol_contract"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
     "case_id": "adv.execution_injection.argv-shell-metacharacters.v1",
     "title": "Command strings must not imply shell execution",
     "primary_class": "execution_injection",
