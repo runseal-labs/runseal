@@ -220,6 +220,42 @@ fn assert_no_private_windows_setup_terms(text: &str) {
     }
 }
 
+fn assert_linux_fail_closed_preview(plan: &Value) {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+
+    assert_eq!(plan["backend"]["name"], expected_backend_name());
+    assert_eq!(plan["backend"]["status"], expected_backend_status());
+    assert_eq!(plan["backend"]["platform"], "linux");
+    assert_eq!(plan["sandbox_level"], "read-only");
+    assert_eq!(plan["enforcement"], "fail-closed-preview");
+    assert_eq!(plan["process"]["boundary"], "platform-sandbox");
+    assert_eq!(plan["process"]["identity"], "current-user");
+    assert_eq!(plan["process"]["cleanup"], "process-tree");
+    assert_eq!(plan["network"]["direct_egress"], "deny");
+    assert_eq!(plan["network"]["managed_proxy"], "none");
+    assert_eq!(
+        plan["required_backend_features"],
+        json!([
+            "filesystem_policy",
+            "runtime_roots",
+            "runtime_environment",
+            "process_isolation",
+            "process_cleanup",
+            "direct_network_deny",
+            "network_disabled"
+        ])
+    );
+    let plan_text = plan.to_string();
+    for private_term in ["bubblewrap", "landlock", "namespace", "seccomp"] {
+        assert!(
+            !plan_text.contains(private_term),
+            "portable preview must not expose private Linux mechanism term {private_term}"
+        );
+    }
+}
+
 fn assert_portable_capability_probe_contract(payload: &Value) {
     #[cfg(windows)]
     assert!(payload.get("capability_probes").is_none());
@@ -1064,6 +1100,7 @@ fn sandboxed_exec_cli_uses_backend_or_reports_unavailable() -> Result<()> {
             .contains("cannot enforce policy read-only"),
         "{payload}"
     );
+    assert_linux_fail_closed_preview(&payload["error"]["data"]["platform_plan"]);
     assert_no_private_windows_setup_terms(&payload.to_string());
 
     let audit_dir = tmp.path().join(".runseal").join("audit");

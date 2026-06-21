@@ -292,6 +292,34 @@ fn assert_no_private_windows_setup_terms(value: &Value) {
     }
 }
 
+fn assert_linux_fail_closed_preview(plan: &Value) {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+
+    assert_eq!(plan["backend"]["name"], expected_backend_name());
+    assert_eq!(plan["backend"]["status"], expected_backend_status());
+    assert_eq!(plan["backend"]["platform"], "linux");
+    assert_eq!(plan["sandbox_level"], "read-only");
+    assert_eq!(plan["enforcement"], "fail-closed-preview");
+    assert_eq!(plan["process"]["boundary"], "platform-sandbox");
+    assert_eq!(plan["process"]["identity"], "current-user");
+    assert_eq!(plan["process"]["cleanup"], "process-tree");
+    assert_eq!(plan["network"]["direct_egress"], "deny");
+    assert_eq!(plan["network"]["managed_proxy"], "none");
+    assert_eq!(
+        plan["required_backend_features"],
+        json!(expected_missing_features(&["network_disabled"]))
+    );
+    let plan_text = plan.to_string();
+    for private_term in ["bubblewrap", "landlock", "namespace", "seccomp"] {
+        assert!(
+            !plan_text.contains(private_term),
+            "portable preview must not expose private Linux mechanism term {private_term}"
+        );
+    }
+}
+
 fn path_equals_existing(left: &str, right: &std::path::Path) -> bool {
     let Ok(left) = PathBuf::from(left).canonicalize() else {
         return false;
@@ -3404,6 +3432,7 @@ fn sandboxed_policy_uses_platform_backend_or_reports_unavailable() -> Result<()>
         response["error"]["data"]["missing_features"],
         json!(expected_missing_features(&["network_disabled"]))
     );
+    assert_linux_fail_closed_preview(&response["error"]["data"]["platform_plan"]);
     let audit_path = response["error"]["data"]["audit_path"]
         .as_str()
         .expect("backend failure must return audit_path");
