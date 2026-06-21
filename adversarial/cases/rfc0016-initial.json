@@ -872,6 +872,33 @@
   },
   {
     "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.filesystem.unc-path-injection.v1",
+    "title": "Workspace-contained execution must not read injected network paths",
+    "primary_class": "filesystem",
+    "secondary_classes": ["network"],
+    "capabilities_under_test": ["filesystem_policy", "direct_network_deny"],
+    "platforms": ["windows"],
+    "backend_status": ["reference", "local-baseline"],
+    "sandbox_level": "workspace-contained",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "open('\\\\\\\\localhost\\\\runseal-test\\\\secret.txt', 'rb').read()"],
+      "policy": {"sandbox_level": "workspace-contained"},
+      "network": "disabled"
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["path_not_accessible", "network_connection_absent"]
+    },
+    "public_report_labels": ["filesystem_conformance", "network_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
     "case_id": "adv.filesystem.preexisting-symlinked-runtime-root.v1",
     "title": "Runtime roots must not follow preexisting workspace links",
     "primary_class": "filesystem",
