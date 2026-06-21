@@ -63,11 +63,13 @@ fn run_rpc(message: &str) -> Result<Output> {
         .context("failed to wait for runseal rpc")
 }
 
+#[cfg(not(windows))]
 fn python_bin() -> &'static str {
     static PYTHON: OnceLock<String> = OnceLock::new();
     PYTHON.get_or_init(resolve_python_bin)
 }
 
+#[cfg(not(windows))]
 fn resolve_python_bin() -> String {
     if let Some(path) = env::var_os("RUNSEAL_TEST_PYTHON") {
         return PathBuf::from(path).to_string_lossy().into_owned();
@@ -111,34 +113,38 @@ fn powershell_bin() -> &'static str {
     })
 }
 
-fn platform_script_command(python_code: String, powershell_script: String) -> Vec<String> {
-    if cfg!(windows) {
-        vec![
-            powershell_bin().to_string(),
-            "-NoProfile".to_string(),
-            "-Command".to_string(),
-            powershell_script,
-        ]
-    } else {
-        vec![python_bin().to_string(), "-c".to_string(), python_code]
-    }
+#[cfg(windows)]
+fn platform_script_command(_python_code: String, powershell_script: String) -> Vec<String> {
+    vec![
+        powershell_bin().to_string(),
+        "-NoProfile".to_string(),
+        "-Command".to_string(),
+        powershell_script,
+    ]
 }
 
+#[cfg(not(windows))]
+fn platform_script_command(python_code: String, _powershell_script: String) -> Vec<String> {
+    vec![python_bin().to_string(), "-c".to_string(), python_code]
+}
+
+#[cfg(windows)]
 fn stdin_echo_command() -> Vec<String> {
-    if cfg!(windows) {
-        vec![
-            powershell_bin().to_string(),
-            "-NoProfile".to_string(),
-            "-Command".to_string(),
-            "$text = [Console]::In.ReadToEnd(); [Console]::Out.Write($text)".to_string(),
-        ]
-    } else {
-        vec![
-            python_bin().to_string(),
-            "-c".to_string(),
-            "import sys; print(sys.stdin.buffer.read().decode('utf-8'), end='')".to_string(),
-        ]
-    }
+    vec![
+        powershell_bin().to_string(),
+        "-NoProfile".to_string(),
+        "-Command".to_string(),
+        "$text = [Console]::In.ReadToEnd(); [Console]::Out.Write($text)".to_string(),
+    ]
+}
+
+#[cfg(not(windows))]
+fn stdin_echo_command() -> Vec<String> {
+    vec![
+        python_bin().to_string(),
+        "-c".to_string(),
+        "import sys; print(sys.stdin.buffer.read().decode('utf-8'), end='')".to_string(),
+    ]
 }
 
 fn execute_platform_script(

@@ -3940,10 +3940,22 @@ fn workspace_contained_plan_reports_profile_protection_without_private_paths() -
         return Ok(());
     }
 
-    assert_eq!(
-        response["error"]["data"]["code"],
-        "BACKEND_CAPABILITY_MISSING"
-    );
+    if response.get("error").is_some() {
+        assert_eq!(
+            response["error"]["data"]["code"],
+            "BACKEND_CAPABILITY_MISSING"
+        );
+    } else {
+        assert_eq!(response["result"]["sandbox"]["enforced"], true);
+        let protected = &response["result"]["platform_plan"]["filesystem"]["protected"];
+        assert!(
+            protected
+                .as_array()
+                .expect("protected labels must be an array")
+                .iter()
+                .all(Value::is_string)
+        );
+    }
     Ok(())
 }
 

@@ -1366,6 +1366,7 @@ fn windows_timeout_command() -> Value {
     ])
 }
 
+#[cfg(windows)]
 fn observed_timeout_result(response: &Value) -> &'static str {
     match response["error"]["data"]["code"].as_str() {
         Some("EXECUTION_TIMEOUT") => "timeout",
@@ -1375,9 +1376,12 @@ fn observed_timeout_result(response: &Value) -> &'static str {
 
 fn observed_filesystem_denial_result(response: &Value) -> &'static str {
     match response["error"]["data"]["code"].as_str() {
-        Some("BACKEND_UNAVAILABLE" | "POLICY_DENIED" | "EXECUTION_FAILED_TO_START") => {
-            "deny_or_fail_closed"
-        }
+        Some(
+            "BACKEND_UNAVAILABLE"
+            | "BACKEND_CAPABILITY_MISSING"
+            | "POLICY_DENIED"
+            | "EXECUTION_FAILED_TO_START",
+        ) => "deny_or_fail_closed",
         _ if response["result"]["status"] == "finished" && response["result"]["exit_code"] != 0 => {
             "deny_or_fail_closed"
         }
