@@ -154,6 +154,44 @@ fn adversarial_stale_policy_epoch_case_runs() -> Result<()> {
 }
 
 #[test]
+fn adversarial_execution_injection_deny_cases_run() -> Result<()> {
+    let cases = load_cases()?;
+    let deny_cases = cases.iter().filter(|case| {
+        matches!(
+            case["case_id"].as_str(),
+            Some(
+                "adv.execution_injection.argv-shell-metacharacters.v1"
+                    | "adv.execution_injection.invalid-base64-stdin.v1"
+                    | "adv.execution_injection.secret-env-key.v1"
+            )
+        ) && string_array_contains(&case["platforms"], current_platform())
+            && string_array_contains(&case["backend_status"], "local-baseline")
+    });
+
+    let mut ran = 0;
+    for case in deny_cases {
+        ran += 1;
+        let tmp = TempDir::new()?;
+        let response = run_case(case, tmp.path())?;
+        assert_eq!(
+            observed_denial_result(&response),
+            "deny",
+            "case {} must deny: {response}",
+            case["case_id"]
+        );
+        let result = emit_result(case, "deny", true)?;
+        assert_eq!(result["status"], "passed", "{result}");
+        assert_public_safe(&result.to_string())?;
+    }
+
+    assert!(
+        ran >= 3,
+        "execution injection harness must run fixture-free deny cases"
+    );
+    Ok(())
+}
+
+#[test]
 fn adversarial_harness_materializes_file_fixtures_before_execution() -> Result<()> {
     let cases = load_cases()?;
     let mut materialized = 0;
@@ -464,18 +502,14 @@ fn run_case(case: &Value, cwd: &Path) -> Result<Value> {
     params.remove("method");
     params.insert("cwd".to_string(), json!(cwd));
 
-    let output = run_rpc(&rpc_request(method, Value::Object(params)))?;
-    if !output.status.success() {
-        bail!("{}", String::from_utf8_lossy(&output.stderr));
+    rpc_response(&rpc_request(method, Value::Object(params)))
+}
+
+fn observed_denial_result(response: &Value) -> &'static str {
+    match response["error"]["data"]["code"].as_str() {
+        Some("INVALID_REQUEST" | "POLICY_INVALID") => "deny",
+        _ => "harness_error",
     }
-    let stdout = String::from_utf8(output.stdout).context("stdout must be utf-8")?;
-    stdout
-        .lines()
-        .find(|line| !line.trim().is_empty())
-        .map(serde_json::from_str)
-        .transpose()
-        .context("rpc response must be JSON")?
-        .context("rpc response must exist")
 }
 
 fn rpc_result(message: &str) -> Result<Value> {
