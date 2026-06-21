@@ -104,6 +104,34 @@
   },
   {
     "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.policy.merge-ambiguity.v1",
+    "title": "Ambiguous policy merges must be rejected",
+    "primary_class": "policy",
+    "capabilities_under_test": ["policy_epoch"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "malformed",
+    "network_mode": "malformed",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('policy merge')"],
+      "policy": {
+        "version": "runseal.policy/v1",
+        "sandbox_level": "workspace-write",
+        "sandbox": {"level": "danger-full-access"}
+      }
+    },
+    "oracle": {
+      "expected_result": "policy_rejected",
+      "max_severity": "S0",
+      "audit": {"required": false},
+      "events": {"required": false}
+    },
+    "public_report_labels": ["protocol_contract"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
     "case_id": "adv.policy.stale-policy-epoch.v1",
     "title": "Executions must not reuse stale policy epochs",
     "primary_class": "policy",
