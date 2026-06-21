@@ -522,6 +522,31 @@
   },
   {
     "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.filesystem.external-read-from-workspace-contained.v1",
+    "title": "Workspace-contained execution must not read external files",
+    "primary_class": "filesystem",
+    "capabilities_under_test": ["filesystem_policy"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "workspace-contained",
+    "network_mode": "disabled",
+    "fixtures": [{"kind": "file", "path": "outside/external.txt", "body": "outside"}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "open('../outside/external.txt', 'rb').read()"],
+      "policy": {"sandbox_level": "workspace-contained"}
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["path_not_accessible"]
+    },
+    "public_report_labels": ["filesystem_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
     "case_id": "adv.runtime.precreated-runtime-root.v1",
     "title": "Preexisting runtime roots must not be trusted",
     "primary_class": "runtime",
