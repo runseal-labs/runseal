@@ -153,7 +153,11 @@ pub(crate) fn execute_command(
         Err(err) => {
             let details = err.details_json();
             let mut prepared_setup = None;
-            if let Some(plan) = err.plan.as_deref() {
+            if let Some(plan) = err
+                .plan
+                .as_deref()
+                .filter(|plan| plan.enforcement != "fail-closed-preview")
+            {
                 match plan.prepare_sandbox_setup() {
                     Ok(setup) => {
                         let event = execution_event_now(
