@@ -1,10 +1,11 @@
 use anyhow::{Context, Result, bail};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Output};
+use std::sync::OnceLock;
 use tempfile::TempDir;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
@@ -41,7 +42,32 @@ fn run_cli(args: &[&str]) -> Result<Output> {
 }
 
 fn python_bin() -> &'static str {
-    if cfg!(windows) { "python" } else { "python3" }
+    static PYTHON: OnceLock<String> = OnceLock::new();
+    PYTHON.get_or_init(resolve_python_bin)
+}
+
+fn resolve_python_bin() -> String {
+    if let Some(path) = env::var_os("RUNSEAL_TEST_PYTHON") {
+        return PathBuf::from(path).to_string_lossy().into_owned();
+    }
+    let output = match if cfg!(windows) {
+        Command::new("where.exe").arg("python").output()
+    } else {
+        Command::new("sh")
+            .args(["-c", "command -v python3"])
+            .output()
+    } {
+        Ok(output) => output,
+        Err(err) => panic!("failed to locate python: {err}"),
+    };
+    let stdout = match String::from_utf8(output.stdout) {
+        Ok(stdout) => stdout,
+        Err(err) => panic!("python path must be utf-8: {err}"),
+    };
+    match stdout.lines().next() {
+        Some(path) => path.to_string(),
+        None => panic!("python must exist"),
+    }
 }
 
 fn stdout_json(output: &Output) -> Result<Value> {
@@ -135,12 +161,22 @@ fn expected_backend_name() -> &'static str {
 fn expected_backend_status() -> &'static str {
     if cfg!(windows) {
         "reference"
-    } else if cfg!(target_os = "macos") {
+    } else if cfg!(any(target_os = "macos", target_os = "linux")) {
         "experimental"
-    } else if cfg!(target_os = "linux") {
-        "future-community"
     } else {
         "local-baseline"
+    }
+}
+
+fn expected_backend_platform() -> &'static str {
+    if cfg!(windows) {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else if cfg!(target_os = "linux") {
+        "linux"
+    } else {
+        "unknown"
     }
 }
 
@@ -169,6 +205,30 @@ fn expected_status(supported: bool) -> &'static str {
         "supported"
     } else {
         "unsupported"
+    }
+}
+
+fn expected_read_only_status() -> &'static str {
+    if cfg!(any(target_os = "linux", target_os = "macos")) {
+        "experimental"
+    } else {
+        expected_status(expected_windows_sandbox_supported())
+    }
+}
+
+fn expected_workspace_write_status() -> &'static str {
+    if cfg!(any(target_os = "linux", target_os = "macos")) {
+        "experimental"
+    } else {
+        expected_status(expected_windows_sandbox_supported())
+    }
+}
+
+fn expected_network_disabled_status() -> &'static str {
+    if cfg!(any(target_os = "linux", target_os = "macos")) {
+        "experimental"
+    } else {
+        expected_status(expected_windows_sandbox_supported())
     }
 }
 
@@ -208,6 +268,117 @@ fn assert_no_private_windows_setup_terms(text: &str) {
     }
 }
 
+fn assert_portable_fail_closed_preview(plan: &Value) {
+    if !cfg!(any(target_os = "linux", target_os = "macos")) {
+        return;
+    }
+
+    assert_eq!(plan["backend"]["name"], expected_backend_name());
+    assert_eq!(plan["backend"]["status"], expected_backend_status());
+    assert_eq!(plan["backend"]["platform"], expected_backend_platform());
+    assert_eq!(plan["sandbox_level"], "read-only");
+    assert_eq!(plan["enforcement"], "fail-closed-preview");
+    assert_eq!(plan["cwd"], "workspace");
+    assert_eq!(plan["runtime_root"], "runtime_root");
+    assert_eq!(plan["profile_root"], "profile_root");
+    assert_eq!(plan["synthetic_home"], "synthetic_home");
+    assert_eq!(plan["temp_root"], "temp_root");
+    assert_eq!(plan["filesystem"]["read"], json!(["workspace"]));
+    assert_eq!(
+        plan["filesystem"]["write"],
+        json!([
+            "runtime_root",
+            "profile_root",
+            "synthetic_home",
+            "temp_root"
+        ])
+    );
+    assert_eq!(plan["process"]["boundary"], "platform-sandbox");
+    assert_eq!(plan["process"]["identity"], "current-user");
+    assert_eq!(plan["process"]["cleanup"], "process-tree");
+    assert_eq!(plan["network"]["direct_egress"], "deny");
+    assert_eq!(plan["network"]["managed_proxy"], "none");
+    assert_eq!(
+        plan["required_backend_features"],
+        json!([
+            "filesystem_policy",
+            "runtime_roots",
+            "runtime_environment",
+            "process_isolation",
+            "process_cleanup",
+            "direct_network_deny",
+            "network_disabled"
+        ])
+    );
+    let plan_text = plan.to_string();
+    for private_term in [
+        "bubblewrap",
+        "landlock",
+        "namespace",
+        "seccomp",
+        "sandbox_exec",
+        "seatbelt",
+        "profile fragment",
+    ] {
+        assert!(
+            !plan_text.contains(private_term),
+            "portable preview must not expose private mechanism term {private_term}"
+        );
+    }
+}
+
+fn assert_portable_capability_probe_contract(payload: &Value) {
+    #[cfg(windows)]
+    assert!(payload.get("capability_probes").is_none());
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        let Some(probes) = payload["capability_probes"].as_array() else {
+            panic!("portable backend must report diagnostic capability probes");
+        };
+        assert!(!probes.is_empty());
+        let mut mechanisms = Vec::with_capacity(probes.len());
+        for probe in probes {
+            assert!(probe["capability"].as_str().is_some());
+            let Some(mechanism) = probe["mechanism"].as_str() else {
+                panic!("portable backend probe must report mechanism");
+            };
+            assert_eq!(probe["status"], "unsupported");
+            assert_eq!(probe["diagnostic_only"], true);
+            assert!(probe["available"].is_boolean());
+            mechanisms.push(mechanism);
+        }
+        #[cfg(target_os = "linux")]
+        assert_eq!(
+            mechanisms,
+            vec![
+                "landlock",
+                "landlock_abi_version",
+                "user_namespaces",
+                "user_namespace_quota",
+                "mount_namespaces",
+                "pid_namespaces",
+                "network_namespaces",
+                "seccomp",
+                "bubblewrap",
+                "unprivileged_user_namespaces",
+            ]
+        );
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            mechanisms,
+            vec![
+                "sandbox_exec",
+                "sandbox_exec_executable",
+                "macos_version",
+                "temporary_profile",
+                "canonical_paths",
+                "symlink_path_model",
+            ]
+        );
+    }
+}
+
 #[test]
 fn missing_binary_is_explicit_red_state() {
     if runseal_bin().exists() {
@@ -235,6 +406,48 @@ fn help_lists_core_commands() -> Result<()> {
     assert!(stdout.contains("setup windows-sandbox [--cwd <path>]"));
     assert!(stdout.contains("capabilities"));
     assert_no_private_windows_setup_terms(&stdout);
+    Ok(())
+}
+
+#[test]
+fn service_local_ipc_modes_fail_closed() -> Result<()> {
+    for flag in ["--pipe", "--socket"] {
+        let output = run_cli(&["service", flag])?;
+
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8(output.stderr)?;
+        assert!(stderr.contains("local service transport RFC"), "{stderr}");
+        assert_no_private_windows_setup_terms(&stderr);
+
+        let output = run_cli(&["service", flag, "runseal-test"])?;
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8(output.stderr)?;
+        assert!(stderr.contains("local service transport RFC"), "{stderr}");
+        assert_no_private_windows_setup_terms(&stderr);
+    }
+    Ok(())
+}
+
+#[test]
+fn service_remote_transport_modes_fail_closed() -> Result<()> {
+    for flag in ["--tcp", "--http"] {
+        let output = run_cli(&["service", flag])?;
+
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8(output.stderr)?;
+        assert!(stderr.contains("remote transport RFC"), "{stderr}");
+        assert_no_private_windows_setup_terms(&stderr);
+
+        let output = run_cli(&["service", flag, "127.0.0.1:0"])?;
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8(output.stderr)?;
+        assert!(stderr.contains("remote transport RFC"), "{stderr}");
+        assert_no_private_windows_setup_terms(&stderr);
+    }
     Ok(())
 }
 
@@ -501,6 +714,16 @@ fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
     assert_eq!(payload["backend"], expected_backend_name());
     assert_eq!(payload["backend_status"], expected_backend_status());
     assert!(payload["platform"].as_str().is_some());
+    assert_eq!(
+        payload["capability_statuses"],
+        json!([
+            "supported",
+            "experimental",
+            "unsupported",
+            "unavailable",
+            "requires_setup"
+        ])
+    );
     assert_eq!(payload["features"]["local_execution"], true);
     assert_eq!(
         payload["features"]["filesystem_policy"],
@@ -539,6 +762,13 @@ fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
         expected_windows_sandbox_supported()
     );
     assert_eq!(
+        payload["features"]["policy_epoch"],
+        expected_windows_sandbox_supported()
+    );
+    assert_eq!(payload["features"]["setup_readiness"], true);
+    assert_eq!(payload["features"]["stdin_bytes"], true);
+    assert_eq!(payload["features"]["stdin_file"], true);
+    assert_eq!(
         payload["features"]["resource_limits"],
         expected_resource_limits_supported()
     );
@@ -547,7 +777,11 @@ fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
     assert_eq!(payload["sandbox_levels"]["danger-full-access"], "supported");
     assert_eq!(
         payload["sandbox_levels"]["read-only"],
-        expected_status(expected_windows_sandbox_supported())
+        expected_read_only_status()
+    );
+    assert_eq!(
+        payload["sandbox_levels"]["workspace-write"],
+        expected_workspace_write_status()
     );
     assert_eq!(
         payload["network_modes"]["proxy"],
@@ -555,10 +789,11 @@ fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
     );
     assert_eq!(
         payload["network_modes"]["disabled"],
-        expected_status(expected_windows_sandbox_supported())
+        expected_network_disabled_status()
     );
     assert_eq!(payload["setup_status"]["setup"], "windows-sandbox");
     assert!(payload["setup_status"]["next_action"].as_str().is_some());
+    assert_portable_capability_probe_contract(&payload);
     assert_no_private_windows_setup_terms(&payload.to_string());
     Ok(())
 }
@@ -676,8 +911,12 @@ fn exec_events_stream_uses_execution_vocabulary() -> Result<()> {
         .filter_map(|event| event["type"].as_str())
         .collect();
 
+    assert!(event_types.contains(&"execution.requested"));
+    assert!(event_types.contains(&"policy.resolved"));
+    assert!(event_types.contains(&"policy.allowed"));
     assert!(event_types.contains(&"execution.started"));
     assert!(event_types.contains(&"execution.stdout"));
+    assert!(event_types.contains(&"execution.resource.sample"));
     assert!(event_types.contains(&"execution.finished"));
     for event in &events {
         assert_event_envelope(event)?;
@@ -849,6 +1088,8 @@ fn sandboxed_exec_cli_uses_backend_or_reports_unavailable() -> Result<()> {
     ];
     if cfg!(windows) {
         args.extend(["cmd", "/d", "/c", "echo sandbox-ok"]);
+    } else if cfg!(any(target_os = "linux", target_os = "macos")) {
+        args.extend([python_bin(), "-c", "print('sandbox-ok')"]);
     } else {
         args.extend([python_bin(), "-c", "print('must not run')"]);
     }
@@ -899,10 +1140,75 @@ fn sandboxed_exec_cli_uses_backend_or_reports_unavailable() -> Result<()> {
         return Ok(());
     }
 
+    if cfg!(any(target_os = "linux", target_os = "macos")) {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.is_empty(), "{stderr}");
+        let payload = stdout_json(&output)?;
+        let expected_enforcement = if cfg!(target_os = "macos") {
+            "macos-experimental"
+        } else {
+            "linux-experimental"
+        };
+        if output.status.success() {
+            assert_eq!(payload["status"], "finished");
+            assert_eq!(payload["exit_code"], 0);
+            assert_eq!(payload["sandbox"]["enforced"], true);
+            assert_eq!(
+                payload["platform_plan"]["enforcement"],
+                expected_enforcement
+            );
+        } else {
+            assert_eq!(payload["error"]["data"]["code"], "BACKEND_UNAVAILABLE");
+            assert_eq!(
+                payload["error"]["data"]["backend"]["name"],
+                expected_backend_name()
+            );
+            assert_eq!(
+                payload["error"]["data"]["backend"]["status"],
+                expected_backend_status()
+            );
+            assert_eq!(
+                payload["error"]["data"]["backend"]["platform"],
+                expected_backend_platform()
+            );
+        }
+        assert_no_private_windows_setup_terms(&payload.to_string());
+        return Ok(());
+    }
+
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.is_empty(), "{stderr}");
     let payload = stdout_json(&output)?;
+    assert_eq!(
+        payload["error"]["data"]["code"],
+        "BACKEND_CAPABILITY_MISSING"
+    );
+    assert_eq!(payload["error"]["data"]["support"], "unsupported");
+    assert_eq!(
+        payload["error"]["data"]["backend"]["name"],
+        expected_backend_name()
+    );
+    assert_eq!(
+        payload["error"]["data"]["backend"]["status"],
+        expected_backend_status()
+    );
+    assert_eq!(
+        payload["error"]["data"]["backend"]["platform"],
+        expected_backend_platform()
+    );
+    assert_eq!(
+        payload["error"]["data"]["missing_features"],
+        json!([
+            "filesystem_policy",
+            "runtime_roots",
+            "runtime_environment",
+            "process_isolation",
+            "process_cleanup",
+            "direct_network_deny",
+            "network_disabled"
+        ])
+    );
     assert!(
         payload["error"]["data"]["reason"]
             .as_str()
@@ -910,6 +1216,7 @@ fn sandboxed_exec_cli_uses_backend_or_reports_unavailable() -> Result<()> {
             .contains("cannot enforce policy read-only"),
         "{payload}"
     );
+    assert_portable_fail_closed_preview(&payload["error"]["data"]["platform_plan"]);
     assert_no_private_windows_setup_terms(&payload.to_string());
 
     let audit_dir = tmp.path().join(".runseal").join("audit");

@@ -7,6 +7,7 @@ use std::io::{ErrorKind, Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::OnceLock;
 #[cfg(windows)]
 use std::sync::{Mutex, MutexGuard};
 use std::thread;
@@ -63,13 +64,57 @@ fn run_rpc(message: &str) -> Result<Output> {
 }
 
 fn python_bin() -> &'static str {
-    if cfg!(windows) { "python" } else { "python3" }
+    static PYTHON: OnceLock<String> = OnceLock::new();
+    PYTHON.get_or_init(resolve_python_bin)
+}
+
+fn resolve_python_bin() -> String {
+    if let Some(path) = env::var_os("RUNSEAL_TEST_PYTHON") {
+        return PathBuf::from(path).to_string_lossy().into_owned();
+    }
+    let output = match if cfg!(windows) {
+        Command::new("where.exe").arg("python").output()
+    } else {
+        Command::new("sh")
+            .args(["-c", "command -v python3"])
+            .output()
+    } {
+        Ok(output) => output,
+        Err(err) => panic!("failed to locate python: {err}"),
+    };
+    let stdout = match String::from_utf8(output.stdout) {
+        Ok(stdout) => stdout,
+        Err(err) => panic!("python path must be utf-8: {err}"),
+    };
+    match stdout.lines().next() {
+        Some(path) => path.to_string(),
+        None => panic!("python must exist"),
+    }
+}
+
+#[cfg(windows)]
+fn powershell_bin() -> &'static str {
+    static POWERSHELL: OnceLock<String> = OnceLock::new();
+    POWERSHELL.get_or_init(|| {
+        let output = match Command::new("where.exe").arg("powershell.exe").output() {
+            Ok(output) => output,
+            Err(err) => panic!("failed to locate powershell.exe: {err}"),
+        };
+        let stdout = match String::from_utf8(output.stdout) {
+            Ok(stdout) => stdout,
+            Err(err) => panic!("powershell path must be utf-8: {err}"),
+        };
+        match stdout.lines().next() {
+            Some(path) => path.to_string(),
+            None => panic!("powershell.exe must exist"),
+        }
+    })
 }
 
 fn platform_script_command(python_code: String, powershell_script: String) -> Vec<String> {
     if cfg!(windows) {
         vec![
-            "powershell".to_string(),
+            powershell_bin().to_string(),
             "-NoProfile".to_string(),
             "-Command".to_string(),
             powershell_script,
@@ -82,7 +127,7 @@ fn platform_script_command(python_code: String, powershell_script: String) -> Ve
 fn stdin_echo_command() -> Vec<String> {
     if cfg!(windows) {
         vec![
-            "powershell".to_string(),
+            powershell_bin().to_string(),
             "-NoProfile".to_string(),
             "-Command".to_string(),
             "$text = [Console]::In.ReadToEnd(); [Console]::Out.Write($text)".to_string(),
@@ -183,7 +228,7 @@ fn execute_messages_unlocked(params: Value) -> Result<Vec<Value>> {
 #[cfg(windows)]
 fn windows_conformance_lock() -> Result<MutexGuard<'static, ()>> {
     static LOCK: Mutex<()> = Mutex::new(());
-    // ponytail: global Windows sandbox state; use narrower locks if test throughput matters.
+    // RunSeal MVP: global Windows sandbox state; use narrower locks if test throughput matters.
     LOCK.lock()
         .map_err(|_| anyhow::anyhow!("windows conformance lock poisoned"))
 }

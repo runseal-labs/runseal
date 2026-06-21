@@ -97,6 +97,177 @@ impl PlatformSandboxPlan {
         }
     }
 
+    pub(super) fn portable_fail_closed_preview(
+        backend: &dyn SandboxBackend,
+        execution_id: &str,
+        _cwd: &Path,
+        policy: &SandboxPolicy,
+    ) -> Self {
+        let runtime_roots = [
+            "runtime_root".to_string(),
+            "profile_root".to_string(),
+            "synthetic_home".to_string(),
+            "temp_root".to_string(),
+        ];
+        Self {
+            backend: backend.name(),
+            backend_status: backend.status(),
+            platform: backend.platform(),
+            execution_id: execution_id.to_string(),
+            policy_id: policy.id.clone(),
+            policy_hash: policy.hash(),
+            sandbox_level: policy.sandbox_level.as_str(),
+            enforcement: "fail-closed-preview",
+            cwd: "workspace".to_string(),
+            runtime_root: Some(runtime_roots[0].clone()),
+            profile_root: Some(runtime_roots[1].clone()),
+            synthetic_home: Some(runtime_roots[2].clone()),
+            temp_root: Some(runtime_roots[3].clone()),
+            filesystem_read: vec!["workspace".to_string()],
+            filesystem_write: runtime_roots.to_vec(),
+            filesystem_deny: if policy.filesystem.deny.is_empty() {
+                Vec::new()
+            } else {
+                vec!["policy_denied_roots".to_string()]
+            },
+            filesystem_protected: protected_filesystem_labels(policy),
+            private_filesystem_deny: Vec::new(),
+            private_filesystem_rules: Vec::new(),
+            process_boundary: "platform-sandbox",
+            process_identity: "current-user",
+            process_cleanup: "process-tree",
+            private_process_sandbox_user_model: "none",
+            private_process_token: "none",
+            private_process_job: "none",
+            private_setup_account_name: "none",
+            private_setup_group_name: "none",
+            private_setup_identity_artifacts: "none",
+            private_setup_payload: None,
+            private_vendor_permission_profile: None,
+            network_mode: policy.network.mode.as_str(),
+            network_direct_egress: "deny",
+            network_managed_proxy: "none",
+            environment_inherit: policy.environment.inherit.clone(),
+            environment_scrub: policy.environment.scrub.clone(),
+            environment_proxy: policy.environment.proxy,
+            environment_runtime: Vec::new(),
+            required_backend_features: policy.required_backend_feature_names(),
+        }
+    }
+
+    pub(super) fn linux_experimental(
+        backend: &dyn SandboxBackend,
+        execution_id: &str,
+        cwd: &Path,
+        policy: &SandboxPolicy,
+    ) -> Self {
+        let runtime_root = cwd.join(".runseal").join("runtime").join(execution_id);
+        let profile_root = runtime_root.join("profile");
+        let synthetic_home = runtime_root.join("home");
+        let temp_root = runtime_root.join("tmp");
+        Self {
+            backend: backend.name(),
+            backend_status: backend.status(),
+            platform: backend.platform(),
+            execution_id: execution_id.to_string(),
+            policy_id: policy.id.clone(),
+            policy_hash: policy.hash(),
+            sandbox_level: policy.sandbox_level.as_str(),
+            enforcement: "linux-experimental",
+            cwd: path_string(cwd),
+            runtime_root: Some(path_string(&runtime_root)),
+            profile_root: Some(path_string(&profile_root)),
+            synthetic_home: Some(path_string(&synthetic_home)),
+            temp_root: Some(path_string(&temp_root)),
+            filesystem_read: vec!["workspace".to_string()],
+            filesystem_write: portable_experimental_write_labels(policy),
+            filesystem_deny: if policy.filesystem.deny.is_empty() {
+                Vec::new()
+            } else {
+                vec!["policy_denied_roots".to_string()]
+            },
+            filesystem_protected: protected_filesystem_labels(policy),
+            private_filesystem_deny: Vec::new(),
+            private_filesystem_rules: Vec::new(),
+            process_boundary: "platform-sandbox",
+            process_identity: "current-user",
+            process_cleanup: "process-tree",
+            private_process_sandbox_user_model: "none",
+            private_process_token: "none",
+            private_process_job: "none",
+            private_setup_account_name: "none",
+            private_setup_group_name: "none",
+            private_setup_identity_artifacts: "none",
+            private_setup_payload: None,
+            private_vendor_permission_profile: None,
+            network_mode: policy.network.mode.as_str(),
+            network_direct_egress: "deny",
+            network_managed_proxy: "none",
+            environment_inherit: policy.environment.inherit.clone(),
+            environment_scrub: policy.environment.scrub.clone(),
+            environment_proxy: policy.environment.proxy,
+            environment_runtime: vec![
+                (
+                    "RUNSEAL_HOME".to_string(),
+                    path_string(synthetic_home.as_path()),
+                ),
+                ("RUNSEAL_TMP".to_string(), path_string(temp_root.as_path())),
+                ("HOME".to_string(), path_string(synthetic_home.as_path())),
+                ("TMPDIR".to_string(), path_string(temp_root.as_path())),
+            ],
+            required_backend_features: policy.required_backend_feature_names(),
+        }
+    }
+
+    pub(super) fn linux_read_only_experimental(
+        backend: &dyn SandboxBackend,
+        execution_id: &str,
+        cwd: &Path,
+        policy: &SandboxPolicy,
+    ) -> Self {
+        Self::linux_experimental(backend, execution_id, cwd, policy)
+    }
+
+    pub(super) fn linux_workspace_write_experimental(
+        backend: &dyn SandboxBackend,
+        execution_id: &str,
+        cwd: &Path,
+        policy: &SandboxPolicy,
+    ) -> Self {
+        Self::linux_experimental(backend, execution_id, cwd, policy)
+    }
+
+    pub(super) fn linux_workspace_contained_experimental(
+        backend: &dyn SandboxBackend,
+        execution_id: &str,
+        cwd: &Path,
+        policy: &SandboxPolicy,
+    ) -> Self {
+        Self::linux_experimental(backend, execution_id, cwd, policy)
+    }
+
+    pub(super) fn macos_read_only_experimental(
+        backend: &dyn SandboxBackend,
+        execution_id: &str,
+        cwd: &Path,
+        policy: &SandboxPolicy,
+    ) -> Self {
+        let mut plan = Self::linux_experimental(backend, execution_id, cwd, policy);
+        plan.enforcement = "macos-experimental";
+        plan
+    }
+
+    pub(super) fn macos_workspace_write_experimental(
+        backend: &dyn SandboxBackend,
+        execution_id: &str,
+        cwd: &Path,
+        policy: &SandboxPolicy,
+    ) -> Self {
+        let mut plan = Self::linux_experimental(backend, execution_id, cwd, policy);
+        plan.enforcement = "macos-experimental";
+        plan
+    }
+
     pub fn json(&self) -> Value {
         json!({
             "backend": {
@@ -140,7 +311,6 @@ impl PlatformSandboxPlan {
             "required_backend_features": self.required_backend_features.clone(),
         })
     }
-
     fn setup_json(&self) -> Value {
         json!({
             "requires_runtime_roots": self.runtime_root.is_some(),
@@ -555,5 +725,22 @@ pub(super) fn protected_filesystem_labels(policy: &SandboxPolicy) -> Vec<&'stati
         labels.push("host_profile");
         labels.push("credential_roots");
     }
+    labels
+}
+
+fn portable_experimental_write_labels(policy: &SandboxPolicy) -> Vec<String> {
+    let mut labels = Vec::new();
+    if matches!(
+        policy.sandbox_level,
+        SandboxLevel::WorkspaceWrite | SandboxLevel::WorkspaceContained
+    ) {
+        labels.push("workspace".to_string());
+    }
+    labels.extend([
+        "runtime_root".to_string(),
+        "profile_root".to_string(),
+        "synthetic_home".to_string(),
+        "temp_root".to_string(),
+    ]);
     labels
 }

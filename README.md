@@ -12,13 +12,13 @@ RunSeal is **not** a cloud VM sandbox, a Docker Desktop replacement, or a microV
 
 `0.1.0` is the first technical-preview line for third-party integration. The repository contains a buildable CLI/RPC shell, standard policy profile normalization, canonical policy hashes, backend capability reporting, a Windows reference backend, `PlatformSandboxPlan` summaries, JSONL audit output, and black-box conformance tests.
 
-Current execution support is intentionally narrow: explicit `danger-full-access` runs as local, non-sandboxed execution. On Windows, sandboxed policies such as `read-only`, `workspace-contained`, and `workspace-write` execute through the reference backend. Other platforms still fail closed for sandboxed policies until a backend can enforce them.
+Current execution support is intentionally narrow: explicit `danger-full-access` runs as local, non-sandboxed execution. On Windows, sandboxed policies such as `read-only`, `workspace-contained`, and `workspace-write` execute through the reference backend. On macOS, `read-only` and `workspace-write` with `network.disabled` are experimental. On Linux, `read-only`, `workspace-write`, and `workspace-contained` with `network.disabled` are experimental and use the portable backend when its runtime guard is available. Other portable sandboxed policies still fail closed until a backend can enforce them.
 
 On Windows, sandbox requests include a `PlatformSandboxPlan` for runtime root, synthetic home, profile root, temp root, setup requirements, protected filesystem categories, process boundary state, network guard state, and policy path planning. Runtime root creation/cleanup, runtime environment redirects, process cleanup, filesystem enforcement, process isolation, and direct network deny/proxy guard enforcement are covered by the Windows reference path.
 
 The Windows enforcement baseline lives behind a dedicated Windows sandbox implementation. RunSeal-specific code should stay at the adapter layer: policy normalization, `PlatformSandboxPlan` mapping, audit events, capability reporting, and conformance gates. Low-level OS boundary, setup-helper, and command-runner code should not be reimplemented in the RunSeal adapter.
 
-On macOS and Linux, RunSeal reports explicit experimental/community skeleton backends. They support only explicit `danger-full-access` local execution until contributed backend implementations pass the shared conformance gates.
+On macOS, RunSeal reports experimental `read-only` and `workspace-write` paths while leaving other sandbox levels unsupported. On Linux, RunSeal reports experimental `read-only`, `workspace-write`, and `workspace-contained` paths. Portable capability probes are diagnostic only and do not promote unsupported capabilities.
 
 The protocol and policy version strings are `runseal.protocol/v1` and
 `runseal.policy/v1`. The Rust package version remains pre-`1.0`; breaking
@@ -29,6 +29,8 @@ The design lives in the RFC repository:
 
 - https://github.com/runseal-labs/rfcs
 - Protocol draft: https://github.com/runseal-labs/rfcs/blob/main/rfcs/0006-stable-execution-protocol.md
+- Escape model: https://github.com/runseal-labs/rfcs/blob/main/rfcs/0015-escape-definition-and-adversarial-conformance.md
+- Adversarial conformance: https://github.com/runseal-labs/rfcs/blob/main/rfcs/0016-adversarial-conformance-harness-and-case-format.md
 
 ## Quickstart
 
@@ -161,13 +163,16 @@ Integrators should start with one of these surfaces:
 
 - CLI: call `runseal exec --json` or `runseal exec --events` and handle structured errors.
 - JSON-RPC stdio: launch `runseal rpc --stdio`, call `getVersion`, then `getCapabilities`, then `execute`.
+- Service stdio: launch `runseal service --stdio` when one local process should own completed execution state across JSON-RPC requests.
 - Conformance: set `RUNSEAL_BIN=/path/to/runseal` and run the black-box tests in `tests/`.
 
 Clients should gate sandboxed execution on `getCapabilities` and fail closed
-when a requested feature is unsupported or setup is unavailable. Active
-cancellation is reserved for a later daemon or named-pipe transport; the stdio
-MVP validates `cancelExecution` but cannot interrupt an in-flight synchronous
-`execute` request.
+when a requested feature is unsupported or setup is unavailable. `getSetupStatus`
+reports setup readiness without changing setup state. `getServiceStatus` reports
+whether the current stdio control plane is direct or stateful service mode. The
+stdio service records completed executions for `getExecution`, event replay,
+summary listing through `listExecutions`, session disposal, and stable
+not-cancellable responses for already-finished executions.
 
 ## Running tests
 
@@ -184,6 +189,16 @@ On Windows, run the local dogfood smoke after rebuilding helper binaries:
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows-smoke.ps1
 ```
+
+On Linux or macOS, run the portable probe smoke after building `runseal`:
+
+```bash
+python3 scripts/portable-probe-smoke.py
+```
+
+The portable smoke checks diagnostic capability probes, experimental portable
+enforcement where available, and structured fail-closed behavior for unsupported
+sandboxed policies. It does not promote portable capabilities to supported.
 
 Windows reference-backend readiness requires the smoke check plus the Rust
 checks above to pass on a Windows host.
