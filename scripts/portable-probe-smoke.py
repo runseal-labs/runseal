@@ -67,6 +67,8 @@ def assert_probes(payload: dict, system: str) -> None:
     for probe in probes:
         if probe.get("status") != "unsupported" or probe.get("diagnostic_only") is not True:
             raise SystemExit(f"probe is not diagnostic-only unsupported: {probe}")
+        if not isinstance(probe.get("available"), bool):
+            raise SystemExit(f"probe availability must be boolean: {probe}")
 
 
 def assert_fail_closed(system: str) -> None:
