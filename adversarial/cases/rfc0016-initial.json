@@ -63,7 +63,9 @@
     "fixtures": [],
     "request": {
       "method": "execute",
-      "command": "echo unsafe && echo shell"
+      "command": "echo unsafe && echo shell",
+      "policy": "danger-full-access",
+      "network": "disabled"
     },
     "oracle": {
       "expected_result": "deny",
@@ -88,6 +90,8 @@
     "request": {
       "method": "execute",
       "command": ["python", "-c", "import sys; sys.stdin.read()"],
+      "policy": "danger-full-access",
+      "network": "disabled",
       "stdin": {"mode": "file", "path": "../outside/input.txt"}
     },
     "oracle": {
@@ -113,6 +117,8 @@
     "request": {
       "method": "execute",
       "command": ["python", "-c", "print('env')"],
+      "policy": "danger-full-access",
+      "network": "disabled",
       "env": {"SECRET_TOKEN": "value"}
     },
     "oracle": {
@@ -137,6 +143,8 @@
     "request": {
       "method": "execute",
       "command": ["python", "-c", "print('metadata')"],
+      "policy": "danger-full-access",
+      "network": "disabled",
       "metadata": {"Authorization": "value", "safe": "visible"}
     },
     "oracle": {
