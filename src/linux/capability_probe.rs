@@ -16,7 +16,37 @@ pub(crate) fn capability_probes() -> Value {
         },
         {
             "capability": "process_isolation",
+            "mechanism": "mount_namespaces",
+            "status": "unsupported",
+            "diagnostic_only": true
+        },
+        {
+            "capability": "process_isolation",
+            "mechanism": "pid_namespaces",
+            "status": "unsupported",
+            "diagnostic_only": true
+        },
+        {
+            "capability": "network_disabled",
+            "mechanism": "network_namespaces",
+            "status": "unsupported",
+            "diagnostic_only": true
+        },
+        {
+            "capability": "process_isolation",
+            "mechanism": "seccomp",
+            "status": "unsupported",
+            "diagnostic_only": true
+        },
+        {
+            "capability": "process_isolation",
             "mechanism": "bubblewrap",
+            "status": "unsupported",
+            "diagnostic_only": true
+        },
+        {
+            "capability": "process_isolation",
+            "mechanism": "unprivileged_user_namespaces",
             "status": "unsupported",
             "diagnostic_only": true
         }
