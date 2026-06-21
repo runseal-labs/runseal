@@ -499,6 +499,33 @@
   },
   {
     "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.audit.missing-fail-closed-event.v1",
+    "title": "Fail-closed outcomes must be visible in audit and events",
+    "primary_class": "audit",
+    "secondary_classes": ["policy"],
+    "capabilities_under_test": ["audit_jsonl", "policy_epoch"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "read-only",
+    "network_mode": "proxy",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('fail closed')"],
+      "policy": {"sandbox_level": "read-only"},
+      "network": "proxy"
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["audit_contains_event_type", "event_contains_type"]
+    },
+    "public_report_labels": ["protocol_contract"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
     "case_id": "adv.audit.audit-path-traversal.v1",
     "title": "Audit lookup must not accept path parameters",
     "primary_class": "audit",
