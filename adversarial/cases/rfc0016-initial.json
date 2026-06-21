@@ -578,6 +578,29 @@
   },
   {
     "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.audit.audit-lookup-by-path.v1",
+    "title": "Audit lookup must reject path-like identifiers",
+    "primary_class": "audit",
+    "capabilities_under_test": ["audit_jsonl"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "danger-full-access",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "request": {
+      "method": "getAuditEvents",
+      "execution_id": "../audit/session.jsonl"
+    },
+    "oracle": {
+      "expected_result": "deny",
+      "max_severity": "S0",
+      "audit": {"required": false},
+      "events": {"required": false}
+    },
+    "public_report_labels": ["protocol_contract"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
     "case_id": "adv.audit.policy-hash-consistency.v1",
     "title": "Audit events must preserve the execution policy hash",
     "primary_class": "audit",
