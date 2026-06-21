@@ -801,5 +801,36 @@
       "forbidden_side_effects": ["network_connection_absent"]
     },
     "public_report_labels": ["network_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.network.proxy-env-override.v1",
+    "title": "Proxy environment overrides must not bypass managed proxy",
+    "primary_class": "network",
+    "capabilities_under_test": ["network_proxy", "managed_proxy"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "workspace-contained",
+    "network_mode": "proxy",
+    "fixtures": [{"kind": "environment", "name": "HTTP_PROXY", "value": "http://127.0.0.1:9"}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "import urllib.request; urllib.request.urlopen('http://example.invalid', timeout=1).read()"],
+      "policy": {
+        "version": "runseal.policy/v1",
+        "sandbox_level": "workspace-contained",
+        "network": {"mode": "proxy"},
+        "environment": {"proxy": true}
+      },
+      "network": "proxy"
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["network_connection_absent", "event_not_contains_private_detail"]
+    },
+    "public_report_labels": ["network_conformance"]
   }
 ]
