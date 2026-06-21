@@ -239,6 +239,45 @@ fn adversarial_program_resolution_confusion_case_runs() -> Result<()> {
 }
 
 #[test]
+fn adversarial_audit_metadata_redaction_cases_run() -> Result<()> {
+    let cases = load_cases()?;
+    let audit_cases = cases.iter().filter(|case| {
+        matches!(
+            case["case_id"].as_str(),
+            Some(
+                "adv.audit.secret-metadata-redaction.v1"
+                    | "adv.audit.authorization-header-leakage.v1"
+            )
+        ) && string_array_contains(&case["platforms"], current_platform())
+            && string_array_contains(&case["backend_status"], "local-baseline")
+    });
+
+    let mut ran = 0;
+    for case in audit_cases {
+        ran += 1;
+        let tmp = TempDir::new()?;
+        let response = run_case_with_command(case, tmp.path(), harmless_command())?;
+        let result = response["result"].clone();
+        assert_eq!(result["status"], "finished", "{response}");
+        let audit_path = result["audit_path"]
+            .as_str()
+            .context("audit redaction case must return audit_path")?;
+        let audit_jsonl = fs::read_to_string(tmp.path().join(audit_path))?;
+
+        assert!(audit_jsonl.contains("[REDACTED]"));
+        assert!(audit_jsonl.contains("\"safe\":\"visible\""));
+        assert!(!audit_jsonl.contains("Bearer secret"));
+        assert!(!audit_jsonl.contains("\"Authorization\":\"value\""));
+        let result = emit_result(case, "audit_redacted", true)?;
+        assert_eq!(result["status"], "passed", "{result}");
+        assert_public_safe(&result.to_string())?;
+    }
+
+    assert!(ran >= 2, "audit metadata redaction cases must run");
+    Ok(())
+}
+
+#[test]
 fn adversarial_harness_materializes_file_fixtures_before_execution() -> Result<()> {
     let cases = load_cases()?;
     let mut materialized = 0;
@@ -463,7 +502,15 @@ fn unsupported_fixture_result(case: &Value, reason: &str) -> Result<Value> {
 
 fn severity_for_result(observed_result: &str, public_audit_visible: bool) -> &'static str {
     match (observed_result, public_audit_visible) {
-        ("policy_rejected" | "deny" | "fail_closed" | "deny_or_fail_closed", true) => "S0",
+        (
+            "allow_no_side_effect_outside_policy"
+            | "audit_redacted"
+            | "policy_rejected"
+            | "deny"
+            | "fail_closed"
+            | "deny_or_fail_closed",
+            true,
+        ) => "S0",
         (_, false) => "S4",
         _ => "S3",
     }
@@ -538,6 +585,20 @@ fn materialize_file_fixture(root: &Path, fixture: &Value) -> Result<PathBuf> {
 }
 
 fn run_case(case: &Value, cwd: &Path) -> Result<Value> {
+    run_case_with_overrides(case, cwd, |_| {})
+}
+
+fn run_case_with_command(case: &Value, cwd: &Path, command: Value) -> Result<Value> {
+    run_case_with_overrides(case, cwd, |params| {
+        params.insert("command".to_string(), command);
+    })
+}
+
+fn run_case_with_overrides(
+    case: &Value,
+    cwd: &Path,
+    apply: impl FnOnce(&mut serde_json::Map<String, Value>),
+) -> Result<Value> {
     let request = case["request"]
         .as_object()
         .context("case.request must be an object")?;
@@ -548,6 +609,7 @@ fn run_case(case: &Value, cwd: &Path) -> Result<Value> {
     let mut params = request.clone();
     params.remove("method");
     params.insert("cwd".to_string(), json!(cwd));
+    apply(&mut params);
 
     rpc_response(&rpc_request(method, Value::Object(params)))
 }
