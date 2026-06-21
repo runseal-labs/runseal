@@ -145,6 +145,16 @@ fn adversarial_harness_inspects_file_side_effects() -> Result<()> {
         &tmp.path().join("missing.txt"),
         None
     )?);
+    assert!(inspect_file_side_effect(
+        "path_not_accessible",
+        &tmp.path().join("missing.txt"),
+        None
+    )?);
+    assert!(!inspect_file_side_effect(
+        "path_not_accessible",
+        &path,
+        pre_state.as_ref()
+    )?);
     Ok(())
 }
 
@@ -186,6 +196,7 @@ fn inspect_file_side_effect(
     match kind {
         "file_exists" => Ok(path.exists()),
         "file_not_exists" => Ok(!path.exists()),
+        "path_not_accessible" => Ok(fs::metadata(path).is_err()),
         "path_not_modified" => {
             let Some(pre_state) = pre_state else {
                 return Ok(!path.exists());
