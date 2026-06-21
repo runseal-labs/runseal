@@ -526,6 +526,33 @@
   },
   {
     "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.audit.event-ordering-drift.v1",
+    "title": "Audit and execution events must preserve ordering",
+    "primary_class": "audit",
+    "secondary_classes": ["policy"],
+    "capabilities_under_test": ["audit_jsonl", "policy_epoch"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "danger-full-access",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('event order')"],
+      "policy": "danger-full-access",
+      "network": "disabled"
+    },
+    "oracle": {
+      "expected_result": "allow_no_side_effect_outside_policy",
+      "max_severity": "S0",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["event_order_consistent", "policy_hash_consistent", "policy_epoch_consistent"]
+    },
+    "public_report_labels": ["protocol_contract"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
     "case_id": "adv.audit.audit-path-traversal.v1",
     "title": "Audit lookup must not accept path parameters",
     "primary_class": "audit",
