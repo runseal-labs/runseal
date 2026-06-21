@@ -76,7 +76,7 @@ fn run_rpc_with_env(message: &str, envs: &[(&str, &str)]) -> Result<Output> {
 #[cfg(windows)]
 fn windows_protocol_lock() -> Result<MutexGuard<'static, ()>> {
     static LOCK: Mutex<()> = Mutex::new(());
-    // ponytail: global Windows sandbox state; split by policy if protocol test time matters.
+    // RunSeal MVP: global Windows sandbox state; split by policy if protocol test time matters.
     LOCK.lock()
         .map_err(|_| anyhow::anyhow!("windows protocol lock poisoned"))
 }

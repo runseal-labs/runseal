@@ -33,7 +33,7 @@ pub(crate) fn execute_command(
     let ids = new_execution_ids();
     let policy_id = policy.id.clone();
     let policy_hash = policy.hash();
-    // ponytail: stdio MVP has no mutable daemon epoch; promote to a real epoch store when concurrent policy transitions exist.
+    // RunSeal MVP: stdio has no mutable daemon epoch; promote to a real epoch store when concurrent policy transitions exist.
     let policy_epoch = policy_hash.clone();
     let stdin_audit = stdin_audit_json(&stdin);
     let env_keys = env.keys();
