@@ -668,6 +668,10 @@ fn service_stdio_lists_execution_summaries() -> Result<()> {
                 "command": [python_bin(), "-c", "print('secret-output')"],
                 "cwd": tmp.path(),
                 "policy": "danger-full-access",
+                "metadata": {
+                    "agent_id": "agent-visible",
+                    "Authorization": "secret-token"
+                }
             }),
         )
         .as_bytes(),
@@ -693,8 +697,11 @@ fn service_stdio_lists_execution_summaries() -> Result<()> {
     assert_rfc3339_timestamp(&summary["finished_at"])?;
     assert!(summary.get("stdout").is_none());
     assert!(summary.get("stderr").is_none());
+    assert!(summary.get("metadata").is_none());
     assert!(summary.get("platform_plan").is_none());
     assert!(!summary.to_string().contains("secret-output"));
+    assert!(!summary.to_string().contains("secret-token"));
+    assert!(!summary.to_string().contains("agent-visible"));
 
     drop(stdin);
     let status = child.wait().context("failed to wait for runseal service")?;
