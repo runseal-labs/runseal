@@ -132,7 +132,25 @@ impl SandboxBackend for LinuxCommunityBackend {
         cwd: &Path,
         policy: &SandboxPolicy,
     ) -> Result<PlatformSandboxPlan, BackendError> {
-        compile_local_execution_or_unsupported(self, execution_id, cwd, policy)
+        if policy.allows_local_execution() {
+            Ok(PlatformSandboxPlan::local_execution(
+                self,
+                execution_id,
+                cwd,
+                policy,
+            ))
+        } else {
+            Err(BackendError::unsupported_with_plan(
+                self,
+                policy,
+                Some(PlatformSandboxPlan::portable_fail_closed_preview(
+                    self,
+                    execution_id,
+                    cwd,
+                    policy,
+                )),
+            ))
+        }
     }
 
     fn execute_plan(

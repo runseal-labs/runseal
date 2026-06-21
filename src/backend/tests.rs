@@ -488,6 +488,26 @@ fn linux_skeleton_fails_closed_for_sandboxed_policy() {
     assert_eq!(err.code, "BACKEND_CAPABILITY_MISSING");
     assert_eq!(err.support, "unsupported");
     assert_eq!(err.backend, LinuxCommunityBackend.name());
+    let plan = err
+        .plan
+        .as_deref()
+        .expect("Linux failure must include plan");
+    assert_eq!(plan.backend, LinuxCommunityBackend.name());
+    assert_eq!(plan.platform, "linux");
+    assert_eq!(plan.enforcement, "fail-closed-preview");
+    assert_eq!(plan.sandbox_level, "read-only");
+    assert!(
+        plan.runtime_root
+            .as_deref()
+            .unwrap()
+            .ends_with("exec_linux_read_only")
+    );
+    assert_eq!(plan.process_boundary, "platform-sandbox");
+    assert_eq!(plan.network_direct_egress, "deny");
+    let public_plan = plan.json().to_string();
+    assert!(!public_plan.contains("bubblewrap"));
+    assert!(!public_plan.contains("landlock"));
+    assert!(!public_plan.contains("namespace"));
 }
 
 #[test]
