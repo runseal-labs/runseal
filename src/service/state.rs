@@ -52,10 +52,7 @@ impl ServiceState {
     }
 
     pub(super) fn dispose_session(&mut self, session_id: &str) -> usize {
-        if self.sessions.dispose(session_id) {
-            self.executions.remove_session(session_id)
-        } else {
-            0
-        }
+        self.sessions.dispose(session_id);
+        0
     }
 }
