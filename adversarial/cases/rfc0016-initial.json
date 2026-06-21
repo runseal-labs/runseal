@@ -473,6 +473,34 @@
   },
   {
     "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.audit.proxy-credential-leakage.v1",
+    "title": "Proxy credentials must be redacted from audit",
+    "primary_class": "audit",
+    "secondary_classes": ["network"],
+    "capabilities_under_test": ["audit_jsonl", "network_proxy", "managed_proxy"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "danger-full-access",
+    "network_mode": "proxy",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('proxy audit')"],
+      "policy": "danger-full-access",
+      "network": "proxy",
+      "metadata": {"proxy_url": "http://user:secret@example.invalid:8080", "safe": "visible"}
+    },
+    "oracle": {
+      "expected_result": "audit_redacted",
+      "max_severity": "S0",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["audit_not_contains_secret", "event_not_contains_private_detail"]
+    },
+    "public_report_labels": ["protocol_contract", "network_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
     "case_id": "adv.audit.missing-deny-event.v1",
     "title": "Policy denials must be visible in audit and events",
     "primary_class": "audit",
