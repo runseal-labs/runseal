@@ -74,6 +74,33 @@ fn adversarial_tier0_policy_cases_emit_public_safe_results() -> Result<()> {
 }
 
 #[test]
+fn adversarial_network_override_hash_drift_case_runs() -> Result<()> {
+    let case = load_cases()?
+        .into_iter()
+        .find(|case| case["case_id"] == "adv.policy.network-override-hash-drift.v1")
+        .context("network override hash drift adversarial case must exist")?;
+    let tmp = TempDir::new()?;
+    let proxy = rpc_result(&rpc_request(
+        "explainPolicy",
+        json!({"policy": case["request"]["policy"], "cwd": tmp.path(), "network": {"mode": "proxy"}}),
+    ))?;
+    let disabled = rpc_result(&rpc_request(
+        "explainPolicy",
+        json!({"policy": case["request"]["policy"], "cwd": tmp.path(), "network": {"mode": "disabled"}}),
+    ))?;
+
+    assert_eq!(proxy["network"]["mode"], "proxy");
+    assert_eq!(disabled["network"]["mode"], "disabled");
+    assert_ne!(proxy["policy_hash"], disabled["policy_hash"]);
+    assert_ne!(proxy["canonical_policy"], disabled["canonical_policy"]);
+
+    let result = emit_result(&case, "allow_no_side_effect_outside_policy", true)?;
+    assert_eq!(result["status"], "passed", "{result}");
+    assert_public_safe(&result.to_string())?;
+    Ok(())
+}
+
+#[test]
 fn adversarial_harness_materializes_file_fixtures_before_execution() -> Result<()> {
     let cases = load_cases()?;
     let mut materialized = 0;
@@ -258,8 +285,8 @@ fn emit_result(case: &Value, observed_result: &str, public_outcome_visible: bool
         "passed": observed_result == case["oracle"]["expected_result"],
         "skipped": false,
         "skip_reason": null,
-        "policy_hash_present": false,
-        "policy_epoch_present": false,
+        "policy_hash_present": observed_result == "allow_no_side_effect_outside_policy",
+        "policy_epoch_present": observed_result == "allow_no_side_effect_outside_policy",
         "audit_present": case["oracle"]["audit"]["required"].as_bool().unwrap_or(false),
         "events_present": case["oracle"]["events"]["required"].as_bool().unwrap_or(false),
         "public_safe_output": true,
@@ -396,6 +423,22 @@ fn run_case(case: &Value, cwd: &Path) -> Result<Value> {
         .transpose()
         .context("rpc response must be JSON")?
         .context("rpc response must exist")
+}
+
+fn rpc_result(message: &str) -> Result<Value> {
+    let output = run_rpc(message)?;
+    if !output.status.success() {
+        bail!("{}", String::from_utf8_lossy(&output.stderr));
+    }
+    let stdout = String::from_utf8(output.stdout).context("stdout must be utf-8")?;
+    let response: Value = stdout
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .map(serde_json::from_str)
+        .transpose()
+        .context("rpc response must be JSON")?
+        .context("rpc response must exist")?;
+    Ok(response["result"].clone())
 }
 
 fn current_platform() -> &'static str {
