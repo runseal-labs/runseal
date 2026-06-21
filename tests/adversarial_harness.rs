@@ -97,6 +97,27 @@ fn adversarial_harness_materializes_file_fixtures_before_execution() -> Result<(
 }
 
 #[test]
+fn adversarial_harness_cleans_fixture_workspace() -> Result<()> {
+    let case = load_cases()?
+        .into_iter()
+        .find(|case| case["case_id"] == "adv.filesystem.parent-traversal.v1")
+        .context("file fixture adversarial case must exist")?;
+    let fixture = case["fixtures"]
+        .as_array()
+        .and_then(|fixtures| fixtures.first())
+        .context("case must include a file fixture")?;
+    let workspace;
+    {
+        let tmp = TempDir::new()?;
+        workspace = tmp.path().to_path_buf();
+        let path = materialize_file_fixture(tmp.path(), fixture)?;
+        assert!(path.exists());
+    }
+    assert!(!workspace.exists());
+    Ok(())
+}
+
+#[test]
 fn adversarial_harness_inspects_file_side_effects() -> Result<()> {
     let tmp = TempDir::new()?;
     let path = tmp.path().join("tracked.txt");
