@@ -159,6 +159,33 @@
   },
   {
     "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.policy.policy-hash-spoof.v1",
+    "title": "Client supplied policy hashes must not spoof policy binding",
+    "primary_class": "policy",
+    "secondary_classes": ["audit"],
+    "capabilities_under_test": ["policy_epoch", "audit_jsonl"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "danger-full-access",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('policy hash')"],
+      "policy": "danger-full-access",
+      "network": "disabled",
+      "policy_hash": "runseal_policy_hash_spoof"
+    },
+    "oracle": {
+      "expected_result": "deny",
+      "max_severity": "S0",
+      "audit": {"required": false},
+      "events": {"required": false}
+    },
+    "public_report_labels": ["protocol_contract"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
     "case_id": "adv.execution_injection.argv-shell-metacharacters.v1",
     "title": "Command strings must not imply shell execution",
     "primary_class": "execution_injection",
