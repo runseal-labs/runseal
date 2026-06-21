@@ -4,10 +4,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub(crate) fn payload() -> Value {
-    let read_only_status = bubblewrap_read_only_status();
     json!({
-        "sandboxed_execution": read_only_status,
-        "filesystem_enforcement": read_only_status,
+        "sandboxed_execution": "unsupported",
+        "filesystem_enforcement": "unsupported",
         "network_enforcement": "unsupported",
         "runtime": {
             "user_namespace": file_status("/proc/self/ns/user"),
@@ -20,21 +19,13 @@ pub(crate) fn payload() -> Value {
             "landlock": file_status("/sys/kernel/security/landlock"),
             "landlock_abi": landlock_abi(),
             "bubblewrap": path_status("bwrap"),
-            "bubblewrap_read_only_candidate": bubblewrap_read_only_candidate_status(),
+        "bubblewrap_read_only_candidate": bubblewrap_read_only_candidate_status(),
             "cgroup_version": cgroup_version(),
             "user_namespace_quota": positive_sysctl_status("/proc/sys/user/max_user_namespaces"),
             "max_user_namespaces": positive_sysctl_status("/proc/sys/user/max_user_namespaces"),
             "unprivileged_user_namespace": unprivileged_user_namespace_status(),
         },
     })
-}
-
-fn bubblewrap_read_only_status() -> &'static str {
-    if bubblewrap_read_only_candidate_available() {
-        "experimental"
-    } else {
-        "unsupported"
-    }
 }
 
 fn file_status(path: &str) -> &'static str {
@@ -141,7 +132,7 @@ fn cgroup_version_from_proc_self_cgroup(value: &str) -> Option<u64> {
     })
 }
 
-pub(crate) fn bubblewrap_read_only_candidate_available() -> bool {
+fn bubblewrap_read_only_candidate_available() -> bool {
     bubblewrap_read_only_candidate_status_for(
         path_status("bwrap"),
         file_status("/proc/self/ns/user"),

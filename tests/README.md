@@ -21,7 +21,7 @@ The tests are black-box by design:
   without exposing private Windows account or setup identities.
 - Windows hosts select the Windows reference backend and run supported sandbox levels through the shared conformance tests.
 - macOS and Linux hosts select explicit experimental/community backends and still fail closed for unsupported sandbox levels.
-- Linux hosts may run `read-only` as experimental when the bubblewrap probe gate is available.
+- Linux hosts report runtime probes but still fail closed for sandboxed policies until promotion.
 - Windows sandbox plans include runtime root, synthetic home, setup requirements, protected filesystem categories, process boundary state, and network guard planning.
 - Windows filesystem ACL setup must bind rules to a single sandbox user restricted process identity before any rule can be applied.
 - Windows single-identity freeze gates cover policy epoch immutability,

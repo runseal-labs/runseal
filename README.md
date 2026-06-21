@@ -12,13 +12,13 @@ RunSeal is **not** a cloud VM sandbox, a Docker Desktop replacement, or a microV
 
 `0.1.0` is the first technical-preview line for third-party integration. The repository contains a buildable CLI/RPC shell, standard policy profile normalization, canonical policy hashes, backend capability reporting, a Windows reference backend, `PlatformSandboxPlan` summaries, JSONL audit output, and black-box conformance tests.
 
-Current execution support is intentionally narrow: explicit `danger-full-access` runs as local, non-sandboxed execution. On Windows, sandboxed policies such as `read-only`, `workspace-contained`, and `workspace-write` execute through the reference backend. On Linux, `read-only` may be reported and executed as experimental when the bubblewrap probe gate is available. Other sandboxed policies on non-Windows platforms still fail closed until a backend can enforce them.
+Current execution support is intentionally narrow: explicit `danger-full-access` runs as local, non-sandboxed execution. On Windows, sandboxed policies such as `read-only`, `workspace-contained`, and `workspace-write` execute through the reference backend. On non-Windows platforms, sandboxed policies still fail closed until a backend can enforce them.
 
 On Windows, sandbox requests include a `PlatformSandboxPlan` for runtime root, synthetic home, profile root, temp root, setup requirements, protected filesystem categories, process boundary state, network guard state, and policy path planning. Runtime root creation/cleanup, runtime environment redirects, process cleanup, filesystem enforcement, process isolation, and direct network deny/proxy guard enforcement are covered by the Windows reference path.
 
 The Windows enforcement baseline lives behind a dedicated Windows sandbox implementation. RunSeal-specific code should stay at the adapter layer: policy normalization, `PlatformSandboxPlan` mapping, audit events, capability reporting, and conformance gates. Low-level OS boundary, setup-helper, and command-runner code should not be reimplemented in the RunSeal adapter.
 
-On macOS and Linux, RunSeal reports explicit experimental/community backends. macOS currently supports only explicit `danger-full-access` local execution. Linux also has an experimental bubblewrap `read-only` path when the runtime probe gate passes; `workspace-write`, `workspace-contained`, and network enforcement remain unsupported until they pass shared conformance gates.
+On macOS and Linux, RunSeal reports explicit experimental/community backends. macOS and Linux currently support only explicit `danger-full-access` local execution; sandboxed filesystem and network enforcement remain unsupported until they pass shared conformance gates.
 
 The protocol and policy version strings are `runseal.protocol/v1` and
 `runseal.policy/v1`. The Rust package version remains pre-`1.0`; breaking

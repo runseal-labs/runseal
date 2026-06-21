@@ -264,14 +264,8 @@ fn expected_status(supported: bool) -> &'static str {
     }
 }
 
-fn expected_read_only_status(payload: &Value) -> &'static str {
-    if cfg!(target_os = "linux")
-        && payload["capability_probes"]["runtime"]["bubblewrap_read_only_candidate"] == "available"
-    {
-        "experimental"
-    } else {
-        expected_status(expected_windows_sandbox_supported())
-    }
+fn expected_read_only_status(_payload: &Value) -> &'static str {
+    expected_status(expected_windows_sandbox_supported())
 }
 
 fn expected_missing_features(additional: &[&'static str]) -> Vec<&'static str> {
@@ -411,15 +405,8 @@ fn assert_portable_capability_probe_contract(payload: &Value) {
     }
 
     let probes = &payload["capability_probes"];
-    let expected_filesystem_probe = if cfg!(target_os = "linux")
-        && probes["runtime"]["bubblewrap_read_only_candidate"] == "available"
-    {
-        "experimental"
-    } else {
-        "unsupported"
-    };
-    assert_eq!(probes["sandboxed_execution"], expected_filesystem_probe);
-    assert_eq!(probes["filesystem_enforcement"], expected_filesystem_probe);
+    assert_eq!(probes["sandboxed_execution"], "unsupported");
+    assert_eq!(probes["filesystem_enforcement"], "unsupported");
     assert_eq!(probes["network_enforcement"], "unsupported");
     let serialized = payload.to_string();
     assert!(!serialized.contains("/proc/"));
@@ -5193,31 +5180,6 @@ fn sandboxed_policy_uses_platform_backend_or_reports_unavailable() -> Result<()>
         return Ok(());
     }
 
-    if cfg!(target_os = "linux") && response.get("result").is_some() {
-        assert_eq!(response["result"]["status"], "finished");
-        assert_eq!(response["result"]["exit_code"], 0);
-        assert_eq!(response["result"]["sandbox"]["enforced"], true);
-        assert_eq!(
-            response["result"]["platform_plan"]["enforcement"],
-            "linux-read-only-sandbox"
-        );
-        assert_eq!(
-            response["result"]["platform_plan"]["process"]["boundary"],
-            "sandboxed-process"
-        );
-        assert_eq!(
-            response["result"]["platform_plan"]["network"]["direct_egress"],
-            "deny"
-        );
-        assert_no_private_linux_backend_terms(response);
-        let audit_path = response["result"]["audit_path"]
-            .as_str()
-            .expect("successful sandboxed execution must return audit_path");
-        let audit_events = read_audit_events(tmp.path(), audit_path)?;
-        assert_no_private_linux_backend_terms(&json!(audit_events));
-        return Ok(());
-    }
-
     assert_eq!(
         response["error"]["data"]["code"],
         "BACKEND_CAPABILITY_MISSING"
@@ -5242,11 +5204,11 @@ fn sandboxed_policy_uses_platform_backend_or_reports_unavailable() -> Result<()>
             .any(|event| event["type"] == "sandbox.backend_capability"
                 && event["decision"] == "unsupported")
     );
-    assert!(
-        messages
-            .iter()
-            .all(|message| message.get("method") != Some(&json!("event")))
-    );
+    assert!(messages.iter().any(|message| {
+        message.get("method") == Some(&json!("event"))
+            && message["params"]["type"] == "sandbox.backend_capability"
+            && message["params"]["decision"] == "unsupported"
+    }));
     Ok(())
 }
 
