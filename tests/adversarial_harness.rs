@@ -61,6 +61,7 @@ fn adversarial_tier0_policy_cases_emit_public_safe_results() -> Result<()> {
         } else {
             "harness_error"
         };
+        let severity = severity_for_result(observed_result, true);
         let result = json!({
             "schema_version": "runseal.adversarial-result/v1",
             "case_id": case["case_id"],
@@ -72,7 +73,7 @@ fn adversarial_tier0_policy_cases_emit_public_safe_results() -> Result<()> {
             "network_mode": case["network_mode"],
             "expected_result": case["oracle"]["expected_result"],
             "observed_result": observed_result,
-            "severity": if observed_result == "policy_rejected" { "S0" } else { "S4" },
+            "severity": severity,
             "passed": observed_result == "policy_rejected",
             "skipped": false,
             "skip_reason": null,
@@ -189,12 +190,29 @@ fn adversarial_harness_maps_file_oracles_to_inspection() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn adversarial_harness_computes_result_severity() {
+    assert_eq!(severity_for_result("policy_rejected", true), "S0");
+    assert_eq!(severity_for_result("deny", true), "S0");
+    assert_eq!(severity_for_result("fail_closed", true), "S0");
+    assert_eq!(severity_for_result("harness_error", true), "S3");
+    assert_eq!(severity_for_result("policy_rejected", false), "S4");
+}
+
 fn load_cases() -> Result<Vec<Value>> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("adversarial/cases/rfc0016-initial.json");
     let manifest =
         fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
     serde_json::from_str(&manifest)
         .with_context(|| format!("manifest must be JSON: {}", path.display()))
+}
+
+fn severity_for_result(observed_result: &str, public_audit_visible: bool) -> &'static str {
+    match (observed_result, public_audit_visible) {
+        ("policy_rejected" | "deny" | "fail_closed" | "deny_or_fail_closed", true) => "S0",
+        (_, false) => "S4",
+        _ => "S3",
+    }
 }
 
 #[derive(Clone, Copy)]
