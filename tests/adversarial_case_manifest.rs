@@ -419,6 +419,8 @@ fn adversarial_result_schema_requires_public_skip_reason() -> Result<()> {
     assert!(validate_result(&result).is_err());
     result["case_id"] = json!("adv.unknown.case.v1");
     assert!(validate_result(&result).is_err());
+    result["case_id"] = json!("adv.audit.audit/path.v1");
+    assert!(validate_result(&result).is_err());
     result["case_id"] = json!("adv.audit.audit-path-traversal.v1");
 
     result["capabilities_under_test"] = json!(["audit_jsonl", "audit_jsonl"]);
@@ -662,6 +664,11 @@ fn case_id_class(case_id: &str) -> Result<&str> {
         || case_id_parts[3] != "v1"
     {
         bail!("case_id must use adv.<class>.<name>.v1 format: {case_id}");
+    }
+    if !case_id_parts[2].bytes().all(|byte| {
+        byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
+    }) {
+        bail!("case_id name must contain only lowercase ASCII letters, digits, -, or _: {case_id}");
     }
     Ok(case_id_parts[1])
 }
