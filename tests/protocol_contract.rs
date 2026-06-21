@@ -1605,6 +1605,41 @@ fn service_stdio_keeps_failed_execution_state() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn service_stdio_parse_errors_do_not_close_loop() -> Result<()> {
+    let bin = require_runseal_bin()?;
+    let mut child = Command::new(bin)
+        .args(["service", "--stdio"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to spawn runseal service")?;
+    let mut stdin = child.stdin.take().context("service stdin unavailable")?;
+    let mut stdout = BufReader::new(child.stdout.take().context("service stdout unavailable")?);
+
+    stdin.write_all(b"{not json\n")?;
+    let mut line = String::new();
+    stdout
+        .read_line(&mut line)
+        .context("failed to read parse error response")?;
+    let parse_error: Value =
+        serde_json::from_str(&line).context("parse error line was not JSON")?;
+    assert_eq!(parse_error["id"], Value::Null);
+    assert_eq!(parse_error["error"]["code"], -32700);
+    assert_eq!(parse_error["error"]["data"]["code"], "INVALID_REQUEST");
+
+    stdin.write_all(rpc_request_with_id(1, "getServiceStatus", json!({})).as_bytes())?;
+    let (_, status_response) = read_rpc_response(&mut stdout, 1)?;
+    assert_eq!(status_response["result"]["mode"], "service");
+    assert_eq!(status_response["result"]["stateful"], true);
+
+    drop(stdin);
+    let status = child.wait().context("failed to wait for runseal service")?;
+    assert!(status.success());
+    Ok(())
+}
+
 fn read_rpc_response(
     stdout: &mut BufReader<impl std::io::Read>,
     id: u64,
