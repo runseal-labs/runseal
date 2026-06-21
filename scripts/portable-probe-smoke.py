@@ -87,6 +87,8 @@ def assert_linux_read_only(payload: dict) -> None:
         raise SystemExit(f"Linux network.disabled must be experimental: {payload}")
     if payload.get("sandbox_levels", {}).get("workspace-write") != "experimental":
         raise SystemExit(f"Linux workspace-write must be experimental: {payload}")
+    if payload.get("sandbox_levels", {}).get("workspace-contained") != "experimental":
+        raise SystemExit(f"Linux workspace-contained must be experimental: {payload}")
 
     target = "read-only-write.txt"
     command = shutil.which("python3") or shutil.which("python") or sys.executable
@@ -166,7 +168,56 @@ def assert_linux_workspace_write(command: str) -> None:
             )
             if result.get("exit_code") == 0 or target.exists():
                 raise SystemExit(f"Linux workspace-write did not block write to {target}: {result}")
-        assert_portable_workspace_contained_fail_closed("Linux", command)
+        assert_linux_workspace_contained(command)
+
+
+def assert_linux_workspace_contained(command: str) -> None:
+    with tempfile.TemporaryDirectory(prefix="runseal-linux-workspace-contained-") as cwd:
+        workspace = Path(cwd)
+        inside = workspace / "inside.txt"
+        outside = workspace.parent / "runseal-contained-outside-read.txt"
+        inside.write_text("inside")
+        outside.write_text("outside")
+        _, result = run_json(
+            [
+                "exec",
+                "--json",
+                "--policy",
+                "workspace-contained",
+                "--network",
+                "disabled",
+                "--cwd",
+                cwd,
+                "--",
+                command,
+                "-c",
+                f"from pathlib import Path; Path({str(inside)!r}).read_text(); Path({str(workspace / 'write.txt')!r}).write_text('ok')",
+            ],
+            expect_success=True,
+        )
+        if result.get("platform_plan", {}).get("enforcement") != "linux-experimental":
+            raise SystemExit(f"unexpected Linux workspace-contained plan: {result}")
+        if result.get("exit_code") != 0:
+            raise SystemExit(f"Linux workspace-contained did not allow workspace access: {result}")
+        _, result = run_json(
+            [
+                "exec",
+                "--json",
+                "--policy",
+                "workspace-contained",
+                "--network",
+                "disabled",
+                "--cwd",
+                cwd,
+                "--",
+                command,
+                "-c",
+                f"from pathlib import Path; Path({str(outside)!r}).read_text()",
+            ],
+            expect_success=True,
+        )
+        if result.get("exit_code") == 0:
+            raise SystemExit(f"Linux workspace-contained did not block external read: {result}")
 
 
 def assert_linux_proxy_fail_closed(command: str) -> None:

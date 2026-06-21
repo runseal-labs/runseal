@@ -468,7 +468,7 @@ fn linux_skeleton_reports_experimental_read_only_without_general_sandbox_feature
     );
     assert_eq!(
         capabilities["sandbox_levels"]["workspace-contained"],
-        "unsupported"
+        "experimental"
     );
     assert_eq!(capabilities["network_modes"]["disabled"], "experimental");
     assert_eq!(capabilities["network_modes"]["proxy"], "unsupported");
@@ -556,35 +556,30 @@ fn linux_skeleton_compiles_experimental_workspace_write_policy() {
 }
 
 #[test]
-fn linux_skeleton_fails_closed_for_workspace_contained_policy() {
+fn linux_skeleton_compiles_experimental_workspace_contained_policy() {
     let cwd = PathBuf::from("/workspace");
-    let policy = normalize_policy(&json!("workspace-contained"), &cwd, None).unwrap();
+    let policy = normalize_policy(
+        &json!({"sandbox_level": "workspace-contained", "network": {"mode": "disabled"}}),
+        &cwd,
+        None,
+    )
+    .unwrap();
 
-    let err = LinuxCommunityBackend
+    let plan = LinuxCommunityBackend
         .compile_plan("exec_linux_workspace_contained", &cwd, &policy)
-        .unwrap_err();
+        .unwrap();
 
-    assert_eq!(err.code, "BACKEND_CAPABILITY_MISSING");
-    assert_eq!(err.support, "unsupported");
-    assert_eq!(err.backend, LinuxCommunityBackend.name());
-    let plan = err
-        .plan
-        .as_deref()
-        .expect("Linux failure must include plan");
     assert_eq!(plan.backend, LinuxCommunityBackend.name());
     assert_eq!(plan.platform, "linux");
-    assert_eq!(plan.enforcement, "fail-closed-preview");
+    assert_eq!(plan.enforcement, "linux-experimental");
     assert_eq!(plan.sandbox_level, "workspace-contained");
-    assert_eq!(plan.cwd, "workspace");
-    assert_eq!(plan.runtime_root.as_deref(), Some("runtime_root"));
-    assert_eq!(plan.profile_root.as_deref(), Some("profile_root"));
-    assert_eq!(plan.synthetic_home.as_deref(), Some("synthetic_home"));
-    assert_eq!(plan.temp_root.as_deref(), Some("temp_root"));
+    assert_eq!(plan.cwd, path_string(&cwd));
     assert_eq!(plan.filesystem_read, vec!["workspace".to_string()]);
+    assert_eq!(plan.filesystem_write[0], "workspace");
+    assert!(plan.filesystem_write.contains(&"runtime_root".to_string()));
     assert_eq!(plan.process_boundary, "platform-sandbox");
     assert_eq!(plan.network_direct_egress, "deny");
     let public_plan = plan.json().to_string();
-    assert!(!public_plan.contains("/workspace"));
     assert!(!public_plan.contains("bubblewrap"));
     assert!(!public_plan.contains("landlock"));
     assert!(!public_plan.contains("namespace"));

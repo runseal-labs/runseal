@@ -31,7 +31,7 @@ The tests are black-box by design:
   without exposing private Windows account or setup identities.
 - Windows hosts select the Windows reference backend and run supported sandbox levels through the shared conformance tests.
 - macOS hosts select an experimental portable backend for `read-only` and `workspace-write` with `network.disabled`; unsupported sandbox levels still fail closed.
-- Linux hosts select an experimental portable backend for `read-only` and `workspace-write` with `network.disabled`; unsupported sandbox levels still fail closed.
+- Linux hosts select an experimental portable backend for `read-only`, `workspace-write`, and `workspace-contained` with `network.disabled`; unsupported network modes still fail closed.
 - Windows sandbox plans include runtime root, synthetic home, setup requirements, protected filesystem categories, process boundary state, and network guard planning.
 - Windows filesystem ACL setup must bind rules to a single sandbox user restricted process identity before any rule can be applied.
 - Windows runtime roots can be reported as a verified single capability without making any sandbox level supported by itself.
