@@ -118,6 +118,24 @@ fn adversarial_harness_cleans_fixture_workspace() -> Result<()> {
 }
 
 #[test]
+fn adversarial_harness_skips_unsupported_fixtures() -> Result<()> {
+    let mut case = load_cases()?
+        .into_iter()
+        .find(|case| case["case_id"] == "adv.filesystem.parent-traversal.v1")
+        .context("file fixture adversarial case must exist")?;
+    case["fixtures"] = json!([{"kind": "symlink", "path": "link", "target": "target"}]);
+
+    let result = unsupported_fixture_result(&case, "unsupported fixture kind: symlink")?;
+
+    assert_eq!(result["status"], "unsupported_fixture");
+    assert_eq!(result["skipped"], true);
+    assert_eq!(result["passed"], false);
+    assert_eq!(result["skip_reason"], "unsupported fixture kind: symlink");
+    assert_public_safe(&result.to_string())?;
+    Ok(())
+}
+
+#[test]
 fn adversarial_harness_inspects_file_side_effects() -> Result<()> {
     let tmp = TempDir::new()?;
     let path = tmp.path().join("tracked.txt");
@@ -246,6 +264,33 @@ fn emit_result(case: &Value, observed_result: &str, public_outcome_visible: bool
         "events_present": case["oracle"]["events"]["required"].as_bool().unwrap_or(false),
         "public_safe_output": true,
         "status": if observed_result == case["oracle"]["expected_result"] { "passed" } else { "failed" }
+    });
+    assert_public_safe(&result.to_string())?;
+    Ok(result)
+}
+
+fn unsupported_fixture_result(case: &Value, reason: &str) -> Result<Value> {
+    let result = json!({
+        "schema_version": "runseal.adversarial-result/v1",
+        "case_id": case["case_id"],
+        "backend_name": "runseal-local",
+        "backend_status": "local-baseline",
+        "platform": current_platform(),
+        "capabilities_under_test": case["capabilities_under_test"],
+        "sandbox_level": case["sandbox_level"],
+        "network_mode": case["network_mode"],
+        "expected_result": case["oracle"]["expected_result"],
+        "observed_result": case["oracle"]["expected_result"],
+        "severity": "S0",
+        "passed": false,
+        "skipped": true,
+        "skip_reason": reason,
+        "policy_hash_present": false,
+        "policy_epoch_present": false,
+        "audit_present": false,
+        "events_present": false,
+        "public_safe_output": true,
+        "status": "unsupported_fixture"
     });
     assert_public_safe(&result.to_string())?;
     Ok(result)
