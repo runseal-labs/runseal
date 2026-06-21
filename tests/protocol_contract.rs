@@ -410,7 +410,9 @@ fn assert_portable_capability_probe_contract(payload: &Value) {
             mechanisms,
             vec![
                 "landlock",
+                "landlock_abi_version",
                 "user_namespaces",
+                "user_namespace_quota",
                 "mount_namespaces",
                 "pid_namespaces",
                 "network_namespaces",
