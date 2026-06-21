@@ -926,5 +926,37 @@
       "forbidden_side_effects": ["network_connection_absent", "event_not_contains_private_detail"]
     },
     "public_report_labels": ["network_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.network.pre-opened-socket-inheritance.v1",
+    "title": "Network policy must not allow inherited socket bypass",
+    "primary_class": "network",
+    "secondary_classes": ["process"],
+    "capabilities_under_test": ["network_proxy", "direct_network_deny", "process_isolation"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "workspace-contained",
+    "network_mode": "proxy",
+    "fixtures": [{"kind": "preopened_socket", "name": "inherited-network-handle"}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "import os, socket; socket.socket(fileno=int(os.environ['RUNSEAL_TEST_SOCKET_FD'])).send(b'leak')"],
+      "policy": {
+        "version": "runseal.policy/v1",
+        "sandbox_level": "workspace-contained",
+        "network": {"mode": "proxy"},
+        "environment": {"proxy": true}
+      },
+      "network": "proxy"
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["network_connection_absent", "event_not_contains_private_detail"]
+    },
+    "public_report_labels": ["network_conformance"]
   }
 ]
