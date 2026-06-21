@@ -384,6 +384,12 @@ fn adversarial_result_schema_requires_public_skip_reason() -> Result<()> {
     result["public_safe_output"] = json!(true);
 
     result["passed"] = json!(false);
+    result["status"] = json!("failed");
+    result["public_safe_output"] = json!(false);
+    assert!(validate_result(&result).is_err());
+    result["public_safe_output"] = json!(true);
+
+    result["passed"] = json!(false);
     result["status"] = json!("xfailed");
     result["backend_status"] = json!("reference");
     assert!(validate_result(&result).is_err());
@@ -886,8 +892,8 @@ fn validate_result(result: &Value) -> Result<()> {
     if status == "passed" && (!passed || skipped) {
         bail!("passed adversarial results must set passed=true and skipped=false");
     }
-    if passed && result["public_safe_output"] != true {
-        bail!("passed adversarial results must set public_safe_output=true");
+    if result["public_safe_output"] != true {
+        bail!("adversarial results must set public_safe_output=true");
     }
     if status != "passed" && passed {
         bail!("non-passed adversarial results must not set passed=true");
