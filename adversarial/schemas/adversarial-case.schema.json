@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://runseal.dev/schemas/adversarial-case.schema.json",
+  "title": "RunSeal adversarial case",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "case_id",
+    "title",
+    "primary_class",
+    "capabilities_under_test",
+    "platforms",
+    "backend_status",
+    "sandbox_level",
+    "network_mode",
+    "request",
+    "oracle"
+  ],
+  "properties": {
+    "schema_version": {"const": "runseal.adversarial-case/v1"},
+    "case_id": {"type": "string"},
+    "title": {"type": "string"},
+    "primary_class": {
+      "enum": ["filesystem", "runtime", "process", "network", "policy", "execution_injection", "audit"]
+    },
+    "secondary_classes": {
+      "type": "array",
+      "items": {"enum": ["filesystem", "runtime", "process", "network", "policy", "execution_injection", "audit"]}
+    },
+    "capabilities_under_test": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+    "platforms": {"type": "array", "items": {"enum": ["windows", "macos", "linux", "other"]}, "minItems": 1},
+    "backend_status": {
+      "type": "array",
+      "items": {"enum": ["reference", "experimental", "future-community", "local-baseline", "scaffold"]},
+      "minItems": 1
+    },
+    "sandbox_level": {"enum": ["read-only", "workspace-contained", "workspace-write", "danger-full-access", "malformed"]},
+    "network_mode": {"enum": ["disabled", "proxy", "malformed"]},
+    "fixtures": {"type": "array", "items": {"type": "object"}},
+    "request": {"type": "object"},
+    "oracle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["expected_result", "max_severity"],
+      "properties": {
+        "expected_result": {
+          "enum": [
+            "allow_no_side_effect_outside_policy",
+            "deny",
+            "fail_closed",
+            "deny_or_fail_closed",
+            "backend_unavailable",
+            "timeout",
+            "cancelled",
+            "audit_redacted",
+            "event_emitted",
+            "policy_rejected"
+          ]
+        },
+        "max_severity": {"enum": ["S0", "S1"]},
+        "forbidden_side_effects": {"type": "array", "items": {"type": "string"}},
+        "audit": {"type": "object"},
+        "events": {"type": "object"}
+      }
+    },
+    "risk_summary": {"type": "string"},
+    "references": {"type": "array", "items": {"type": "string"}},
+    "preconditions": {"type": "array", "items": {"type": "string"}},
+    "setup_steps": {"type": "array", "items": {"type": "string"}},
+    "inspection_steps": {"type": "array", "items": {"type": "string"}},
+    "cleanup_steps": {"type": "array", "items": {"type": "string"}},
+    "timeout_ms": {"type": "integer", "minimum": 1},
+    "skip_if": {"type": "array", "items": {"type": "string"}},
+    "xfail_if": {"type": "array", "items": {"type": "string"}},
+    "negative_side_effects": {"type": "array", "items": {"type": "string"}},
+    "public_report_labels": {"type": "array", "items": {"type": "string"}}
+  }
+}
