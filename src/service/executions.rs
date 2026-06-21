@@ -9,6 +9,7 @@ use super::event_bus::filter_events;
 #[derive(Default)]
 pub(super) struct ExecutionStore {
     records: BTreeMap<String, ExecutionRecord>,
+    order: Vec<String>,
 }
 
 struct ExecutionRecord {
@@ -24,8 +25,8 @@ impl ExecutionStore {
         ) else {
             return None;
         };
-        self.records.insert(
-            execution_id.to_string(),
+        self.insert_record(
+            execution_id,
             ExecutionRecord {
                 result: result.clone(),
                 events: events.to_vec(),
@@ -66,8 +67,8 @@ impl ExecutionStore {
                 }
             }
         }
-        self.records.insert(
-            execution_id.to_string(),
+        self.insert_record(
+            execution_id,
             ExecutionRecord {
                 result,
                 events: vec![failed_event(execution_id, session_id, err, details)],
@@ -93,8 +94,7 @@ impl ExecutionStore {
     }
 
     pub(super) fn summaries(&self) -> Vec<Value> {
-        self.records
-            .values()
+        self.ordered_records()
             .map(|record| execution_summary(&record.result))
             .collect()
     }
@@ -115,11 +115,23 @@ impl ExecutionStore {
     }
 
     pub(super) fn all_events(&self, types: &[String]) -> Vec<Value> {
-        self.records
-            .values()
+        self.ordered_records()
             .flat_map(|record| filter_events(&record.events, types))
             .map(|event| audit_stream_event_metadata(&event))
             .collect()
+    }
+
+    fn insert_record(&mut self, execution_id: &str, record: ExecutionRecord) {
+        if !self.records.contains_key(execution_id) {
+            self.order.push(execution_id.to_string());
+        }
+        self.records.insert(execution_id.to_string(), record);
+    }
+
+    fn ordered_records(&self) -> impl Iterator<Item = &ExecutionRecord> {
+        self.order
+            .iter()
+            .filter_map(|execution_id| self.records.get(execution_id))
     }
 }
 
@@ -188,4 +200,61 @@ fn failed_event(
         }
     }
     event
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn summaries_preserve_record_order() {
+        let mut store = ExecutionStore::default();
+        store.record_finished(
+            &json!({
+                "execution_id": "exec_z",
+                "session_id": "sess_1",
+                "status": "finished"
+            }),
+            &[],
+        );
+        store.record_finished(
+            &json!({
+                "execution_id": "exec_a",
+                "session_id": "sess_1",
+                "status": "finished"
+            }),
+            &[],
+        );
+
+        let summaries = store.summaries();
+
+        assert_eq!(summaries[0]["execution_id"], "exec_z");
+        assert_eq!(summaries[1]["execution_id"], "exec_a");
+    }
+
+    #[test]
+    fn all_events_preserve_record_order() {
+        let mut store = ExecutionStore::default();
+        store.record_finished(
+            &json!({
+                "execution_id": "exec_z",
+                "session_id": "sess_1",
+                "status": "finished"
+            }),
+            &[json!({"type": "execution.started", "execution_id": "exec_z"})],
+        );
+        store.record_finished(
+            &json!({
+                "execution_id": "exec_a",
+                "session_id": "sess_1",
+                "status": "finished"
+            }),
+            &[json!({"type": "execution.started", "execution_id": "exec_a"})],
+        );
+
+        let events = store.all_events(&[]);
+
+        assert_eq!(events[0]["execution_id"], "exec_z");
+        assert_eq!(events[1]["execution_id"], "exec_a");
+    }
 }
