@@ -166,6 +166,7 @@ def assert_linux_workspace_write(command: str) -> None:
             )
             if result.get("exit_code") == 0 or target.exists():
                 raise SystemExit(f"Linux workspace-write did not block write to {target}: {result}")
+        assert_portable_workspace_contained_fail_closed("Linux", command)
 
 
 def assert_linux_proxy_fail_closed(command: str) -> None:
@@ -239,6 +240,7 @@ def assert_macos_read_only(payload: dict) -> None:
         if result.get("exit_code") == 0 or write_target.exists():
             raise SystemExit(f"macOS read-only did not block workspace write: {result}")
         assert_macos_workspace_write(command)
+        assert_portable_workspace_contained_fail_closed("Darwin", command)
         assert_fail_closed("Darwin")
 
 
@@ -290,6 +292,40 @@ def assert_macos_workspace_write(command: str) -> None:
             )
             if result.get("exit_code") == 0 or target.exists():
                 raise SystemExit(f"macOS workspace-write did not block write to {target}: {result}")
+
+
+def assert_portable_workspace_contained_fail_closed(system: str, command: str) -> None:
+    with tempfile.TemporaryDirectory(prefix="runseal-portable-contained-") as cwd:
+        _, payload = run_json(
+            [
+                "exec",
+                "--json",
+                "--policy",
+                "workspace-contained",
+                "--network",
+                "disabled",
+                "--cwd",
+                cwd,
+                "--",
+                command,
+                "-c",
+                "print('must not run')",
+            ],
+            expect_success=False,
+        )
+    data = payload["error"]["data"]
+    expected_backend = {
+        "Darwin": ("runseal-macos-experimental", "experimental", "macos"),
+        "Linux": ("runseal-linux-community", "experimental", "linux"),
+    }[system]
+    if data.get("code") != "BACKEND_CAPABILITY_MISSING" or data.get("support") != "unsupported":
+        raise SystemExit(f"unexpected workspace-contained fail-closed error: {data}")
+    backend = data.get("backend", {})
+    if (backend.get("name"), backend.get("status"), backend.get("platform")) != expected_backend:
+        raise SystemExit(f"unexpected workspace-contained backend details: {backend}")
+    plan = data.get("platform_plan", {})
+    if plan.get("cwd") != "workspace" or plan.get("runtime_root") != "runtime_root":
+        raise SystemExit(f"workspace-contained preview is not public-safe: {plan}")
 
 
 def assert_fail_closed(system: str) -> None:
