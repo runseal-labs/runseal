@@ -97,6 +97,70 @@ impl PlatformSandboxPlan {
         }
     }
 
+    pub(super) fn portable_fail_closed_preview(
+        backend: &dyn SandboxBackend,
+        execution_id: &str,
+        cwd: &Path,
+        policy: &SandboxPolicy,
+    ) -> Self {
+        let runtime_root = cwd.join(".runseal").join("runtime").join(execution_id);
+        let profile_root = runtime_root.join("profile");
+        let synthetic_home = runtime_root.join("home");
+        let temp_root = runtime_root.join("temp");
+        let runtime_roots = [
+            path_string(&runtime_root),
+            path_string(&profile_root),
+            path_string(&synthetic_home),
+            path_string(&temp_root),
+        ];
+        Self {
+            backend: backend.name(),
+            backend_status: backend.status(),
+            platform: backend.platform(),
+            execution_id: execution_id.to_string(),
+            policy_id: policy.id.clone(),
+            policy_hash: policy.hash(),
+            sandbox_level: policy.sandbox_level.as_str(),
+            enforcement: "fail-closed-preview",
+            cwd: path_string(cwd),
+            runtime_root: Some(runtime_roots[0].clone()),
+            profile_root: Some(runtime_roots[1].clone()),
+            synthetic_home: Some(runtime_roots[2].clone()),
+            temp_root: Some(runtime_roots[3].clone()),
+            filesystem_read: policy
+                .filesystem
+                .read
+                .iter()
+                .chain(policy.filesystem.read_only.iter())
+                .cloned()
+                .collect(),
+            filesystem_write: runtime_roots.to_vec(),
+            filesystem_deny: policy.filesystem.deny.clone(),
+            filesystem_protected: protected_filesystem_labels(policy),
+            private_filesystem_deny: Vec::new(),
+            private_filesystem_rules: Vec::new(),
+            process_boundary: "platform-sandbox",
+            process_identity: "current-user",
+            process_cleanup: "process-tree",
+            private_process_sandbox_user_model: "none",
+            private_process_token: "none",
+            private_process_job: "none",
+            private_setup_account_name: "none",
+            private_setup_group_name: "none",
+            private_setup_identity_artifacts: "none",
+            private_setup_payload: None,
+            private_vendor_permission_profile: None,
+            network_mode: policy.network.mode.as_str(),
+            network_direct_egress: "deny",
+            network_managed_proxy: "none",
+            environment_inherit: policy.environment.inherit.clone(),
+            environment_scrub: policy.environment.scrub.clone(),
+            environment_proxy: policy.environment.proxy,
+            environment_runtime: Vec::new(),
+            required_backend_features: policy.required_backend_feature_names(),
+        }
+    }
+
     pub fn json(&self) -> Value {
         json!({
             "backend": {
