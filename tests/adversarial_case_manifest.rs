@@ -130,6 +130,16 @@ const CASE_FIELDS: &[&str] = &[
     "negative_side_effects",
     "public_report_labels",
 ];
+const CASE_TEXT_FIELDS: &[&str] = &["risk_summary"];
+const CASE_TEXT_LIST_FIELDS: &[&str] = &[
+    "references",
+    "preconditions",
+    "setup_steps",
+    "inspection_steps",
+    "cleanup_steps",
+    "skip_if",
+    "xfail_if",
+];
 const ORACLE_FIELDS: &[&str] = &[
     "expected_result",
     "max_severity",
@@ -462,6 +472,46 @@ fn adversarial_case_schema_rejects_invalid_negative_side_effects() -> Result<()>
     Ok(())
 }
 
+#[test]
+fn adversarial_case_schema_validates_optional_public_text() -> Result<()> {
+    let mut case = json!({
+        "schema_version": "runseal.adversarial-case/v1",
+        "case_id": "adv.audit.optional-text.v1",
+        "title": "Optional text fields must be simple public strings",
+        "primary_class": "audit",
+        "capabilities_under_test": ["audit_jsonl"],
+        "platforms": ["windows"],
+        "backend_status": ["reference"],
+        "sandbox_level": "danger-full-access",
+        "network_mode": "disabled",
+        "request": {
+            "method": "getAuditEvents",
+            "audit_path": ".runseal/audit/fake.jsonl"
+        },
+        "oracle": {
+            "expected_result": "deny",
+            "max_severity": "S1",
+            "audit": {"required": true},
+            "events": {"required": true}
+        },
+        "risk_summary": "Path lookup must be rejected",
+        "references": ["RFC-0016"],
+        "skip_if": ["backend unavailable"]
+    });
+    let mut case_ids = HashSet::new();
+    validate_case(&case, Path::new("test-case"), &mut case_ids)?;
+
+    case["risk_summary"] = json!(["not a string"]);
+    let mut case_ids = HashSet::new();
+    assert!(validate_case(&case, Path::new("test-case"), &mut case_ids).is_err());
+    case["risk_summary"] = json!("Path lookup must be rejected");
+
+    case["references"] = json!("not an array");
+    let mut case_ids = HashSet::new();
+    assert!(validate_case(&case, Path::new("test-case"), &mut case_ids).is_err());
+    Ok(())
+}
+
 fn manifest_paths() -> Result<Vec<PathBuf>> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("adversarial/cases");
     let mut paths = fs::read_dir(&root)
@@ -519,6 +569,16 @@ fn validate_case(case: &Value, path: &Path, case_ids: &mut HashSet<String>) -> R
             SIDE_EFFECTS,
             path,
         )?;
+    }
+    for field in CASE_TEXT_FIELDS {
+        if let Some(value) = case.get(*field) {
+            assert_string_value(value, &format!("case.{field}"), path)?;
+        }
+    }
+    for field in CASE_TEXT_LIST_FIELDS {
+        if let Some(values) = case.get(*field) {
+            assert_string_array(values, &format!("case.{field}"), path)?;
+        }
     }
     assert_non_empty_string(case, "title", path)?;
     assert_members(case, "capabilities_under_test", CAPABILITIES, path)?;
@@ -764,6 +824,16 @@ fn assert_array_members(values: &Value, field: &str, allowed: &[&str], path: &Pa
             bail!("{field} must not contain duplicate value {value}");
         }
         assert_member(value, allowed, path)?;
+    }
+    Ok(())
+}
+
+fn assert_string_array(values: &Value, field: &str, path: &Path) -> Result<()> {
+    let values = values
+        .as_array()
+        .with_context(|| format!("{field} must be an array in {}", path.display()))?;
+    for value in values {
+        assert_string_value(value, &format!("{field}[]"), path)?;
     }
     Ok(())
 }
