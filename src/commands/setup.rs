@@ -1,6 +1,8 @@
 use super::*;
 #[cfg(not(windows))]
 use crate::execution::validate_execution_cwd;
+#[cfg(windows)]
+use crate::policy::NetworkMode;
 
 const SETUP_HELP_TEXT: &str = "\
 Usage: runseal setup windows-sandbox [--cwd <path>] [--status] [--json]
@@ -195,7 +197,21 @@ fn run_windows_sandbox_setup_status(cwd: &Path, json_output: bool) -> Result<(),
             return Err(err.message);
         }
     };
-    println!("{}", windows_sandbox_setup_status_for_cwd(&cwd)?);
+    let setup_status = match windows_sandbox_setup_status_for_cwd(&cwd) {
+        Ok(status) => status,
+        Err(err) if json_output => {
+            println!(
+                "{}",
+                cli_error_payload(RunSealError::new(
+                    "WINDOWS_SANDBOX_SETUP_STATUS_FAILED",
+                    err,
+                ))
+            );
+            return Err(String::new());
+        }
+        Err(err) => return Err(err),
+    };
+    println!("{setup_status}");
     Ok(())
 }
 
@@ -211,7 +227,21 @@ fn run_windows_sandbox_setup_status(cwd: &Path, json_output: bool) -> Result<(),
             return Err(err.message);
         }
     };
-    println!("{}", windows_sandbox_setup_status_for_cwd(&cwd)?);
+    let setup_status = match windows_sandbox_setup_status_for_cwd(&cwd) {
+        Ok(status) => status,
+        Err(err) if json_output => {
+            println!(
+                "{}",
+                cli_error_payload(RunSealError::new(
+                    "WINDOWS_SANDBOX_SETUP_STATUS_FAILED",
+                    err,
+                ))
+            );
+            return Err(String::new());
+        }
+        Err(err) => return Err(err),
+    };
+    println!("{setup_status}");
     Ok(())
 }
 
