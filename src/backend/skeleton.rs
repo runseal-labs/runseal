@@ -187,6 +187,7 @@ fn mark_portable_disabled_features_experimental(payload: &mut Value) {
         "policy_epoch",
     ] {
         payload["features"][feature] = json!(true);
+        payload["feature_statuses"][feature] = json!(CapabilityStatus::Experimental.as_str());
     }
 }
 fn compile_local_execution_or_unsupported(

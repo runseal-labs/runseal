@@ -18,7 +18,9 @@ On Windows, sandbox requests include a `PlatformSandboxPlan` for runtime root, s
 
 The Windows enforcement baseline lives behind a dedicated Windows sandbox implementation. RunSeal-specific code should stay at the adapter layer: policy normalization, `PlatformSandboxPlan` mapping, audit events, capability reporting, and conformance gates. Low-level OS boundary, setup-helper, and command-runner code should not be reimplemented in the RunSeal adapter.
 
-On macOS and Linux, RunSeal reports experimental `read-only` and `workspace-write` paths while leaving other sandbox levels unsupported. Portable capability probes are diagnostic only and do not promote unsupported capabilities.
+On macOS and Linux, RunSeal reports experimental `read-only` and `workspace-write` paths while leaving other sandbox levels unsupported. These portable paths enforce write and network boundaries, not workspace containment: host files may remain readable unless `workspace-contained` is implemented and reported separately. Portable process cleanup is experimental and should not be treated as Windows reference cleanup equivalent.
+
+Capability clients should prefer `sandbox_levels`, `network_modes`, and `feature_statuses` for status decisions. The legacy `features` booleans are coarse presence flags; portable capability probes are diagnostic only and do not promote unsupported capabilities.
 
 | Capability | Windows | macOS | Linux |
 | --- | --- | --- | --- |

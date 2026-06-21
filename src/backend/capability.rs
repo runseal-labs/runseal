@@ -97,6 +97,25 @@ pub(super) fn capabilities_json_for(backend: &dyn SandboxBackend, notes: &[&'sta
             "audit_jsonl": true,
             "otel_export": false,
         },
+        "feature_statuses": {
+            "local_execution": CapabilityStatus::Supported.as_str(),
+            "filesystem_policy": feature_status(supported_features, BackendFeature::FilesystemPolicy),
+            "runtime_roots": feature_status(supported_features, BackendFeature::RuntimeRoots),
+            "runtime_environment": feature_status(supported_features, BackendFeature::RuntimeEnvironment),
+            "process_isolation": feature_status(supported_features, BackendFeature::ProcessIsolation),
+            "process_cleanup": feature_status(supported_features, BackendFeature::ProcessCleanup),
+            "direct_network_deny": feature_status(supported_features, BackendFeature::DirectNetworkDeny),
+            "network_disabled": feature_status(supported_features, BackendFeature::NetworkDisabled),
+            "network_proxy": feature_status(supported_features, BackendFeature::NetworkProxy),
+            "managed_proxy": feature_status(supported_features, BackendFeature::ManagedProxy),
+            "policy_epoch": feature_status(supported_features, BackendFeature::PolicyEpoch),
+            "setup_readiness": CapabilityStatus::Supported.as_str(),
+            "stdin_bytes": CapabilityStatus::Supported.as_str(),
+            "stdin_file": CapabilityStatus::Supported.as_str(),
+            "resource_limits": feature_status(supported_features, BackendFeature::ResourceLimits),
+            "audit_jsonl": CapabilityStatus::Supported.as_str(),
+            "otel_export": CapabilityStatus::Unsupported.as_str(),
+        },
         "sandbox_levels": {
             "read-only": read_only,
             "workspace-contained": read_only,
@@ -109,6 +128,14 @@ pub(super) fn capabilities_json_for(backend: &dyn SandboxBackend, notes: &[&'sta
         },
         "notes": notes,
     })
+}
+
+fn feature_status(supported_features: &[BackendFeature], feature: BackendFeature) -> &'static str {
+    if supported_features.contains(&feature) {
+        CapabilityStatus::Supported.as_str()
+    } else {
+        CapabilityStatus::Unsupported.as_str()
+    }
 }
 
 fn capability_status(

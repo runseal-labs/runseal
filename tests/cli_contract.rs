@@ -184,6 +184,16 @@ fn expected_disabled_feature_reported() -> bool {
     cfg!(any(windows, target_os = "macos", target_os = "linux"))
 }
 
+fn expected_disabled_feature_status() -> &'static str {
+    if cfg!(windows) {
+        "supported"
+    } else if cfg!(any(target_os = "macos", target_os = "linux")) {
+        "experimental"
+    } else {
+        "unsupported"
+    }
+}
+
 fn expected_windows_sandbox_supported() -> bool {
     cfg!(windows)
 }
@@ -774,6 +784,29 @@ fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
     assert_eq!(
         payload["features"]["policy_epoch"],
         expected_disabled_feature_reported()
+    );
+    for feature in [
+        "filesystem_policy",
+        "runtime_roots",
+        "runtime_environment",
+        "process_isolation",
+        "process_cleanup",
+        "direct_network_deny",
+        "network_disabled",
+        "policy_epoch",
+    ] {
+        assert_eq!(
+            payload["feature_statuses"][feature],
+            expected_disabled_feature_status()
+        );
+    }
+    assert_eq!(
+        payload["feature_statuses"]["network_proxy"],
+        expected_status(expected_windows_sandbox_supported())
+    );
+    assert_eq!(
+        payload["feature_statuses"]["managed_proxy"],
+        expected_status(expected_windows_sandbox_supported())
     );
     assert_eq!(payload["features"]["setup_readiness"], true);
     assert_eq!(payload["features"]["stdin_bytes"], true);

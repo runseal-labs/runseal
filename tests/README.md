@@ -29,6 +29,8 @@ The tests are black-box by design:
 - CLI behavior through `runseal exec`.
 - Capability reporting through `runseal capabilities` and `getCapabilities`,
   without exposing private Windows account or setup identities.
+- Capability status decisions should use `sandbox_levels`, `network_modes`,
+  and `feature_statuses`; `features` remains a coarse compatibility map.
 - Windows hosts select the Windows reference backend and run supported sandbox levels through the shared conformance tests.
 - macOS hosts select an experimental portable backend for `read-only` and `workspace-write` with `network.disabled`; unsupported sandbox levels still fail closed.
 - Linux hosts select an experimental portable backend for `read-only` and `workspace-write` with `network.disabled`; unsupported sandbox levels and network modes still fail closed.
@@ -37,7 +39,7 @@ The tests are black-box by design:
 - Windows runtime roots can be reported as a verified single capability without making any sandbox level supported by itself.
 - Windows runtime environment redirects can be reported as a verified single capability without making any sandbox level supported by itself.
 - Windows process cleanup can be reported as a verified single capability without making any sandbox level supported by itself.
-- Windows process cleanup tests verify per-execution Job Object scope and must not terminate unrelated processes.
+- Windows process cleanup tests verify per-execution cleanup scope and must not terminate unrelated processes.
 - Execution results include a `PlatformSandboxPlan` summary for the selected backend.
 - Policy explanation through `runseal explain-policy`.
 - JSON-RPC behavior through `runseal rpc --stdio`.
