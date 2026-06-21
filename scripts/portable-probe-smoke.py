@@ -113,6 +113,7 @@ def assert_linux_read_only(payload: dict) -> None:
             if result.get("exit_code") == 0 or write_target.exists():
                 raise SystemExit(f"Linux read-only did not block workspace write: {result}")
             assert_linux_workspace_write(command)
+            assert_linux_proxy_fail_closed(command)
         elif result.get("error", {}).get("data", {}).get("code") != "BACKEND_UNAVAILABLE":
             raise SystemExit(f"expected Linux backend unavailable without bubblewrap: {result}")
 
@@ -165,6 +166,44 @@ def assert_linux_workspace_write(command: str) -> None:
             )
             if result.get("exit_code") == 0 or target.exists():
                 raise SystemExit(f"Linux workspace-write did not block write to {target}: {result}")
+
+
+def assert_linux_proxy_fail_closed(command: str) -> None:
+    with tempfile.TemporaryDirectory(prefix="runseal-linux-proxy-") as cwd:
+        _, payload = run_json(
+            [
+                "exec",
+                "--json",
+                "--policy",
+                "workspace-write",
+                "--network",
+                "proxy",
+                "--cwd",
+                cwd,
+                "--",
+                command,
+                "-c",
+                "print('must not run')",
+            ],
+            expect_success=False,
+        )
+    data = payload["error"]["data"]
+    if data.get("code") != "BACKEND_CAPABILITY_MISSING" or data.get("support") != "unsupported":
+        raise SystemExit(f"unexpected Linux proxy fail-closed error: {data}")
+    backend = data.get("backend", {})
+    if (
+        backend.get("name"),
+        backend.get("status"),
+        backend.get("platform"),
+    ) != ("runseal-linux-community", "experimental", "linux"):
+        raise SystemExit(f"unexpected Linux backend details: {backend}")
+    missing = data.get("missing_features", [])
+    for feature in ["network_proxy", "managed_proxy"]:
+        if feature not in missing:
+            raise SystemExit(f"Linux proxy fail-closed missing feature {feature}: {data}")
+    plan = data.get("platform_plan", {})
+    if plan.get("cwd") != "workspace" or plan.get("runtime_root") != "runtime_root":
+        raise SystemExit(f"Linux proxy fail-closed preview is not public-safe: {plan}")
 
 
 def assert_fail_closed(system: str) -> None:
