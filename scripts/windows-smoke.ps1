@@ -8,11 +8,38 @@ function Invoke-RunSealJson {
         [string[]]$RunArgs
     )
 
-    $out = & $bin @RunArgs
-    if ($LASTEXITCODE -ne 0) {
-        throw "runseal failed ($LASTEXITCODE): $($RunArgs -join ' ')"
+    $stdoutFile = [System.IO.Path]::GetTempFileName()
+    $stderrFile = [System.IO.Path]::GetTempFileName()
+    try {
+        & $bin @RunArgs > $stdoutFile 2> $stderrFile
+        $exitCode = $LASTEXITCODE
+        $stdout = Get-Content -LiteralPath $stdoutFile -Raw
+        $stderr = Get-Content -LiteralPath $stderrFile -Raw
+
+        if ($exitCode -ne 0) {
+            throw @"
+runseal failed ($exitCode): $($RunArgs -join ' ')
+stdout:
+$stdout
+stderr:
+$stderr
+"@
+        }
+
+        try {
+            return $stdout | ConvertFrom-Json
+        } catch {
+            throw @"
+runseal stdout was not JSON: $($RunArgs -join ' ')
+stdout:
+$stdout
+stderr:
+$stderr
+"@
+        }
+    } finally {
+        Remove-Item -LiteralPath $stdoutFile, $stderrFile -Force -ErrorAction SilentlyContinue
     }
-    return $out | ConvertFrom-Json
 }
 
 Push-Location $repoRoot
