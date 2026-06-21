@@ -408,6 +408,11 @@ fn adversarial_result_schema_requires_public_skip_reason() -> Result<()> {
     assert!(validate_result(&result).is_err());
 
     result["status"] = json!("passed");
+    result["severity"] = json!("S2");
+    assert!(validate_result(&result).is_err());
+    result["severity"] = json!("S0");
+
+    result["status"] = json!("passed");
     result["public_safe_output"] = json!(false);
     assert!(validate_result(&result).is_err());
     result["public_safe_output"] = json!(true);
@@ -1031,6 +1036,11 @@ fn validate_result(result: &Value) -> Result<()> {
     let skipped_status = matches!(status, "skipped" | "unsupported_fixture");
     if status == "passed" && (!passed || skipped) {
         bail!("passed adversarial results must set passed=true and skipped=false");
+    }
+    if status == "passed"
+        && !PROMOTION_SEVERITIES.contains(&required_string(result, "severity", path)?)
+    {
+        bail!("passed adversarial results must use S0 or S1 severity");
     }
     if result["public_safe_output"] != true {
         bail!("adversarial results must set public_safe_output=true");
