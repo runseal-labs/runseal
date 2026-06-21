@@ -497,6 +497,31 @@
   },
   {
     "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.filesystem.external-write-from-workspace-write.v1",
+    "title": "Workspace-write execution must not write parent paths",
+    "primary_class": "filesystem",
+    "capabilities_under_test": ["filesystem_policy"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "workspace-write",
+    "network_mode": "disabled",
+    "fixtures": [{"kind": "file", "path": "outside/target.txt", "body": "before"}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "open('../outside/target.txt', 'wb').write(b'after')"],
+      "policy": {"sandbox_level": "workspace-write"}
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["path_not_modified"]
+    },
+    "public_report_labels": ["filesystem_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
     "case_id": "adv.runtime.precreated-runtime-root.v1",
     "title": "Preexisting runtime roots must not be trusted",
     "primary_class": "runtime",
