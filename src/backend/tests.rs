@@ -591,7 +591,7 @@ fn linux_skeleton_fails_closed_for_workspace_contained_policy() {
 }
 
 #[test]
-fn macos_skeleton_reports_experimental_track_without_sandbox_features() {
+fn macos_skeleton_reports_experimental_read_only_without_general_sandbox_features() {
     assert_eq!(
         MacosExperimentalBackend.name(),
         "runseal-macos-experimental"
@@ -600,6 +600,13 @@ fn macos_skeleton_reports_experimental_track_without_sandbox_features() {
     assert!(MacosExperimentalBackend.supported_features().is_empty());
     let capabilities = MacosExperimentalBackend.capabilities_json();
     assert_eq!(capabilities["features"]["process_isolation"], false);
+    assert_eq!(capabilities["sandbox_levels"]["read-only"], "experimental");
+    assert_eq!(
+        capabilities["sandbox_levels"]["workspace-write"],
+        "unsupported"
+    );
+    assert_eq!(capabilities["network_modes"]["disabled"], "experimental");
+    assert_eq!(capabilities["network_modes"]["proxy"], "unsupported");
     let probes = capabilities["capability_probes"].as_array().unwrap();
     assert_eq!(probes.len(), 6);
     assert_probe_schema(&probes[0], "filesystem_policy", "sandbox_exec");
@@ -611,12 +618,55 @@ fn macos_skeleton_reports_experimental_track_without_sandbox_features() {
 }
 
 #[test]
-fn macos_skeleton_fails_closed_for_sandboxed_policy() {
+fn macos_skeleton_compiles_experimental_read_only_policy() {
     let cwd = PathBuf::from("/workspace");
     let policy = normalize_policy(&json!("read-only"), &cwd, None).unwrap();
 
-    let err = MacosExperimentalBackend
+    let plan = MacosExperimentalBackend
         .compile_plan("exec_macos_read_only", &cwd, &policy)
+        .unwrap();
+
+    assert_eq!(plan.backend, MacosExperimentalBackend.name());
+    assert_eq!(plan.platform, "macos");
+    assert_eq!(plan.enforcement, "macos-experimental");
+    assert_eq!(plan.sandbox_level, "read-only");
+    assert_eq!(plan.cwd, path_string(&cwd));
+    assert_eq!(
+        plan.runtime_root.as_deref(),
+        Some(
+            path_string(
+                &cwd.join(".runseal")
+                    .join("runtime")
+                    .join("exec_macos_read_only")
+            )
+            .as_str()
+        )
+    );
+    assert_eq!(plan.filesystem_read, vec!["workspace".to_string()]);
+    assert_eq!(
+        plan.filesystem_write,
+        vec![
+            "runtime_root".to_string(),
+            "profile_root".to_string(),
+            "synthetic_home".to_string(),
+            "temp_root".to_string(),
+        ]
+    );
+    assert_eq!(plan.process_boundary, "platform-sandbox");
+    assert_eq!(plan.network_direct_egress, "deny");
+    let public_plan = plan.json().to_string();
+    assert!(!public_plan.contains("sandbox_exec"));
+    assert!(!public_plan.contains("seatbelt"));
+    assert!(!public_plan.contains("profile fragment"));
+}
+
+#[test]
+fn macos_skeleton_fails_closed_for_unsupported_sandboxed_policy() {
+    let cwd = PathBuf::from("/workspace");
+    let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+
+    let err = MacosExperimentalBackend
+        .compile_plan("exec_macos_workspace_write", &cwd, &policy)
         .unwrap_err();
 
     assert_eq!(err.code, "BACKEND_CAPABILITY_MISSING");
@@ -629,7 +679,7 @@ fn macos_skeleton_fails_closed_for_sandboxed_policy() {
     assert_eq!(plan.backend, MacosExperimentalBackend.name());
     assert_eq!(plan.platform, "macos");
     assert_eq!(plan.enforcement, "fail-closed-preview");
-    assert_eq!(plan.sandbox_level, "read-only");
+    assert_eq!(plan.sandbox_level, "workspace-write");
     assert_eq!(plan.cwd, "workspace");
     assert_eq!(plan.runtime_root.as_deref(), Some("runtime_root"));
     assert_eq!(plan.profile_root.as_deref(), Some("profile_root"));

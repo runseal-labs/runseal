@@ -206,6 +206,41 @@ def assert_linux_proxy_fail_closed(command: str) -> None:
         raise SystemExit(f"Linux proxy fail-closed preview is not public-safe: {plan}")
 
 
+def assert_macos_read_only(payload: dict) -> None:
+    if payload.get("backend_status") != "experimental":
+        raise SystemExit(f"unexpected macOS backend status: {payload}")
+    if payload.get("sandbox_levels", {}).get("read-only") != "experimental":
+        raise SystemExit(f"macOS read-only must be experimental: {payload}")
+    if payload.get("sandbox_levels", {}).get("workspace-write") != "unsupported":
+        raise SystemExit(f"macOS workspace-write must remain unsupported: {payload}")
+    if payload.get("network_modes", {}).get("disabled") != "experimental":
+        raise SystemExit(f"macOS network.disabled must be experimental: {payload}")
+
+    command = shutil.which("python3") or shutil.which("python") or sys.executable
+    with tempfile.TemporaryDirectory(prefix="runseal-macos-read-only-") as cwd:
+        write_target = Path(cwd) / "read-only-write.txt"
+        _, result = run_json(
+            [
+                "exec",
+                "--json",
+                "--policy",
+                "read-only",
+                "--cwd",
+                cwd,
+                "--",
+                command,
+                "-c",
+                f"from pathlib import Path; Path({str(write_target)!r}).write_text('blocked')",
+            ],
+            expect_success=True,
+        )
+        if result.get("platform_plan", {}).get("enforcement") != "macos-experimental":
+            raise SystemExit(f"unexpected macOS read-only plan: {result}")
+        if result.get("exit_code") == 0 or write_target.exists():
+            raise SystemExit(f"macOS read-only did not block workspace write: {result}")
+        assert_fail_closed("Darwin")
+
+
 def assert_fail_closed(system: str) -> None:
     command = shutil.which("python3") or shutil.which("python") or sys.executable
     with tempfile.TemporaryDirectory(prefix="runseal-portable-probe-") as cwd:
@@ -214,7 +249,7 @@ def assert_fail_closed(system: str) -> None:
                 "exec",
                 "--json",
                 "--policy",
-                "read-only",
+                "workspace-write" if system == "Darwin" else "read-only",
                 "--cwd",
                 cwd,
                 "--",
@@ -250,7 +285,7 @@ def main() -> None:
     if system == "Linux":
         assert_linux_read_only(capabilities)
     else:
-        assert_fail_closed(system)
+        assert_macos_read_only(capabilities)
     print("portable probe smoke ok")
 
 

@@ -237,7 +237,15 @@ fn expected_status(supported: bool) -> &'static str {
 }
 
 fn expected_network_disabled_status() -> &'static str {
-    if cfg!(target_os = "linux") {
+    if cfg!(any(target_os = "linux", target_os = "macos")) {
+        "experimental"
+    } else {
+        expected_status(expected_windows_sandbox_supported())
+    }
+}
+
+fn expected_read_only_status() -> &'static str {
+    if cfg!(any(target_os = "linux", target_os = "macos")) {
         "experimental"
     } else {
         expected_status(expected_windows_sandbox_supported())
@@ -1275,6 +1283,10 @@ fn get_capabilities_rpc_contract() -> Result<()> {
         ])
     );
     assert_eq!(payload["sandbox_levels"]["danger-full-access"], "supported");
+    assert_eq!(
+        payload["sandbox_levels"]["read-only"],
+        expected_read_only_status()
+    );
     assert_eq!(
         payload["sandbox_levels"]["workspace-write"],
         expected_workspace_write_status()
@@ -3754,7 +3766,12 @@ fn sandboxed_policy_uses_platform_backend_or_reports_unavailable() -> Result<()>
         return Ok(());
     }
 
-    if cfg!(target_os = "linux") {
+    if cfg!(any(target_os = "linux", target_os = "macos")) {
+        let expected_enforcement = if cfg!(target_os = "macos") {
+            "macos-experimental"
+        } else {
+            "linux-experimental"
+        };
         if response.get("error").is_some() {
             assert_eq!(response["error"]["data"]["code"], "BACKEND_UNAVAILABLE");
             assert_eq!(
@@ -3775,7 +3792,7 @@ fn sandboxed_policy_uses_platform_backend_or_reports_unavailable() -> Result<()>
             assert_eq!(response["result"]["sandbox"]["enforced"], true);
             assert_eq!(
                 response["result"]["platform_plan"]["enforcement"],
-                "linux-experimental"
+                expected_enforcement
             );
         }
         assert_no_private_windows_setup_terms(response);

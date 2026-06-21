@@ -180,7 +180,7 @@ impl PlatformSandboxPlan {
             synthetic_home: Some(path_string(&synthetic_home)),
             temp_root: Some(path_string(&temp_root)),
             filesystem_read: vec!["workspace".to_string()],
-            filesystem_write: linux_experimental_write_labels(policy),
+            filesystem_write: portable_experimental_write_labels(policy),
             filesystem_deny: if policy.filesystem.deny.is_empty() {
                 Vec::new()
             } else {
@@ -235,6 +235,17 @@ impl PlatformSandboxPlan {
         policy: &SandboxPolicy,
     ) -> Self {
         Self::linux_experimental(backend, execution_id, cwd, policy)
+    }
+
+    pub(super) fn macos_read_only_experimental(
+        backend: &dyn SandboxBackend,
+        execution_id: &str,
+        cwd: &Path,
+        policy: &SandboxPolicy,
+    ) -> Self {
+        let mut plan = Self::linux_experimental(backend, execution_id, cwd, policy);
+        plan.enforcement = "macos-experimental";
+        plan
     }
 
     pub fn json(&self) -> Value {
@@ -697,7 +708,7 @@ pub(super) fn protected_filesystem_labels(policy: &SandboxPolicy) -> Vec<&'stati
     labels
 }
 
-fn linux_experimental_write_labels(policy: &SandboxPolicy) -> Vec<String> {
+fn portable_experimental_write_labels(policy: &SandboxPolicy) -> Vec<String> {
     let mut labels = Vec::new();
     if policy.sandbox_level == SandboxLevel::WorkspaceWrite {
         labels.push("workspace".to_string());

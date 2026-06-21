@@ -78,7 +78,7 @@ impl SandboxBackend for MacosExperimentalBackend {
         cwd: &Path,
         policy: &SandboxPolicy,
     ) -> Result<PlatformSandboxPlan, BackendError> {
-        compile_portable_preview_or_local(self, execution_id, cwd, policy)
+        compile_macos_plan(self, execution_id, cwd, policy)
     }
 
     fn execute_plan(
@@ -90,7 +90,7 @@ impl SandboxBackend for MacosExperimentalBackend {
         env: &ExecutionEnv,
         timeout: Option<Duration>,
     ) -> io::Result<BackendExecutionOutput> {
-        spawn_local_command(plan, command, cwd, stdin, env, timeout)
+        execute_macos_plan(plan, command, cwd, stdin, env, timeout)
     }
 
     fn capabilities_json(&self) -> Value {
@@ -101,6 +101,8 @@ impl SandboxBackend for MacosExperimentalBackend {
                 "sandboxed policies fail closed until conformance tests prove enforcement",
             ],
         );
+        payload["sandbox_levels"]["read-only"] = json!(CapabilityStatus::Experimental.as_str());
+        payload["network_modes"]["disabled"] = json!(CapabilityStatus::Experimental.as_str());
         payload["capability_probes"] = crate::macos::capability_probe::capability_probes();
         payload
     }
@@ -182,31 +184,40 @@ fn compile_local_execution_or_unsupported(
     }
 }
 
-fn compile_portable_preview_or_local(
+fn compile_macos_plan(
     backend: &dyn SandboxBackend,
     execution_id: &str,
     cwd: &Path,
     policy: &SandboxPolicy,
 ) -> Result<PlatformSandboxPlan, BackendError> {
     if policy.allows_local_execution() {
-        Ok(PlatformSandboxPlan::local_execution(
+        return Ok(PlatformSandboxPlan::local_execution(
             backend,
             execution_id,
             cwd,
             policy,
-        ))
-    } else {
-        Err(BackendError::unsupported_with_plan(
-            backend,
-            policy,
-            Some(PlatformSandboxPlan::portable_fail_closed_preview(
-                backend,
-                execution_id,
-                cwd,
-                policy,
-            )),
-        ))
+        ));
     }
+    if policy.sandbox_level == SandboxLevel::ReadOnly
+        && policy.network.mode == NetworkMode::Disabled
+    {
+        return Ok(PlatformSandboxPlan::macos_read_only_experimental(
+            backend,
+            execution_id,
+            cwd,
+            policy,
+        ));
+    }
+    Err(BackendError::unsupported_with_plan(
+        backend,
+        policy,
+        Some(PlatformSandboxPlan::portable_fail_closed_preview(
+            backend,
+            execution_id,
+            cwd,
+            policy,
+        )),
+    ))
 }
 
 fn compile_linux_plan(
@@ -283,6 +294,88 @@ fn execute_linux_plan(
             "Linux sandbox execution failed ({output_err}); runtime cleanup failed ({cleanup_err})"
         ))),
     }
+}
+
+fn execute_macos_plan(
+    plan: &PlatformSandboxPlan,
+    command: &[String],
+    cwd: &Path,
+    stdin: ExecutionStdin,
+    env: &ExecutionEnv,
+    timeout: Option<Duration>,
+) -> io::Result<BackendExecutionOutput> {
+    if !plan.is_sandbox_enforced() {
+        return spawn_local_command(plan, command, cwd, stdin, env, timeout);
+    }
+    if plan.enforcement != "macos-experimental" {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "unsupported macOS sandbox enforcement",
+        ));
+    }
+    plan.prepare_runtime_roots()?;
+    let output = spawn_macos_sandbox_exec(plan, command, cwd, stdin, env, timeout);
+    let cleanup = plan.cleanup_runtime_roots();
+    match (output, cleanup) {
+        (Ok(output), Ok(_)) => Ok(output),
+        (Err(err), Ok(_)) => Err(err),
+        (Ok(_), Err(err)) => Err(err),
+        (Err(output_err), Err(cleanup_err)) => Err(io::Error::other(format!(
+            "macOS sandbox execution failed ({output_err}); runtime cleanup failed ({cleanup_err})"
+        ))),
+    }
+}
+
+fn spawn_macos_sandbox_exec(
+    plan: &PlatformSandboxPlan,
+    command: &[String],
+    cwd: &Path,
+    stdin: ExecutionStdin,
+    env: &ExecutionEnv,
+    timeout: Option<Duration>,
+) -> io::Result<BackendExecutionOutput> {
+    let profile = macos_read_only_profile(plan)?;
+    let mut sandbox_command = vec![
+        "/usr/bin/sandbox-exec".to_string(),
+        "-p".to_string(),
+        profile,
+    ];
+    sandbox_command.extend(command.iter().cloned());
+
+    let mut runner_plan = plan.clone();
+    runner_plan.enforcement = "local-execution";
+    runner_plan.process_boundary = "local-process";
+    runner_plan.process_cleanup = "direct-child";
+    spawn_local_command(&runner_plan, &sandbox_command, cwd, stdin, env, timeout)
+}
+
+fn macos_read_only_profile(plan: &PlatformSandboxPlan) -> io::Result<String> {
+    let mut writable_roots = Vec::new();
+    for root in [
+        plan.runtime_root.as_deref(),
+        plan.profile_root.as_deref(),
+        plan.synthetic_home.as_deref(),
+        plan.temp_root.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        writable_roots.push(format!("(subpath \"{}\")", macos_profile_literal(root)));
+    }
+    if writable_roots.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "macOS read-only plan requires runtime roots",
+        ));
+    }
+    Ok(format!(
+        "(version 1)(deny default)(allow process*)(allow sysctl-read)(allow mach-lookup)(allow file-read*)(allow file-write* {})",
+        writable_roots.join(" ")
+    ))
+}
+
+fn macos_profile_literal(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 fn spawn_linux_bwrap(
