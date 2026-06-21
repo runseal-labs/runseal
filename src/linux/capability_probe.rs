@@ -9,10 +9,11 @@ pub(crate) fn capability_probes() -> Value {
             "landlock",
             landlock_abi_version.is_some()
         ),
-        probe(
+        probe_with_details(
             "filesystem_policy",
             "landlock_abi_version",
-            landlock_abi_version.is_some()
+            landlock_abi_version.is_some(),
+            landlock_abi_version.map(|version| json!({"abi_version": version})),
         ),
         probe(
             "process_isolation",
@@ -61,6 +62,19 @@ fn probe(capability: &str, mechanism: &str, available: bool) -> Value {
         "diagnostic_only": true,
         "available": available
     })
+}
+
+fn probe_with_details(
+    capability: &str,
+    mechanism: &str,
+    available: bool,
+    details: Option<Value>,
+) -> Value {
+    let mut probe = probe(capability, mechanism, available);
+    if let Some(details) = details {
+        probe["details"] = details;
+    }
+    probe
 }
 
 fn user_namespace_quota_available() -> bool {

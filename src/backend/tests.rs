@@ -476,6 +476,16 @@ fn linux_skeleton_reports_experimental_read_only_without_general_sandbox_feature
     assert_eq!(probes.len(), 10);
     assert_probe_schema(&probes[0], "filesystem_policy", "landlock");
     assert_probe_schema(&probes[1], "filesystem_policy", "landlock_abi_version");
+    if probes[1]["available"].as_bool() == Some(true) {
+        assert!(
+            probes[1]["details"]["abi_version"]
+                .as_u64()
+                .is_some_and(|version| version > 0),
+            "available Landlock ABI probe must report a positive ABI version"
+        );
+    } else {
+        assert!(probes[1].get("details").is_none());
+    }
     assert_probe_schema(&probes[2], "process_isolation", "user_namespaces");
     assert_probe_schema(&probes[3], "process_isolation", "user_namespace_quota");
     assert_probe_schema(&probes[4], "process_isolation", "mount_namespaces");
