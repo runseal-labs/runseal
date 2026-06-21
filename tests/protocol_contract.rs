@@ -475,14 +475,16 @@ fn rpc_stdio_ignores_client_notification_and_continues() -> Result<()> {
     .to_string()
         + "\n";
     stdin.write_all(notification.as_bytes())?;
+    stdin.write_all(br#"{"jsonrpc":"2.0","params":{}}"#)?;
+    stdin.write_all(b"\n")?;
     stdin.write_all(rpc_request_with_id(1, "getVersion", json!({})).as_bytes())?;
     stdin.flush()?;
 
     let (notifications, ok_response) = read_rpc_response(&mut stdout, 1)?;
-    assert!(
-        notifications.is_empty(),
-        "client notification produced messages: {notifications:?}"
-    );
+    assert_eq!(notifications.len(), 1);
+    assert_eq!(notifications[0]["id"], Value::Null);
+    assert_eq!(notifications[0]["error"]["code"], -32600);
+    assert_eq!(notifications[0]["error"]["data"]["code"], "INVALID_REQUEST");
     assert_eq!(
         ok_response["result"]["protocol_version"],
         "runseal.protocol/v1"
@@ -636,6 +638,10 @@ fn rpc_rejects_malformed_envelope() -> Result<()> {
         ),
         (
             json!({"jsonrpc": "2.0", "id": 1, "params": {}}),
+            "request.method is required",
+        ),
+        (
+            json!({"jsonrpc": "2.0", "params": {}}),
             "request.method is required",
         ),
     ];
