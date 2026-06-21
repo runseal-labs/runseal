@@ -120,6 +120,15 @@ Windows 上，重建 helper binaries 后运行 dogfood smoke：
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows-smoke.ps1
 ```
 
+Linux 或 macOS 上，构建 `runseal` 后运行 portable probe smoke：
+
+```bash
+python3 scripts/portable-probe-smoke.py
+```
+
+portable smoke 只检查 diagnostic capability probe 和沙箱策略的结构化
+fail-closed 行为，不提升 macOS 或 Linux 的 sandbox 支持声明。
+
 针对 managed proxy path：
 
 ```powershell
