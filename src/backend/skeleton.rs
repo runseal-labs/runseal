@@ -94,13 +94,22 @@ impl SandboxBackend for MacosExperimentalBackend {
     }
 
     fn capabilities_json(&self) -> Value {
-        capabilities_json_for(
+        let mut payload = capabilities_json_for(
             self,
             &[
                 "macOS backend is an experimental contribution track",
                 "sandboxed policies fail closed until conformance tests prove enforcement",
             ],
-        )
+        );
+        payload["capability_probes"] = json!([
+            {
+                "capability": "filesystem_policy",
+                "mechanism": "seatbelt",
+                "status": "unsupported",
+                "diagnostic_only": true
+            }
+        ]);
+        payload
     }
 }
 
@@ -146,13 +155,34 @@ impl SandboxBackend for LinuxCommunityBackend {
     }
 
     fn capabilities_json(&self) -> Value {
-        capabilities_json_for(
+        let mut payload = capabilities_json_for(
             self,
             &[
                 "Linux backend is a future community contribution track",
                 "sandboxed policies fail closed until conformance tests prove enforcement",
             ],
-        )
+        );
+        payload["capability_probes"] = json!([
+            {
+                "capability": "filesystem_policy",
+                "mechanism": "landlock",
+                "status": "unsupported",
+                "diagnostic_only": true
+            },
+            {
+                "capability": "process_isolation",
+                "mechanism": "user_namespaces",
+                "status": "unsupported",
+                "diagnostic_only": true
+            },
+            {
+                "capability": "process_isolation",
+                "mechanism": "bubblewrap",
+                "status": "unsupported",
+                "diagnostic_only": true
+            }
+        ]);
+        payload
     }
 }
 fn compile_local_execution_or_unsupported(
