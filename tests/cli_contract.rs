@@ -227,6 +227,7 @@ fn assert_no_private_linux_backend_terms(text: &str) {
         "--unshare-net",
         "--ro-bind",
         "namespace flags",
+        "namespace-sandbox",
     ] {
         assert!(
             !text.contains(private_term),

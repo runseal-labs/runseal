@@ -338,6 +338,7 @@ fn assert_no_private_linux_backend_terms(value: &Value) {
         "--unshare-net",
         "--ro-bind",
         "namespace flags",
+        "namespace-sandbox",
     ] {
         assert!(
             !public_payload.contains(private_term),
@@ -5202,7 +5203,7 @@ fn sandboxed_policy_uses_platform_backend_or_reports_unavailable() -> Result<()>
         );
         assert_eq!(
             response["result"]["platform_plan"]["process"]["boundary"],
-            "namespace-sandbox"
+            "sandboxed-process"
         );
         assert_eq!(
             response["result"]["platform_plan"]["network"]["direct_egress"],

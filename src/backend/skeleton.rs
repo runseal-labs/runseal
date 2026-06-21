@@ -226,7 +226,7 @@ fn linux_read_only_plan(
 ) -> PlatformSandboxPlan {
     let mut plan = PlatformSandboxPlan::local_execution(backend, execution_id, cwd, policy);
     plan.enforcement = LINUX_READ_ONLY_ENFORCEMENT;
-    plan.process_boundary = "namespace-sandbox";
+    plan.process_boundary = "sandboxed-process";
     plan.process_cleanup = "process-tree";
     plan.network_direct_egress = "deny";
     plan
