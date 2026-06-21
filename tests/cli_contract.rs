@@ -285,20 +285,6 @@ fn service_remote_transport_modes_fail_closed() -> Result<()> {
 }
 
 #[test]
-fn service_remote_transport_modes_fail_closed() -> Result<()> {
-    for flag in ["--tcp", "--http"] {
-        let output = run_cli(&["service", flag])?;
-
-        assert!(!output.status.success());
-        assert!(output.stdout.is_empty());
-        let stderr = String::from_utf8(output.stderr)?;
-        assert!(stderr.contains("remote transport RFC"), "{stderr}");
-        assert_no_private_windows_setup_terms(&stderr);
-    }
-    Ok(())
-}
-
-#[test]
 fn setup_help_describes_explicit_windows_setup() -> Result<()> {
     for args in [
         &["setup", "--help"][..],
