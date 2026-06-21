@@ -27,8 +27,8 @@ impl ServiceState {
         self.executions.result(execution_id)
     }
 
-    pub(super) fn has_execution(&self, execution_id: &str) -> bool {
-        self.executions.contains(execution_id)
+    pub(super) fn execution_status(&self, execution_id: &str) -> Option<&str> {
+        self.executions.status(execution_id)
     }
 
     pub(super) fn execution_summaries(&self) -> Vec<Value> {
