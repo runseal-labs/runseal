@@ -285,6 +285,33 @@
   },
   {
     "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.audit.policy-hash-consistency.v1",
+    "title": "Audit events must preserve the execution policy hash",
+    "primary_class": "audit",
+    "secondary_classes": ["policy"],
+    "capabilities_under_test": ["audit_jsonl", "policy_epoch"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "danger-full-access",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('policy hash')"],
+      "policy": "danger-full-access",
+      "network": "disabled"
+    },
+    "oracle": {
+      "expected_result": "allow_no_side_effect_outside_policy",
+      "max_severity": "S0",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["policy_hash_consistent", "policy_epoch_consistent"]
+    },
+    "public_report_labels": ["protocol_contract"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
     "case_id": "adv.filesystem.parent-traversal.v1",
     "title": "Workspace-contained execution must not read parent paths",
     "primary_class": "filesystem",
