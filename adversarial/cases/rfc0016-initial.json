@@ -446,6 +446,33 @@
   },
   {
     "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.audit.authorization-header-leakage.v1",
+    "title": "Authorization headers must be redacted from audit",
+    "primary_class": "audit",
+    "capabilities_under_test": ["audit_jsonl"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "danger-full-access",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('authorization')"],
+      "policy": "danger-full-access",
+      "network": "disabled",
+      "metadata": {"Authorization": "Bearer secret", "safe": "visible"}
+    },
+    "oracle": {
+      "expected_result": "audit_redacted",
+      "max_severity": "S0",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["audit_not_contains_secret"]
+    },
+    "public_report_labels": ["protocol_contract"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
     "case_id": "adv.audit.missing-deny-event.v1",
     "title": "Policy denials must be visible in audit and events",
     "primary_class": "audit",
