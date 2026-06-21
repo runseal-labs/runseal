@@ -191,6 +191,23 @@ fn adversarial_result_gate_rejects_non_promotable_results() {
 }
 
 #[test]
+fn adversarial_capability_promotion_requires_all_applicable_results() {
+    assert!(capability_promotion_allows(&[("S0", "S1", true, false)]));
+    assert!(capability_promotion_allows(&[
+        ("S0", "S1", true, false),
+        ("S1", "S1", true, false)
+    ]));
+    assert!(!capability_promotion_allows(&[
+        ("S0", "S1", true, false),
+        ("S2", "S1", true, false)
+    ]));
+    assert!(!capability_promotion_allows(&[
+        ("S0", "S1", true, false),
+        ("S0", "S1", true, true)
+    ]));
+}
+
+#[test]
 fn adversarial_severity_tracks_observed_escape_class() {
     assert_eq!(compute_severity(true, false, false, true), "S0");
     assert_eq!(compute_severity(true, false, false, false), "S1");
@@ -559,6 +576,14 @@ fn promotion_gate_allows(
         && !skipped
         && severity_rank(observed_severity).is_some_and(|observed| {
             severity_rank(max_severity).is_some_and(|maximum| observed <= maximum)
+        })
+}
+
+fn capability_promotion_allows(results: &[(&str, &str, bool, bool)]) -> bool {
+    results
+        .iter()
+        .all(|(observed_severity, max_severity, passed, skipped)| {
+            promotion_gate_allows(observed_severity, max_severity, *passed, *skipped)
         })
 }
 
