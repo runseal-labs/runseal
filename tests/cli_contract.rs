@@ -411,14 +411,16 @@ fn setup_status_reports_setup_readiness_without_running_setup() -> Result<()> {
             assert!(payload["elevated"].is_boolean(), "{payload}");
             let elevated = payload["elevated"].as_bool().unwrap_or(false);
             let broker_available = payload["broker"] == "available";
+            let can_run_now = payload["requires_setup"].as_bool().unwrap_or(false)
+                && (elevated || broker_available);
             assert_eq!(
                 payload["can_repair"].as_bool(),
-                Some(elevated || broker_available),
+                Some(can_run_now),
                 "{payload}"
             );
             assert_eq!(
                 payload["can_run_setup_now"].as_bool(),
-                Some(elevated || broker_available),
+                Some(can_run_now),
                 "{payload}"
             );
         } else {

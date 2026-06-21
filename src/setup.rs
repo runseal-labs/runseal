@@ -35,7 +35,8 @@ pub(crate) fn windows_sandbox_setup_status_payload(
     broker_available: bool,
     elevated: Option<bool>,
 ) -> Value {
-    let can_run_setup_now = platform_supported && (elevated.unwrap_or(false) || broker_available);
+    let requires_setup = platform_supported && !setup_complete;
+    let can_run_setup_now = requires_setup && (elevated.unwrap_or(false) || broker_available);
     let next_action = if !platform_supported {
         "unsupported"
     } else if setup_complete {
@@ -58,7 +59,7 @@ pub(crate) fn windows_sandbox_setup_status_payload(
         "elevated": elevated,
         "can_repair": can_run_setup_now,
         "can_run_setup_now": can_run_setup_now,
-        "requires_setup": platform_supported && !setup_complete,
+        "requires_setup": requires_setup,
         "next_action": next_action,
         "next_command": next_command,
     })

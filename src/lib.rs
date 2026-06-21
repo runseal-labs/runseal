@@ -153,6 +153,7 @@ mod tests {
         let elevated = windows_sandbox_setup_status_payload(true, false, false, Some(true));
         let broker = windows_sandbox_setup_status_payload(true, false, true, Some(false));
         let ready = windows_sandbox_setup_status_payload(true, true, false, Some(false));
+        let ready_broker = windows_sandbox_setup_status_payload(true, true, true, Some(false));
         let missing = windows_sandbox_setup_status_payload(true, false, false, Some(false));
         let unsupported = windows_sandbox_setup_status_payload(false, false, true, Some(true));
 
@@ -177,6 +178,11 @@ mod tests {
         assert_eq!(ready["requires_setup"], false);
         assert_eq!(ready["next_action"], "none");
         assert!(ready["next_command"].is_null());
+        assert_eq!(ready_broker["can_repair"], false);
+        assert_eq!(ready_broker["can_run_setup_now"], false);
+        assert_eq!(ready_broker["requires_setup"], false);
+        assert_eq!(ready_broker["next_action"], "none");
+        assert!(ready_broker["next_command"].is_null());
         assert_eq!(missing["can_repair"], false);
         assert_eq!(missing["can_run_setup_now"], false);
         assert_eq!(missing["requires_setup"], true);
