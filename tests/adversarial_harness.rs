@@ -117,12 +117,88 @@ fn adversarial_harness_materializes_file_fixtures_before_execution() -> Result<(
     Ok(())
 }
 
+#[test]
+fn adversarial_harness_inspects_file_side_effects() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let path = tmp.path().join("tracked.txt");
+    fs::write(&path, "before")?;
+    let pre_state = FilePreState::capture(&path)?;
+
+    assert!(inspect_file_side_effect(
+        "file_exists",
+        &path,
+        pre_state.as_ref()
+    )?);
+    assert!(inspect_file_side_effect(
+        "path_not_modified",
+        &path,
+        pre_state.as_ref()
+    )?);
+    fs::write(&path, "after")?;
+    assert!(!inspect_file_side_effect(
+        "path_not_modified",
+        &path,
+        pre_state.as_ref()
+    )?);
+    assert!(inspect_file_side_effect(
+        "file_not_exists",
+        &tmp.path().join("missing.txt"),
+        None
+    )?);
+    Ok(())
+}
+
 fn load_cases() -> Result<Vec<Value>> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("adversarial/cases/rfc0016-initial.json");
     let manifest =
         fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
     serde_json::from_str(&manifest)
         .with_context(|| format!("manifest must be JSON: {}", path.display()))
+}
+
+#[derive(Clone, Copy)]
+struct FilePreState {
+    len: u64,
+    modified: std::time::SystemTime,
+}
+
+impl FilePreState {
+    fn capture(path: &Path) -> Result<Option<Self>> {
+        if !path.exists() {
+            return Ok(None);
+        }
+        let metadata = fs::metadata(path)
+            .with_context(|| format!("failed to read metadata for {}", path.display()))?;
+        Ok(Some(Self {
+            len: metadata.len(),
+            modified: metadata
+                .modified()
+                .with_context(|| format!("failed to read modified time for {}", path.display()))?,
+        }))
+    }
+}
+
+fn inspect_file_side_effect(
+    kind: &str,
+    path: &Path,
+    pre_state: Option<&FilePreState>,
+) -> Result<bool> {
+    match kind {
+        "file_exists" => Ok(path.exists()),
+        "file_not_exists" => Ok(!path.exists()),
+        "path_not_modified" => {
+            let Some(pre_state) = pre_state else {
+                return Ok(!path.exists());
+            };
+            let metadata = fs::metadata(path)
+                .with_context(|| format!("failed to read metadata for {}", path.display()))?;
+            Ok(metadata.len() == pre_state.len
+                && metadata.modified().with_context(|| {
+                    format!("failed to read modified time for {}", path.display())
+                })? == pre_state.modified)
+        }
+        _ => bail!("unsupported file side-effect inspection {kind}"),
+    }
 }
 
 fn materialize_file_fixture(root: &Path, fixture: &Value) -> Result<PathBuf> {
