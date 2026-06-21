@@ -165,9 +165,10 @@ Integrators should start with one of these surfaces:
 - Conformance: set `RUNSEAL_BIN=/path/to/runseal` and run the black-box tests in `tests/`.
 
 Clients should gate sandboxed execution on `getCapabilities` and fail closed
-when a requested feature is unsupported or setup is unavailable. The stdio
-service records completed executions for `getExecution`, event replay, session
-disposal, and stable not-cancellable responses for already-finished executions.
+when a requested feature is unsupported or setup is unavailable. `getSetupStatus`
+reports setup readiness without changing setup state. The stdio service records
+completed executions for `getExecution`, event replay, session disposal, and
+stable not-cancellable responses for already-finished executions.
 
 ## Running tests
 

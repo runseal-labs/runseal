@@ -2,8 +2,8 @@ use crate::commands;
 use crate::error::RunSealError;
 use crate::protocol::request_validation::{
     cancel_execution_id_from_params, execute_from_params, explain_policy_from_params,
-    get_execution_id_from_params, session_id_from_params, subscribe_events_params,
-    validate_empty_params,
+    get_execution_id_from_params, session_id_from_params, setup_status_cwd_from_params,
+    subscribe_events_params, validate_empty_params,
 };
 use crate::rpc;
 use serde_json::{Value, json};
@@ -44,6 +44,19 @@ impl Service {
                 Ok(result) => vec![rpc::result(id, result)],
                 Err(err) => vec![rpc::error(id, err)],
             },
+            "getSetupStatus" => {
+                let cwd = match setup_status_cwd_from_params(&params) {
+                    Ok(cwd) => cwd,
+                    Err(err) => return vec![rpc::error(id, err)],
+                };
+                match commands::setup::windows_sandbox_setup_status_for_cwd(&cwd) {
+                    Ok(result) => vec![rpc::result(id, result)],
+                    Err(err) => vec![rpc::error(
+                        id,
+                        RunSealError::new("SETUP_STATUS_FAILED", err),
+                    )],
+                }
+            }
             "execute" => self.execute(id, &params),
             "getExecution" => self.get_execution(id, &params),
             "cancelExecution" => self.cancel_execution(id, &params),
