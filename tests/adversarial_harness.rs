@@ -46,6 +46,8 @@ fn adversarial_tier0_policy_cases_emit_public_safe_results() -> Result<()> {
         case["primary_class"] == "policy"
             && case["sandbox_level"] == "malformed"
             && case["oracle"]["expected_result"] == "policy_rejected"
+            && string_array_contains(&case["platforms"], current_platform())
+            && string_array_contains(&case["backend_status"], "local-baseline")
     });
 
     let mut ran = 0;
@@ -136,6 +138,12 @@ fn current_platform() -> &'static str {
     } else {
         "other"
     }
+}
+
+fn string_array_contains(value: &Value, needle: &str) -> bool {
+    value
+        .as_array()
+        .is_some_and(|items| items.iter().any(|item| item.as_str() == Some(needle)))
 }
 
 fn assert_public_safe(output: &str) -> Result<()> {
