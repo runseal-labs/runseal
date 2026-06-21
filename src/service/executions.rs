@@ -1,5 +1,6 @@
 use crate::error::RunSealError;
 use crate::events::timestamp_now;
+use crate::execution::audit_stream_event_metadata;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
@@ -99,6 +100,15 @@ impl ExecutionStore {
         self.records
             .get(execution_id)
             .map(|record| filter_events(&record.events, types))
+    }
+
+    pub(super) fn audit_events(&self, execution_id: &str, types: &[String]) -> Option<Vec<Value>> {
+        self.events(execution_id, types).map(|events| {
+            events
+                .into_iter()
+                .map(|event| audit_stream_event_metadata(&event))
+                .collect()
+        })
     }
 
     pub(super) fn remove_session(&mut self, session_id: &str) -> usize {

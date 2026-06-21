@@ -109,8 +109,19 @@ pub(crate) fn cancel_execution_id_from_params(params: &Value) -> Result<String, 
 pub(crate) fn subscribe_events_params(
     params: &Value,
 ) -> Result<(String, Vec<String>), RunSealError> {
-    let params = params_object(params, "subscribeEvents")?;
-    validate_param_keys(params, "subscribeEvents", &["execution_id", "types"])?;
+    lookup_events_params(params, "subscribeEvents")
+}
+
+pub(crate) fn audit_events_params(params: &Value) -> Result<(String, Vec<String>), RunSealError> {
+    lookup_events_params(params, "getAuditEvents")
+}
+
+fn lookup_events_params(
+    params: &Value,
+    method: &'static str,
+) -> Result<(String, Vec<String>), RunSealError> {
+    let params = params_object(params, method)?;
+    validate_param_keys(params, method, &["execution_id", "types"])?;
     validate_optional_lookup_params(params)?;
     let execution_id = required_prefixed_string_param(params, "execution_id", "exec_")?;
     let types = params
