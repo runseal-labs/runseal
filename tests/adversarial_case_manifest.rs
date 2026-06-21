@@ -192,18 +192,24 @@ fn adversarial_result_gate_rejects_non_promotable_results() {
 
 #[test]
 fn adversarial_capability_promotion_requires_all_applicable_results() {
-    assert!(capability_promotion_allows(&[("S0", "S1", true, false)]));
+    assert!(capability_promotion_allows(&[(
+        "S0", "S1", true, false, "passed"
+    )]));
     assert!(capability_promotion_allows(&[
-        ("S0", "S1", true, false),
-        ("S1", "S1", true, false)
+        ("S0", "S1", true, false, "passed"),
+        ("S1", "S1", true, false, "passed")
     ]));
     assert!(!capability_promotion_allows(&[
-        ("S0", "S1", true, false),
-        ("S2", "S1", true, false)
+        ("S0", "S1", true, false, "passed"),
+        ("S2", "S1", true, false, "passed")
     ]));
     assert!(!capability_promotion_allows(&[
-        ("S0", "S1", true, false),
-        ("S0", "S1", true, true)
+        ("S0", "S1", true, false, "passed"),
+        ("S0", "S1", true, true, "skipped")
+    ]));
+    assert!(!capability_promotion_allows(&[
+        ("S0", "S1", true, false, "passed"),
+        ("S0", "S1", true, false, "xfailed")
     ]));
 }
 
@@ -579,12 +585,13 @@ fn promotion_gate_allows(
         })
 }
 
-fn capability_promotion_allows(results: &[(&str, &str, bool, bool)]) -> bool {
-    results
-        .iter()
-        .all(|(observed_severity, max_severity, passed, skipped)| {
-            promotion_gate_allows(observed_severity, max_severity, *passed, *skipped)
-        })
+fn capability_promotion_allows(results: &[(&str, &str, bool, bool, &str)]) -> bool {
+    results.iter().all(
+        |(observed_severity, max_severity, passed, skipped, status)| {
+            *status == "passed"
+                && promotion_gate_allows(observed_severity, max_severity, *passed, *skipped)
+        },
+    )
 }
 
 fn severity_rank(severity: &str) -> Option<usize> {
