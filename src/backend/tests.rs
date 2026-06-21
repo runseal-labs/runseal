@@ -457,6 +457,20 @@ fn linux_skeleton_reports_community_track_without_sandbox_features() {
 }
 
 #[test]
+fn linux_skeleton_fails_closed_for_sandboxed_policy() {
+    let cwd = PathBuf::from("/workspace");
+    let policy = normalize_policy(&json!("read-only"), &cwd, None).unwrap();
+
+    let err = LinuxCommunityBackend
+        .compile_plan("exec_linux_read_only", &cwd, &policy)
+        .unwrap_err();
+
+    assert_eq!(err.code, "BACKEND_CAPABILITY_MISSING");
+    assert_eq!(err.support, "unsupported");
+    assert_eq!(err.backend, LinuxCommunityBackend.name());
+}
+
+#[test]
 fn macos_skeleton_reports_experimental_track_without_sandbox_features() {
     assert_eq!(
         MacosExperimentalBackend.name(),
@@ -470,6 +484,20 @@ fn macos_skeleton_reports_experimental_track_without_sandbox_features() {
     assert_eq!(probes.len(), 1);
     assert_eq!(probes[0]["status"], "unsupported");
     assert_eq!(probes[0]["diagnostic_only"], true);
+}
+
+#[test]
+fn macos_skeleton_fails_closed_for_sandboxed_policy() {
+    let cwd = PathBuf::from("/workspace");
+    let policy = normalize_policy(&json!("read-only"), &cwd, None).unwrap();
+
+    let err = MacosExperimentalBackend
+        .compile_plan("exec_macos_read_only", &cwd, &policy)
+        .unwrap_err();
+
+    assert_eq!(err.code, "BACKEND_CAPABILITY_MISSING");
+    assert_eq!(err.support, "unsupported");
+    assert_eq!(err.backend, MacosExperimentalBackend.name());
 }
 
 #[test]
