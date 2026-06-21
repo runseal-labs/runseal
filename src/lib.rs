@@ -58,15 +58,14 @@ fn run() -> Result<(), String> {
         [command, flag] if command == "service" && flag == "--stdio" => {
             protocol::rpc_handler::run_service_stdio()
         }
-        [command, flag, ..] if command == "service" && (flag == "--pipe" || flag == "--socket") => {
-            Err(format!(
-                "service {flag} requires same-user IPC peer authentication and is not implemented"
-            ))
-        }
-        [command, flag, ..] if command == "service" && (flag == "--tcp" || flag == "--http") => {
-            Err(format!(
-                "service {flag} requires a remote transport RFC and is not implemented"
-            ))
+        [command, flag, rest @ ..]
+            if command == "service"
+                && (flag == "--pipe"
+                    || flag == "--socket"
+                    || flag == "--tcp"
+                    || flag == "--http") =>
+        {
+            service::unsupported_transport(flag, rest)
         }
         [command, rest @ ..] if command == "setup" => commands::setup::run(rest),
         [command, rest @ ..] if command == "explain-policy" => commands::explain_policy::run(rest),

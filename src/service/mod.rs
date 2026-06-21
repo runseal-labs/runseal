@@ -25,6 +25,9 @@ mod request_validation;
 mod sessions;
 mod setup_readiness;
 mod state;
+mod transport;
+
+pub(crate) use transport::unsupported_transport;
 
 #[derive(Clone, Default)]
 pub(crate) struct Service {

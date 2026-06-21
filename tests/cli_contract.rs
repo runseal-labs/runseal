@@ -341,6 +341,17 @@ fn service_local_ipc_modes_fail_closed() -> Result<()> {
         );
         assert_no_private_windows_setup_terms(&stderr);
     }
+
+    let output = run_cli(&["service", "--socket", "@runseal-test"])?;
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(
+        stderr.contains("filesystem-backed same-user IPC endpoint"),
+        "{stderr}"
+    );
+    assert_no_private_windows_setup_terms(&stderr);
+
     Ok(())
 }
 
