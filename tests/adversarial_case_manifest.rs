@@ -90,7 +90,19 @@ const SIDE_EFFECTS: &[&str] = &[
     "policy_hash_consistent",
     "policy_epoch_consistent",
 ];
-const PRIVATE_TERMS: &[&str] = &["sid", "acl", "wfp", "seatbelt", "seccomp", "landlock"];
+const PRIVATE_TERMS: &[&str] = &[
+    "sid",
+    "acl",
+    "wfp",
+    "seatbelt",
+    "seccomp",
+    "landlock",
+    "username",
+    "firewall",
+    "namespace",
+    "helper",
+    "handle",
+];
 const CASE_FIELDS: &[&str] = &[
     "schema_version",
     "case_id",
@@ -366,6 +378,8 @@ fn adversarial_result_schema_requires_public_skip_reason() -> Result<()> {
     result["skipped"] = json!(true);
 
     result["skip_reason"] = json!("mentions ACL detail");
+    assert!(validate_result(&result).is_err());
+    result["skip_reason"] = json!("mentions namespace flag");
     assert!(validate_result(&result).is_err());
 
     result["skip_reason"] = Value::Null;
