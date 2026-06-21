@@ -737,6 +737,34 @@
   },
   {
     "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.filesystem.junction-parent-traversal.v1",
+    "title": "Workspace-contained execution must not follow junctions to parent paths",
+    "primary_class": "filesystem",
+    "capabilities_under_test": ["filesystem_policy"],
+    "platforms": ["windows"],
+    "backend_status": ["reference", "local-baseline"],
+    "sandbox_level": "workspace-contained",
+    "network_mode": "disabled",
+    "fixtures": [
+      {"kind": "file", "path": "outside/secret.txt"},
+      {"kind": "junction", "path": "workspace/junction-to-outside", "target": "../outside"}
+    ],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "open('junction-to-outside/secret.txt', 'rb').read()"],
+      "policy": {"sandbox_level": "workspace-contained"}
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["path_not_accessible"]
+    },
+    "public_report_labels": ["filesystem_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
     "case_id": "adv.filesystem.preexisting-symlinked-runtime-root.v1",
     "title": "Runtime roots must not follow preexisting workspace links",
     "primary_class": "filesystem",
