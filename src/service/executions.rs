@@ -61,6 +61,7 @@ impl ExecutionStore {
                 "audit_path",
                 "backend",
                 "platform_plan",
+                "setup_status",
             ] {
                 if let Some(value) = details.get(key) {
                     result.insert(key.to_string(), value.clone());
@@ -256,5 +257,29 @@ mod tests {
 
         assert_eq!(events[0]["execution_id"], "exec_z");
         assert_eq!(events[1]["execution_id"], "exec_a");
+    }
+
+    #[test]
+    fn failed_result_preserves_setup_status() {
+        let mut store = ExecutionStore::default();
+        let err = RunSealError::with_details(
+            "BACKEND_UNAVAILABLE",
+            "backend unavailable",
+            json!({
+                "execution_id": "exec_setup",
+                "session_id": "sess_1",
+                "setup_status": {
+                    "setup": "windows-sandbox",
+                    "requires_setup": true
+                }
+            }),
+        );
+
+        store.record_failed(&err);
+        let result = store.result("exec_setup").unwrap();
+
+        assert_eq!(result["status"], "failed");
+        assert_eq!(result["setup_status"]["setup"], "windows-sandbox");
+        assert_eq!(result["setup_status"]["requires_setup"], true);
     }
 }
