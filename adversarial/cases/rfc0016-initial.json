@@ -265,6 +265,32 @@
   },
   {
     "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.execution_injection.stdin-mode-confusion.v1",
+    "title": "Stdin mode confusion must be rejected",
+    "primary_class": "execution_injection",
+    "capabilities_under_test": ["stdin_bytes", "stdin_file"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "danger-full-access",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "import sys; sys.stdin.buffer.read()"],
+      "policy": "danger-full-access",
+      "network": "disabled",
+      "stdin": {"mode": "bytes", "path": "input.txt", "data": "aGVsbG8="}
+    },
+    "oracle": {
+      "expected_result": "deny",
+      "max_severity": "S0",
+      "audit": {"required": false},
+      "events": {"required": false}
+    },
+    "public_report_labels": ["protocol_contract"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
     "case_id": "adv.execution_injection.invalid-base64-stdin.v1",
     "title": "Invalid bytes stdin payloads must be rejected",
     "primary_class": "execution_injection",
