@@ -218,6 +218,27 @@ fn adversarial_stdin_file_outside_cwd_case_runs() -> Result<()> {
 }
 
 #[test]
+fn adversarial_program_resolution_confusion_case_runs() -> Result<()> {
+    let case = load_cases()?
+        .into_iter()
+        .find(|case| case["case_id"] == "adv.execution_injection.program-resolution-confusion.v1")
+        .context("program resolution confusion adversarial case must exist")?;
+    let tmp = TempDir::new()?;
+
+    let response = run_case(&case, tmp.path())?;
+    assert_eq!(
+        observed_denial_result(&response),
+        "deny",
+        "case {} must deny: {response}",
+        case["case_id"]
+    );
+    let result = emit_result(&case, "deny", true)?;
+    assert_eq!(result["status"], "passed", "{result}");
+    assert_public_safe(&result.to_string())?;
+    Ok(())
+}
+
+#[test]
 fn adversarial_harness_materializes_file_fixtures_before_execution() -> Result<()> {
     let cases = load_cases()?;
     let mut materialized = 0;
