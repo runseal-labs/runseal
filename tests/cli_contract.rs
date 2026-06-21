@@ -224,6 +224,36 @@ fn assert_portable_capability_probe_contract(payload: &Value) {
             assert_eq!(probe["status"], "unsupported");
             assert_eq!(probe["diagnostic_only"], true);
         }
+        let mechanisms = probes
+            .iter()
+            .map(|probe| probe["mechanism"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        #[cfg(target_os = "linux")]
+        assert_eq!(
+            mechanisms,
+            vec![
+                "landlock",
+                "user_namespaces",
+                "mount_namespaces",
+                "pid_namespaces",
+                "network_namespaces",
+                "seccomp",
+                "bubblewrap",
+                "unprivileged_user_namespaces",
+            ]
+        );
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            mechanisms,
+            vec![
+                "sandbox_exec",
+                "sandbox_exec_executable",
+                "macos_version",
+                "temporary_profile",
+                "canonical_paths",
+                "symlink_path_model",
+            ]
+        );
     }
 }
 
