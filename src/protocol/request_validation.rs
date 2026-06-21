@@ -11,7 +11,7 @@ use crate::{
     MAX_PROTOCOL_ID_BYTES,
 };
 use serde_json::{Map, Value, json};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 pub(crate) fn explain_policy_from_params(params: &Value) -> Result<Value, RunSealError> {
@@ -74,6 +74,7 @@ pub(crate) fn execute_from_params(params: &Value) -> Result<(Vec<Value>, Value),
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
+    validate_command(&command)?;
     let cwd = params
         .get("cwd")
         .and_then(Value::as_str)
@@ -91,6 +92,22 @@ pub(crate) fn execute_from_params(params: &Value) -> Result<(Vec<Value>, Value),
     let env = env_from_params(params, &policy)?;
 
     execute_command(&command, &cwd, &policy, stdin, env, metadata, timeout)
+}
+
+fn validate_command(command: &[String]) -> Result<(), RunSealError> {
+    let Some(program) = command.first().filter(|program| !program.is_empty()) else {
+        return Err(RunSealError::new(
+            "INVALID_REQUEST",
+            "params.command is empty",
+        ));
+    };
+    if !(Path::new(program).is_absolute() || program.contains('/') || program.contains('\\')) {
+        return Err(RunSealError::new(
+            "INVALID_REQUEST",
+            "params.command[0] must be path-qualified",
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn get_execution_id_from_params(params: &Value) -> Result<String, RunSealError> {

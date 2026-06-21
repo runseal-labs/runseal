@@ -5,6 +5,7 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Output};
+use std::sync::OnceLock;
 use tempfile::TempDir;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
@@ -41,7 +42,32 @@ fn run_cli(args: &[&str]) -> Result<Output> {
 }
 
 fn python_bin() -> &'static str {
-    if cfg!(windows) { "python" } else { "python3" }
+    static PYTHON: OnceLock<String> = OnceLock::new();
+    PYTHON.get_or_init(resolve_python_bin)
+}
+
+fn resolve_python_bin() -> String {
+    if let Some(path) = env::var_os("RUNSEAL_TEST_PYTHON") {
+        return PathBuf::from(path).to_string_lossy().into_owned();
+    }
+    let output = match if cfg!(windows) {
+        Command::new("where.exe").arg("python").output()
+    } else {
+        Command::new("sh")
+            .args(["-c", "command -v python3"])
+            .output()
+    } {
+        Ok(output) => output,
+        Err(err) => panic!("failed to locate python: {err}"),
+    };
+    let stdout = match String::from_utf8(output.stdout) {
+        Ok(stdout) => stdout,
+        Err(err) => panic!("python path must be utf-8: {err}"),
+    };
+    match stdout.lines().next() {
+        Some(path) => path.to_string(),
+        None => panic!("python must exist"),
+    }
 }
 
 fn stdout_json(output: &Output) -> Result<Value> {

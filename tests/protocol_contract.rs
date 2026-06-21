@@ -6,6 +6,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
+use std::sync::OnceLock;
 #[cfg(windows)]
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
@@ -82,7 +83,32 @@ fn windows_protocol_lock() -> Result<MutexGuard<'static, ()>> {
 }
 
 fn python_bin() -> &'static str {
-    if cfg!(windows) { "python" } else { "python3" }
+    static PYTHON: OnceLock<String> = OnceLock::new();
+    PYTHON.get_or_init(resolve_python_bin)
+}
+
+fn resolve_python_bin() -> String {
+    if let Some(path) = env::var_os("RUNSEAL_TEST_PYTHON") {
+        return PathBuf::from(path).to_string_lossy().into_owned();
+    }
+    let output = match if cfg!(windows) {
+        Command::new("where.exe").arg("python").output()
+    } else {
+        Command::new("sh")
+            .args(["-c", "command -v python3"])
+            .output()
+    } {
+        Ok(output) => output,
+        Err(err) => panic!("failed to locate python: {err}"),
+    };
+    let stdout = match String::from_utf8(output.stdout) {
+        Ok(stdout) => stdout,
+        Err(err) => panic!("python path must be utf-8: {err}"),
+    };
+    match stdout.lines().next() {
+        Some(path) => path.to_string(),
+        None => panic!("python must exist"),
+    }
 }
 
 fn stdout_json_lines(output: &Output) -> Result<Vec<Value>> {
@@ -1742,7 +1768,7 @@ fn service_stdio_keeps_failed_execution_state() -> Result<()> {
             1,
             "execute",
             json!({
-                "command": ["runseal-command-that-does-not-exist"],
+                "command": ["./runseal-command-that-does-not-exist"],
                 "cwd": tmp.path(),
                 "policy": "danger-full-access",
             }),
@@ -2166,6 +2192,34 @@ fn execute_rejects_unsupported_request_fields() -> Result<()> {
                 .contains(&format!("params.{field} is not supported"))
         );
     }
+    Ok(())
+}
+
+#[test]
+fn execute_rejects_bare_program_names() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let output = run_rpc(&rpc_request(
+        "execute",
+        json!({
+            "command": ["runseal-test"],
+            "cwd": tmp.path(),
+            "policy": "danger-full-access"
+        }),
+    ))?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = &messages[0];
+
+    assert_eq!(response["error"]["data"]["code"], "INVALID_REQUEST");
+    assert_eq!(
+        response["error"]["data"]["reason"],
+        "params.command[0] must be path-qualified"
+    );
     Ok(())
 }
 
@@ -3113,7 +3167,7 @@ fn execute_start_failure_returns_audit_path_and_failed_event() -> Result<()> {
     let output = run_rpc(&rpc_request(
         "execute",
         json!({
-            "command": ["runseal-command-that-does-not-exist-for-test"],
+            "command": ["./runseal-command-that-does-not-exist-for-test"],
             "cwd": tmp.path(),
             "policy": "danger-full-access"
         }),
