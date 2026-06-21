@@ -647,6 +647,31 @@
   },
   {
     "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.runtime.cross-execution-contamination.v1",
+    "title": "Executions must not observe prior runtime state",
+    "primary_class": "runtime",
+    "capabilities_under_test": ["runtime_roots", "runtime_environment"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "read-only",
+    "network_mode": "disabled",
+    "fixtures": [{"kind": "file", "path": "workspace/.runseal/runtime/exec_previous/home/prior-state.txt", "body": "prior"}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "open('.runseal/runtime/exec_previous/home/prior-state.txt', 'rb').read()"],
+      "policy": {"sandbox_level": "read-only"}
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["path_not_accessible", "event_not_contains_private_detail"]
+    },
+    "public_report_labels": ["runtime_roots"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
     "case_id": "adv.process.orphan-child-after-cancel.v1",
     "title": "Cancellation must not leave child processes running",
     "primary_class": "process",
