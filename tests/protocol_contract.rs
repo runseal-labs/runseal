@@ -244,6 +244,14 @@ fn expected_network_disabled_status() -> &'static str {
     }
 }
 
+fn expected_workspace_write_status() -> &'static str {
+    if cfg!(target_os = "linux") {
+        "experimental"
+    } else {
+        expected_status(expected_windows_sandbox_supported())
+    }
+}
+
 fn expected_missing_features(additional: &[&'static str]) -> Vec<&'static str> {
     let mut features = vec!["filesystem_policy"];
     if !expected_runtime_roots_supported() {
@@ -1269,7 +1277,7 @@ fn get_capabilities_rpc_contract() -> Result<()> {
     assert_eq!(payload["sandbox_levels"]["danger-full-access"], "supported");
     assert_eq!(
         payload["sandbox_levels"]["workspace-write"],
-        expected_status(expected_windows_sandbox_supported())
+        expected_workspace_write_status()
     );
     assert_eq!(
         payload["network_modes"]["disabled"],
@@ -3767,7 +3775,7 @@ fn sandboxed_policy_uses_platform_backend_or_reports_unavailable() -> Result<()>
             assert_eq!(response["result"]["sandbox"]["enforced"], true);
             assert_eq!(
                 response["result"]["platform_plan"]["enforcement"],
-                "linux-read-only-experimental"
+                "linux-experimental"
             );
         }
         assert_no_private_windows_setup_terms(response);
