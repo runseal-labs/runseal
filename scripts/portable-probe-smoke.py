@@ -69,6 +69,14 @@ def assert_probes(payload: dict, system: str) -> None:
             raise SystemExit(f"probe is not diagnostic-only unsupported: {probe}")
         if not isinstance(probe.get("available"), bool):
             raise SystemExit(f"probe availability must be boolean: {probe}")
+        if (
+            system == "Linux"
+            and probe.get("mechanism") == "landlock_abi_version"
+            and probe.get("available") is True
+        ):
+            abi_version = probe.get("details", {}).get("abi_version")
+            if not isinstance(abi_version, int) or abi_version <= 0:
+                raise SystemExit(f"Landlock ABI probe must report a positive ABI version: {probe}")
 
 
 def probe_available(payload: dict, mechanism: str) -> bool:
