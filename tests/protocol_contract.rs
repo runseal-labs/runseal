@@ -1602,12 +1602,39 @@ fn service_stdio_keeps_completed_execution_state() -> Result<()> {
     stdin.write_all(
         rpc_request_with_id(
             4,
+            "subscribeEvents",
+            json!({ "execution_id": execution_id }),
+        )
+        .as_bytes(),
+    )?;
+    let (all_subscription_events, all_subscribe_response) = read_rpc_response(&mut stdout, 4)?;
+    assert_eq!(
+        all_subscribe_response["result"]["execution_id"],
+        execution_id
+    );
+    assert_eq!(
+        all_subscribe_response["result"]["event_count"],
+        all_subscription_events.len()
+    );
+    let all_subscription_event_types: Vec<_> = all_subscription_events
+        .iter()
+        .filter_map(|event| event["params"]["type"].as_str())
+        .collect();
+    assert!(all_subscription_event_types.contains(&"policy.resolved"));
+    assert!(all_subscription_event_types.contains(&"policy.allowed"));
+    assert!(all_subscription_event_types.contains(&"execution.started"));
+    assert!(all_subscription_event_types.contains(&"execution.stdout"));
+    assert!(all_subscription_event_types.contains(&"execution.finished"));
+
+    stdin.write_all(
+        rpc_request_with_id(
+            5,
             "cancelExecution",
             json!({ "execution_id": execution_id, "reason": "test" }),
         )
         .as_bytes(),
     )?;
-    let (_, cancel_response) = read_rpc_response(&mut stdout, 4)?;
+    let (_, cancel_response) = read_rpc_response(&mut stdout, 5)?;
     assert_eq!(
         cancel_response["error"]["data"]["code"],
         "EXECUTION_NOT_CANCELLABLE"
@@ -1619,28 +1646,28 @@ fn service_stdio_keeps_completed_execution_state() -> Result<()> {
     assert_eq!(cancel_response["error"]["data"]["status"], "finished");
 
     stdin.write_all(
-        rpc_request_with_id(5, "disposeSession", json!({ "session_id": session_id })).as_bytes(),
+        rpc_request_with_id(6, "disposeSession", json!({ "session_id": session_id })).as_bytes(),
     )?;
-    let (_, dispose_response) = read_rpc_response(&mut stdout, 5)?;
+    let (_, dispose_response) = read_rpc_response(&mut stdout, 6)?;
     assert_eq!(dispose_response["result"]["status"], "disposed");
     assert_eq!(dispose_response["result"]["released_executions"], 0);
 
     stdin.write_all(
-        rpc_request_with_id(6, "getExecution", json!({ "execution_id": execution_id })).as_bytes(),
+        rpc_request_with_id(7, "getExecution", json!({ "execution_id": execution_id })).as_bytes(),
     )?;
-    let (_, retained_response) = read_rpc_response(&mut stdout, 6)?;
+    let (_, retained_response) = read_rpc_response(&mut stdout, 7)?;
     assert_eq!(retained_response["result"]["execution_id"], execution_id);
     assert_eq!(retained_response["result"]["status"], "finished");
 
     stdin.write_all(
         rpc_request_with_id(
-            7,
+            8,
             "getAuditEvents",
             json!({ "execution_id": execution_id, "types": ["execution.finished"] }),
         )
         .as_bytes(),
     )?;
-    let (_, audit_response) = read_rpc_response(&mut stdout, 7)?;
+    let (_, audit_response) = read_rpc_response(&mut stdout, 8)?;
     assert_eq!(audit_response["result"]["count"], 1);
 
     drop(stdin);
