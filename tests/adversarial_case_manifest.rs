@@ -241,6 +241,9 @@ fn adversarial_result_schema_requires_public_skip_reason() -> Result<()> {
     validate_result(&result)?;
     result["skip_reason"] = json!("backend sid unavailable");
     assert!(validate_result(&result).is_err());
+    result["skip_reason"] = json!("unsupported fixture kind");
+    result["backend_name"] = json!("raw acl leaked");
+    assert!(validate_result(&result).is_err());
     Ok(())
 }
 
@@ -416,6 +419,7 @@ fn validate_fixtures(fixtures: &Value, path: &Path) -> Result<()> {
 fn validate_result(result: &Value) -> Result<()> {
     let path = Path::new("adversarial-result");
     assert_allowed_fields(result, "result", RESULT_FIELDS, path)?;
+    assert_public_safe(&result.to_string(), path)?;
     assert_eq!(
         required_string(result, "schema_version", path)?,
         "runseal.adversarial-result/v1"
