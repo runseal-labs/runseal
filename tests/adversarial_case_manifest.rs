@@ -182,6 +182,40 @@ fn adversarial_case_manifests_match_rfc0016_shape() -> Result<()> {
 }
 
 #[test]
+fn adversarial_json_schemas_lock_public_v1_shapes() -> Result<()> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("adversarial/schemas");
+    for (file, schema_version) in [
+        (
+            "adversarial-case.schema.json",
+            "runseal.adversarial-case/v1",
+        ),
+        (
+            "adversarial-result.schema.json",
+            "runseal.adversarial-result/v1",
+        ),
+    ] {
+        let path = root.join(file);
+        let schema: Value = serde_json::from_str(
+            &fs::read_to_string(&path)
+                .with_context(|| format!("failed to read {}", path.display()))?,
+        )
+        .with_context(|| format!("schema must be JSON: {}", path.display()))?;
+        assert_eq!(schema["type"], "object");
+        assert_eq!(schema["additionalProperties"], false);
+        assert_eq!(
+            schema["properties"]["schema_version"]["const"],
+            schema_version
+        );
+        assert!(schema["required"].as_array().is_some_and(|fields| {
+            fields
+                .iter()
+                .any(|field| field.as_str() == Some("schema_version"))
+        }));
+    }
+    Ok(())
+}
+
+#[test]
 fn adversarial_result_gate_rejects_non_promotable_results() {
     assert!(promotion_gate_allows("S0", "S0", true, false));
     assert!(promotion_gate_allows("S1", "S1", true, false));

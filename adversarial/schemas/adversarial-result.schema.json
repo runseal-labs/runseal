@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://runseal.dev/schemas/adversarial-result.schema.json",
+  "title": "RunSeal adversarial result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "case_id",
+    "backend_name",
+    "backend_status",
+    "platform",
+    "capabilities_under_test",
+    "sandbox_level",
+    "network_mode",
+    "expected_result",
+    "observed_result",
+    "severity",
+    "passed",
+    "skipped",
+    "skip_reason",
+    "policy_hash_present",
+    "policy_epoch_present",
+    "audit_present",
+    "events_present",
+    "public_safe_output",
+    "status"
+  ],
+  "properties": {
+    "schema_version": {"const": "runseal.adversarial-result/v1"},
+    "case_id": {"type": "string"},
+    "backend_name": {"type": "string"},
+    "backend_status": {"enum": ["reference", "experimental", "future-community", "local-baseline", "scaffold"]},
+    "platform": {"enum": ["windows", "macos", "linux", "other"]},
+    "capabilities_under_test": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+    "sandbox_level": {"enum": ["read-only", "workspace-contained", "workspace-write", "danger-full-access", "malformed"]},
+    "network_mode": {"enum": ["disabled", "proxy", "malformed"]},
+    "expected_result": {
+      "enum": [
+        "allow_no_side_effect_outside_policy",
+        "deny",
+        "fail_closed",
+        "deny_or_fail_closed",
+        "backend_unavailable",
+        "timeout",
+        "cancelled",
+        "audit_redacted",
+        "event_emitted",
+        "policy_rejected"
+      ]
+    },
+    "observed_result": {
+      "enum": [
+        "allow_no_side_effect_outside_policy",
+        "deny",
+        "fail_closed",
+        "deny_or_fail_closed",
+        "backend_unavailable",
+        "timeout",
+        "cancelled",
+        "audit_redacted",
+        "event_emitted",
+        "policy_rejected"
+      ]
+    },
+    "severity": {"enum": ["S0", "S1", "S2", "S3", "S4"]},
+    "passed": {"type": "boolean"},
+    "skipped": {"type": "boolean"},
+    "skip_reason": {"type": ["string", "null"]},
+    "policy_hash_present": {"type": "boolean"},
+    "policy_epoch_present": {"type": "boolean"},
+    "audit_present": {"type": "boolean"},
+    "events_present": {"type": "boolean"},
+    "public_safe_output": {"type": "boolean"},
+    "status": {"enum": ["passed", "failed", "skipped", "xfailed", "invalid_case", "unsupported_fixture", "harness_error"]}
+  }
+}
