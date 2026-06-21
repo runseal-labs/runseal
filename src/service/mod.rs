@@ -17,9 +17,28 @@ mod state;
 #[derive(Default)]
 pub(crate) struct Service {
     state: ServiceState,
+    mode: ServiceMode,
+}
+
+#[derive(Clone, Copy, Default)]
+enum ServiceMode {
+    Direct,
+    #[default]
+    Service,
 }
 
 impl Service {
+    pub(crate) fn direct() -> Self {
+        Self {
+            state: ServiceState::default(),
+            mode: ServiceMode::Direct,
+        }
+    }
+
+    pub(crate) fn stateful() -> Self {
+        Self::default()
+    }
+
     pub(crate) fn handle_rpc_request(&mut self, request: &Value) -> Vec<Value> {
         let (id, method, params) = match rpc_request_parts(request) {
             Ok(parts) => parts,
@@ -38,6 +57,10 @@ impl Service {
             },
             "getCapabilities" => match validate_empty_params(&params, "getCapabilities") {
                 Ok(()) => vec![rpc::result(id, commands::capabilities::payload())],
+                Err(err) => vec![rpc::error(id, err)],
+            },
+            "getServiceStatus" => match validate_empty_params(&params, "getServiceStatus") {
+                Ok(()) => vec![rpc::result(id, self.service_status())],
                 Err(err) => vec![rpc::error(id, err)],
             },
             "explainPolicy" => match explain_policy_from_params(&params) {
@@ -64,6 +87,18 @@ impl Service {
             "disposeSession" => self.dispose_session(id, &params),
             _ => vec![rpc::method_not_found(id, method)],
         }
+    }
+
+    fn service_status(&self) -> Value {
+        let stateful = matches!(self.mode, ServiceMode::Service);
+        json!({
+            "status": "running",
+            "mode": if stateful { "service" } else { "direct" },
+            "transport": "stdio",
+            "stateful": stateful,
+            "local_only": true,
+            "remote_listener": false,
+        })
     }
 
     fn execute(&mut self, id: Value, params: &Value) -> Vec<Value> {
