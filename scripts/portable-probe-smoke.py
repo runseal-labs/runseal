@@ -211,8 +211,8 @@ def assert_macos_read_only(payload: dict) -> None:
         raise SystemExit(f"unexpected macOS backend status: {payload}")
     if payload.get("sandbox_levels", {}).get("read-only") != "experimental":
         raise SystemExit(f"macOS read-only must be experimental: {payload}")
-    if payload.get("sandbox_levels", {}).get("workspace-write") != "unsupported":
-        raise SystemExit(f"macOS workspace-write must remain unsupported: {payload}")
+    if payload.get("sandbox_levels", {}).get("workspace-write") != "experimental":
+        raise SystemExit(f"macOS workspace-write must be experimental: {payload}")
     if payload.get("network_modes", {}).get("disabled") != "experimental":
         raise SystemExit(f"macOS network.disabled must be experimental: {payload}")
 
@@ -238,7 +238,58 @@ def assert_macos_read_only(payload: dict) -> None:
             raise SystemExit(f"unexpected macOS read-only plan: {result}")
         if result.get("exit_code") == 0 or write_target.exists():
             raise SystemExit(f"macOS read-only did not block workspace write: {result}")
+        assert_macos_workspace_write(command)
         assert_fail_closed("Darwin")
+
+
+def assert_macos_workspace_write(command: str) -> None:
+    with tempfile.TemporaryDirectory(prefix="runseal-macos-workspace-write-") as cwd:
+        workspace = Path(cwd)
+        inside = workspace / "inside.txt"
+        outside = workspace.parent / "runseal-macos-outside-write.txt"
+        protected = workspace / ".git" / "blocked.txt"
+        protected.parent.mkdir()
+        _, result = run_json(
+            [
+                "exec",
+                "--json",
+                "--policy",
+                "workspace-write",
+                "--network",
+                "disabled",
+                "--cwd",
+                cwd,
+                "--",
+                command,
+                "-c",
+                f"from pathlib import Path; Path({str(inside)!r}).write_text('inside')",
+            ],
+            expect_success=True,
+        )
+        if result.get("platform_plan", {}).get("enforcement") != "macos-experimental":
+            raise SystemExit(f"unexpected macOS workspace-write plan: {result}")
+        if result.get("exit_code") != 0 or inside.read_text() != "inside":
+            raise SystemExit(f"macOS workspace-write did not allow workspace write: {result}")
+        for target in [outside, protected]:
+            _, result = run_json(
+                [
+                    "exec",
+                    "--json",
+                    "--policy",
+                    "workspace-write",
+                    "--network",
+                    "disabled",
+                    "--cwd",
+                    cwd,
+                    "--",
+                    command,
+                    "-c",
+                    f"from pathlib import Path; Path({str(target)!r}).write_text('blocked')",
+                ],
+                expect_success=True,
+            )
+            if result.get("exit_code") == 0 or target.exists():
+                raise SystemExit(f"macOS workspace-write did not block write to {target}: {result}")
 
 
 def assert_fail_closed(system: str) -> None:
