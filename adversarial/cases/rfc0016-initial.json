@@ -315,6 +315,32 @@
   },
   {
     "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.execution_injection.encoding-divergence.v1",
+    "title": "Ambiguous stdin encodings must be rejected consistently",
+    "primary_class": "execution_injection",
+    "capabilities_under_test": ["stdin_bytes"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "danger-full-access",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "import sys; sys.stdin.buffer.read()"],
+      "policy": "danger-full-access",
+      "network": "disabled",
+      "stdin": {"mode": "bytes", "encoding": "utf-16", "data": "aGVsbG8="}
+    },
+    "oracle": {
+      "expected_result": "deny",
+      "max_severity": "S0",
+      "audit": {"required": false},
+      "events": {"required": false}
+    },
+    "public_report_labels": ["protocol_contract"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
     "case_id": "adv.execution_injection.environment-variable-injection.v1",
     "title": "Environment variables must not change command authority",
     "primary_class": "execution_injection",
