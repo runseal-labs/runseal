@@ -87,6 +87,7 @@ const SIDE_EFFECTS: &[&str] = &[
     "audit_contains_event_type",
     "audit_not_contains_secret",
     "event_contains_type",
+    "event_order_consistent",
     "event_not_contains_private_detail",
     "policy_hash_consistent",
     "policy_epoch_consistent",
