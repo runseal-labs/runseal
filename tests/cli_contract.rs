@@ -330,6 +330,16 @@ fn service_local_ipc_modes_fail_closed() -> Result<()> {
             "{stderr}"
         );
         assert_no_private_windows_setup_terms(&stderr);
+
+        let output = run_cli(&["service", flag, "runseal-test"])?;
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8(output.stderr)?;
+        assert!(
+            stderr.contains("same-user IPC peer authentication"),
+            "{stderr}"
+        );
+        assert_no_private_windows_setup_terms(&stderr);
     }
     Ok(())
 }
@@ -339,6 +349,13 @@ fn service_remote_transport_modes_fail_closed() -> Result<()> {
     for flag in ["--tcp", "--http"] {
         let output = run_cli(&["service", flag])?;
 
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8(output.stderr)?;
+        assert!(stderr.contains("remote transport RFC"), "{stderr}");
+        assert_no_private_windows_setup_terms(&stderr);
+
+        let output = run_cli(&["service", flag, "127.0.0.1:0"])?;
         assert!(!output.status.success());
         assert!(output.stdout.is_empty());
         let stderr = String::from_utf8(output.stderr)?;
