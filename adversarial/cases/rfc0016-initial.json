@@ -895,5 +895,36 @@
       "forbidden_side_effects": ["network_connection_absent", "event_not_contains_private_detail"]
     },
     "public_report_labels": ["network_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.network.localhost-tunnel-abuse.v1",
+    "title": "Proxy mode must not allow localhost tunnel bypass",
+    "primary_class": "network",
+    "capabilities_under_test": ["network_proxy", "managed_proxy", "direct_network_deny"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "workspace-contained",
+    "network_mode": "proxy",
+    "fixtures": [{"kind": "network_listener", "name": "localhost-tunnel-target"}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "import socket; socket.create_connection(('127.0.0.1', 9), 1)"],
+      "policy": {
+        "version": "runseal.policy/v1",
+        "sandbox_level": "workspace-contained",
+        "network": {"mode": "proxy"},
+        "environment": {"proxy": true}
+      },
+      "network": "proxy"
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["network_connection_absent", "event_not_contains_private_detail"]
+    },
+    "public_report_labels": ["network_conformance"]
   }
 ]
