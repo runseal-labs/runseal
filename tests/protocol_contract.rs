@@ -866,6 +866,76 @@ fn service_stdio_tails_retained_audit_events() -> Result<()> {
 }
 
 #[test]
+fn service_stdio_tail_audit_preserves_execution_record_order() -> Result<()> {
+    #[cfg(windows)]
+    let _guard = windows_protocol_lock()?;
+
+    let tmp = TempDir::new()?;
+    let mut child = Command::new(require_runseal_bin()?)
+        .args(["service", "--stdio"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to spawn runseal service")?;
+    let mut stdin = child.stdin.take().context("stdin unavailable")?;
+    let stdout = child.stdout.take().context("stdout unavailable")?;
+    let mut stdout = BufReader::new(stdout);
+
+    stdin.write_all(
+        rpc_request_with_id(
+            1,
+            "execute",
+            json!({
+                "command": [python_bin(), "-c", "print('first')"],
+                "cwd": tmp.path(),
+                "policy": "danger-full-access",
+            }),
+        )
+        .as_bytes(),
+    )?;
+    let (_, first_response) = read_rpc_response(&mut stdout, 1)?;
+    let first_id = first_response["result"]["execution_id"]
+        .as_str()
+        .context("first execution_id must exist")?
+        .to_string();
+
+    stdin.write_all(
+        rpc_request_with_id(
+            2,
+            "execute",
+            json!({
+                "command": [python_bin(), "-c", "print('second')"],
+                "cwd": tmp.path(),
+                "policy": "danger-full-access",
+            }),
+        )
+        .as_bytes(),
+    )?;
+    let (_, second_response) = read_rpc_response(&mut stdout, 2)?;
+    let second_id = second_response["result"]["execution_id"]
+        .as_str()
+        .context("second execution_id must exist")?
+        .to_string();
+
+    stdin.write_all(
+        rpc_request_with_id(3, "tailAudit", json!({ "types": ["execution.started"] })).as_bytes(),
+    )?;
+    let (_, tail_response) = read_rpc_response(&mut stdout, 3)?;
+    let events = tail_response["result"]["events"]
+        .as_array()
+        .context("events must be an array")?;
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0]["execution_id"], first_id);
+    assert_eq!(events[1]["execution_id"], second_id);
+
+    drop(stdin);
+    let status = child.wait().context("failed to wait for runseal service")?;
+    assert!(status.success());
+    Ok(())
+}
+
+#[test]
 fn get_audit_events_rejects_path_lookup() -> Result<()> {
     let output = run_rpc(&rpc_request(
         "getAuditEvents",
