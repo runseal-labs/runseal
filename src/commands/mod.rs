@@ -18,6 +18,7 @@ Commands:
   capabilities
   setup windows-sandbox [--cwd <path>] [--status] [--json]
   rpc --stdio
+  service --stdio
   version
 ";
 
