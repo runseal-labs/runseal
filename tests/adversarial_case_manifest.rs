@@ -211,10 +211,20 @@ fn adversarial_result_schema_requires_public_skip_reason() -> Result<()> {
     let backend_name = result["backend_name"].take();
     assert!(validate_result(&result).is_err());
     result["backend_name"] = backend_name;
+    result["backend_name"] = json!("");
+    assert!(validate_result(&result).is_err());
+    result["backend_name"] = json!("backend sid unavailable");
+    assert!(validate_result(&result).is_err());
+    result["backend_name"] = json!("runseal-windows-reference");
 
     let case_id = result["case_id"].take();
     assert!(validate_result(&result).is_err());
     result["case_id"] = case_id;
+    result["case_id"] = json!("");
+    assert!(validate_result(&result).is_err());
+    result["case_id"] = json!("case acl unavailable");
+    assert!(validate_result(&result).is_err());
+    result["case_id"] = json!("adv.audit.audit-path-traversal.v1");
 
     result["skipped"] = json!(true);
     result["status"] = json!("skipped");
@@ -402,8 +412,8 @@ fn validate_result(result: &Value) -> Result<()> {
         required_string(result, "schema_version", path)?,
         "runseal.adversarial-result/v1"
     );
-    required_string(result, "case_id", path)?;
-    required_string(result, "backend_name", path)?;
+    required_public_result_string(result, "case_id", path)?;
+    required_public_result_string(result, "backend_name", path)?;
     assert_member(
         required_string(result, "backend_status", path)?,
         BACKEND_STATUS,
@@ -459,6 +469,22 @@ fn validate_result(result: &Value) -> Result<()> {
         assert_public_safe(skip_reason, path)?;
     }
     Ok(())
+}
+
+fn required_public_result_string<'a>(
+    result: &'a Value,
+    field: &str,
+    path: &Path,
+) -> Result<&'a str> {
+    let value = result
+        .get(field)
+        .and_then(Value::as_str)
+        .with_context(|| format!("result.{field} must be a string"))?;
+    if value.is_empty() {
+        bail!("result.{field} must not be empty");
+    }
+    assert_public_safe(value, path)?;
+    Ok(value)
 }
 
 fn assert_allowed_fields(value: &Value, label: &str, allowed: &[&str], path: &Path) -> Result<()> {
