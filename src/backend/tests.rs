@@ -322,6 +322,16 @@ fn expected_windows_reference_supported_features() -> &'static [BackendFeature] 
     }
 }
 
+fn assert_probe_schema(probe: &Value, capability: &str, mechanism: &str) {
+    assert_eq!(probe["capability"], capability);
+    assert_eq!(probe["mechanism"], mechanism);
+    assert_eq!(probe["status"], "unsupported");
+    assert_eq!(probe["diagnostic_only"], true);
+    assert!(probe.get("path").is_none());
+    assert!(probe.get("argv").is_none());
+    assert!(probe.get("private").is_none());
+}
+
 #[test]
 fn missing_features_excludes_supported_backend_features() {
     let cwd = PathBuf::from("/workspace");
@@ -452,8 +462,9 @@ fn linux_skeleton_reports_community_track_without_sandbox_features() {
     assert_eq!(capabilities["features"]["process_isolation"], false);
     let probes = capabilities["capability_probes"].as_array().unwrap();
     assert_eq!(probes.len(), 3);
-    assert!(probes.iter().all(|probe| probe["status"] == "unsupported"));
-    assert!(probes.iter().all(|probe| probe["diagnostic_only"] == true));
+    assert_probe_schema(&probes[0], "filesystem_policy", "landlock");
+    assert_probe_schema(&probes[1], "process_isolation", "user_namespaces");
+    assert_probe_schema(&probes[2], "process_isolation", "bubblewrap");
 }
 
 #[test]
@@ -482,8 +493,7 @@ fn macos_skeleton_reports_experimental_track_without_sandbox_features() {
     assert_eq!(capabilities["features"]["process_isolation"], false);
     let probes = capabilities["capability_probes"].as_array().unwrap();
     assert_eq!(probes.len(), 1);
-    assert_eq!(probes[0]["status"], "unsupported");
-    assert_eq!(probes[0]["diagnostic_only"], true);
+    assert_probe_schema(&probes[0], "filesystem_policy", "seatbelt");
 }
 
 #[test]
