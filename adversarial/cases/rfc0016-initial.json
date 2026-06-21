@@ -312,6 +312,32 @@
   },
   {
     "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.audit.backend-private-redaction.v1",
+    "title": "Audit output must not expose backend-private details",
+    "primary_class": "audit",
+    "capabilities_under_test": ["audit_jsonl"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "read-only",
+    "network_mode": "disabled",
+    "fixtures": [],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('redaction')"],
+      "policy": {"sandbox_level": "read-only"},
+      "network": "disabled"
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["event_not_contains_private_detail"]
+    },
+    "public_report_labels": ["protocol_contract"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
     "case_id": "adv.filesystem.parent-traversal.v1",
     "title": "Workspace-contained execution must not read parent paths",
     "primary_class": "filesystem",
