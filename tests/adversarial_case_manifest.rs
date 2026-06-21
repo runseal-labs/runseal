@@ -261,6 +261,9 @@ fn adversarial_result_gate_rejects_non_promotable_results() {
         "passed", "S2", "S1", true, false, true
     ));
     assert!(!promotion_gate_allows(
+        "passed", "S0", "S2", true, false, true
+    ));
+    assert!(!promotion_gate_allows(
         "failed", "S0", "S1", false, false, true
     ));
     assert!(!promotion_gate_allows(
@@ -963,6 +966,7 @@ fn promotion_gate_allows(
         && passed
         && !skipped
         && public_safe_output
+        && PROMOTION_SEVERITIES.contains(&max_severity)
         && severity_rank(observed_severity).is_some_and(|observed| {
             severity_rank(max_severity).is_some_and(|maximum| observed <= maximum)
         })
