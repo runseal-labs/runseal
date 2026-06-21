@@ -278,6 +278,41 @@ fn adversarial_audit_metadata_redaction_cases_run() -> Result<()> {
 }
 
 #[test]
+fn adversarial_audit_lookup_deny_cases_run() -> Result<()> {
+    let cases = load_cases()?;
+    let audit_cases = cases.iter().filter(|case| {
+        matches!(
+            case["case_id"].as_str(),
+            Some("adv.audit.audit-path-traversal.v1" | "adv.audit.audit-lookup-by-path.v1")
+        ) && string_array_contains(&case["platforms"], current_platform())
+            && string_array_contains(&case["backend_status"], "local-baseline")
+    });
+
+    let mut ran = 0;
+    for case in audit_cases {
+        ran += 1;
+        let tmp = TempDir::new()?;
+        let response = if case["case_id"] == "adv.audit.audit-path-traversal.v1" {
+            run_case_with_command(case, tmp.path(), harmless_command())?
+        } else {
+            run_case(case, tmp.path())?
+        };
+        assert_eq!(
+            observed_denial_result(&response),
+            "deny",
+            "case {} must deny: {response}",
+            case["case_id"]
+        );
+        let result = emit_result(case, "deny", true)?;
+        assert_eq!(result["status"], "passed", "{result}");
+        assert_public_safe(&result.to_string())?;
+    }
+
+    assert!(ran >= 2, "audit lookup deny cases must run");
+    Ok(())
+}
+
+#[test]
 fn adversarial_harness_materializes_file_fixtures_before_execution() -> Result<()> {
     let cases = load_cases()?;
     let mut materialized = 0;
