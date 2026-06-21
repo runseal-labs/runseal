@@ -3,7 +3,8 @@ use crate::error::RunSealError;
 use crate::protocol::request_validation::{
     audit_events_params, cancel_execution_id_from_params, execute_from_params,
     explain_policy_from_params, get_execution_id_from_params, session_id_from_params,
-    setup_status_cwd_from_params, subscribe_events_params, validate_empty_params,
+    setup_status_cwd_from_params, subscribe_events_params, tail_audit_params,
+    validate_empty_params,
 };
 use crate::rpc;
 use serde_json::{Value, json};
@@ -89,6 +90,7 @@ impl Service {
             "cancelExecution" => self.cancel_execution(id, &params),
             "subscribeEvents" => self.subscribe_events(id, &params),
             "getAuditEvents" => self.get_audit_events(id, &params),
+            "tailAudit" => self.tail_audit(id, &params),
             "disposeSession" => self.dispose_session(id, &params),
             _ => vec![rpc::method_not_found(id, method)],
         }
@@ -198,6 +200,21 @@ impl Service {
             id,
             json!({
                 "execution_id": execution_id,
+                "count": events.len(),
+                "events": events,
+            }),
+        )]
+    }
+
+    fn tail_audit(&self, id: Value, params: &Value) -> Vec<Value> {
+        let types = match tail_audit_params(params) {
+            Ok(types) => types,
+            Err(err) => return vec![rpc::error(id, err)],
+        };
+        let events = self.state.audit_tail(&types);
+        vec![rpc::result(
+            id,
+            json!({
                 "count": events.len(),
                 "events": events,
             }),
