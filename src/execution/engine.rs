@@ -58,6 +58,7 @@ pub(crate) fn execute_command(
         &event_context,
     );
     write_audit_event_with_metadata(&mut audit, &requested, &metadata)?;
+    let mut events = vec![requested];
     let resolved = execution_event_now(
         json!({
             "type": "policy.resolved",
@@ -74,6 +75,7 @@ pub(crate) fn execute_command(
         &event_context,
     );
     write_audit_event_with_metadata(&mut audit, &resolved, &metadata)?;
+    events.push(resolved);
 
     if policy.requires_broad_write_approval() {
         let reason = "filesystem broad write requires approval";
@@ -303,6 +305,7 @@ pub(crate) fn execute_command(
         &event_context,
     );
     write_audit_event_with_metadata(&mut audit, &allowed, &metadata)?;
+    events.push(allowed);
     let started_at = timestamp_now();
     let started = execution_event_at(
         json!({
@@ -331,6 +334,7 @@ pub(crate) fn execute_command(
         &event_context,
     );
     write_audit_event_with_metadata(&mut audit, &started, &metadata)?;
+    events.push(started);
 
     let timer = Instant::now();
     let execution_output = match backend.execute_plan(&plan, command, cwd, stdin, &env, timeout) {
@@ -462,7 +466,6 @@ pub(crate) fn execute_command(
             }),
         ));
     }
-    let mut events = vec![started];
     events.extend(backend_events);
     if !output.stdout.is_empty() {
         let event = stream_event("execution.stdout", &event_context, &output.stdout, 0);
@@ -513,6 +516,7 @@ pub(crate) fn execute_command(
         &event_context,
     );
     write_audit_event_with_metadata(&mut audit, &resource_sample, &metadata)?;
+    events.push(resource_sample);
     if output_truncated {
         let limit_exceeded = execution_event_at(
             json!({
