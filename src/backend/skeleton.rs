@@ -101,14 +101,7 @@ impl SandboxBackend for MacosExperimentalBackend {
                 "sandboxed policies fail closed until conformance tests prove enforcement",
             ],
         );
-        payload["capability_probes"] = json!([
-            {
-                "capability": "filesystem_policy",
-                "mechanism": "seatbelt",
-                "status": "unsupported",
-                "diagnostic_only": true
-            }
-        ]);
+        payload["capability_probes"] = crate::macos::capability_probe::capability_probes();
         payload
     }
 }
@@ -162,26 +155,7 @@ impl SandboxBackend for LinuxCommunityBackend {
                 "sandboxed policies fail closed until conformance tests prove enforcement",
             ],
         );
-        payload["capability_probes"] = json!([
-            {
-                "capability": "filesystem_policy",
-                "mechanism": "landlock",
-                "status": "unsupported",
-                "diagnostic_only": true
-            },
-            {
-                "capability": "process_isolation",
-                "mechanism": "user_namespaces",
-                "status": "unsupported",
-                "diagnostic_only": true
-            },
-            {
-                "capability": "process_isolation",
-                "mechanism": "bubblewrap",
-                "status": "unsupported",
-                "diagnostic_only": true
-            }
-        ]);
+        payload["capability_probes"] = crate::linux::capability_probe::capability_probes();
         payload
     }
 }
