@@ -18,6 +18,8 @@ macOS 和 Linux 当前报告 explicit experimental/community backend。macOS 目
 
 Windows 沙箱请求会包含 `PlatformSandboxPlan`，用于描述 runtime root、synthetic home、profile root、temp root、setup requirements、受保护文件系统类别、进程边界状态、网络 guard 状态和策略路径规划。Windows reference path 已覆盖 runtime root 创建/清理、runtime 环境重定向、进程清理、文件系统 enforcement、进程隔离，以及 direct network deny/proxy guard enforcement。
 
+Windows enforcement baseline 位于专用 Windows sandbox 实现之后。RunSeal 侧代码应停留在 adapter 层：policy normalization、`PlatformSandboxPlan` mapping、audit events、capability reporting 和 conformance gates。底层 OS boundary、setup-helper 和 command-runner 代码不应在 RunSeal adapter 中重新实现。
+
 协议和策略版本字符串是 `runseal.protocol/v1` 和 `runseal.policy/v1`。Rust package 仍处于 pre-`1.0`；当 RFC 变更时，provisional CLI flags、JSON fields 和 audit shapes 仍可能发生 breaking changes。
 
 设计文档在 RFC 仓库：
