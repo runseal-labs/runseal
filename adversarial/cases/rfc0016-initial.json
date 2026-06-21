@@ -819,6 +819,34 @@
   },
   {
     "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.filesystem.path-normalization-difference.v1",
+    "title": "Workspace-contained execution must not escape through path normalization",
+    "primary_class": "filesystem",
+    "capabilities_under_test": ["filesystem_policy"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "workspace-contained",
+    "network_mode": "disabled",
+    "fixtures": [
+      {"kind": "directory", "path": "workspace/subdir"},
+      {"kind": "file", "path": "outside/secret.txt", "body": "secret"}
+    ],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "open('subdir/../../outside/secret.txt', 'rb').read()"],
+      "policy": {"sandbox_level": "workspace-contained"}
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["path_not_accessible"]
+    },
+    "public_report_labels": ["filesystem_conformance"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
     "case_id": "adv.filesystem.preexisting-symlinked-runtime-root.v1",
     "title": "Runtime roots must not follow preexisting workspace links",
     "primary_class": "filesystem",
