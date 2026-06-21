@@ -1,6 +1,8 @@
 use serde_json::Value;
 use std::io::{self, BufRead, Write};
 
+use crate::rpc;
+
 pub(crate) fn run_rpc_stdio() -> Result<(), String> {
     run_stdio(false)
 }
@@ -18,8 +20,18 @@ fn run_stdio(stateful: bool) -> Result<(), String> {
         if line.trim().is_empty() {
             continue;
         }
-        let request: Value = serde_json::from_str(&line)
-            .map_err(|err| format!("invalid JSON-RPC request: {err}"))?;
+        let request: Value = match serde_json::from_str(&line) {
+            Ok(request) => request,
+            Err(err) => {
+                let message = rpc::parse_error(format!("invalid JSON-RPC request: {err}"));
+                writeln!(stdout, "{message}")
+                    .map_err(|err| format!("failed to write stdout: {err}"))?;
+                stdout
+                    .flush()
+                    .map_err(|err| format!("failed to flush stdout: {err}"))?;
+                continue;
+            }
+        };
         let messages = match service.as_mut() {
             Some(service) => service.handle_rpc_request(&request),
             None => crate::service::Service::default().handle_rpc_request(&request),
