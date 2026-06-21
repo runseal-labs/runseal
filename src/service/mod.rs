@@ -24,10 +24,7 @@ impl Service {
         let (id, method, params) = match rpc_request_parts(request) {
             Ok(parts) => parts,
             Err(err) => {
-                return vec![rpc::invalid_request(
-                    request.get("id").cloned().unwrap_or(Value::Null),
-                    err,
-                )];
+                return vec![rpc::invalid_request(request_id_for_error(request), err)];
             }
         };
 
@@ -154,7 +151,11 @@ fn rpc_request_parts(request: &Value) -> Result<(Value, &str, Value), RunSealErr
     let request = request.as_object().ok_or_else(|| {
         RunSealError::new("INVALID_REQUEST", "JSON-RPC request must be an object")
     })?;
-    let id = request.get("id").cloned().unwrap_or(Value::Null);
+    let id = request
+        .get("id")
+        .map(validated_request_id)
+        .transpose()?
+        .unwrap_or(Value::Null);
     let version = request.get("jsonrpc").and_then(Value::as_str);
     if version != Some("2.0") {
         return Err(RunSealError::new(
@@ -169,4 +170,27 @@ fn rpc_request_parts(request: &Value) -> Result<(Value, &str, Value), RunSealErr
         .ok_or_else(|| RunSealError::new("INVALID_REQUEST", "request.method is required"))?;
     let params = request.get("params").cloned().unwrap_or_else(|| json!({}));
     Ok((id, method, params))
+}
+
+fn request_id_for_error(request: &Value) -> Value {
+    request
+        .get("id")
+        .filter(|value| is_valid_request_id(value))
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
+fn validated_request_id(value: &Value) -> Result<Value, RunSealError> {
+    if is_valid_request_id(value) {
+        Ok(value.clone())
+    } else {
+        Err(RunSealError::new(
+            "INVALID_REQUEST",
+            "request.id must be a string, number, or null",
+        ))
+    }
+}
+
+fn is_valid_request_id(value: &Value) -> bool {
+    value.is_string() || value.is_number() || value.is_null()
 }
