@@ -94,12 +94,57 @@ fn adversarial_tier0_policy_cases_emit_public_safe_results() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn adversarial_harness_materializes_file_fixtures_before_execution() -> Result<()> {
+    let cases = load_cases()?;
+    let mut materialized = 0;
+    for case in cases.iter() {
+        for fixture in case["fixtures"].as_array().into_iter().flatten() {
+            if fixture["kind"] != "file" {
+                continue;
+            }
+            materialized += 1;
+            let tmp = TempDir::new()?;
+            let path = materialize_file_fixture(tmp.path(), fixture)?;
+            let pre_state = fs::metadata(&path)
+                .with_context(|| format!("fixture must exist at {}", path.display()))?;
+            assert!(pre_state.is_file());
+            assert!(!path.starts_with(Path::new(env!("CARGO_MANIFEST_DIR"))));
+        }
+    }
+
+    assert!(materialized >= 2, "harness must materialize file fixtures");
+    Ok(())
+}
+
 fn load_cases() -> Result<Vec<Value>> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("adversarial/cases/rfc0016-initial.json");
     let manifest =
         fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
     serde_json::from_str(&manifest)
         .with_context(|| format!("manifest must be JSON: {}", path.display()))
+}
+
+fn materialize_file_fixture(root: &Path, fixture: &Value) -> Result<PathBuf> {
+    let relative = fixture["path"]
+        .as_str()
+        .context("file fixture path must be a string")?;
+    let relative_path = Path::new(relative);
+    if relative_path.is_absolute()
+        || relative_path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        bail!("file fixture path must stay inside the isolated workspace");
+    }
+    let path = root.join(relative_path);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    fs::write(&path, fixture["body"].as_str().unwrap_or(""))
+        .with_context(|| format!("failed to write {}", path.display()))?;
+    Ok(path)
 }
 
 fn run_case(case: &Value, cwd: &Path) -> Result<Value> {
