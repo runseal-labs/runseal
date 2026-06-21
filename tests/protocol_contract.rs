@@ -1931,6 +1931,44 @@ fn lookup_and_session_methods_reject_malformed_ids() -> Result<()> {
 }
 
 #[test]
+fn event_lookup_methods_reject_malformed_type_filters() -> Result<()> {
+    let cases = [
+        (
+            "subscribeEvents",
+            json!({"execution_id": "exec_missing", "types": "execution.*"}),
+            "params.types must be an array",
+        ),
+        (
+            "getAuditEvents",
+            json!({"execution_id": "exec_missing", "types": [""]}),
+            "params.types entries must be non-empty strings",
+        ),
+        (
+            "tailAudit",
+            json!({"types": [42]}),
+            "params.types entries must be non-empty strings",
+        ),
+    ];
+
+    for (method, params, expected_reason) in cases {
+        let output = run_rpc(&rpc_request(method, params))?;
+
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let messages = stdout_json_lines(&output)?;
+        let response = &messages[0];
+
+        assert_eq!(response["error"]["code"], -32602);
+        assert_eq!(response["error"]["data"]["code"], "INVALID_REQUEST");
+        assert_eq!(response["error"]["data"]["reason"], expected_reason);
+    }
+    Ok(())
+}
+
+#[test]
 fn lookup_and_session_methods_reject_path_like_ids() -> Result<()> {
     let cases = [
         ("getExecution", json!({"execution_id": "exec_../escape"})),
