@@ -191,6 +191,15 @@ fn adversarial_result_gate_rejects_non_promotable_results() {
 }
 
 #[test]
+fn adversarial_severity_tracks_observed_escape_class() {
+    assert_eq!(compute_severity(true, false, false, true), "S0");
+    assert_eq!(compute_severity(true, false, false, false), "S1");
+    assert_eq!(compute_severity(false, true, false, true), "S2");
+    assert_eq!(compute_severity(false, false, true, true), "S3");
+    assert_eq!(compute_severity(false, false, true, false), "S4");
+}
+
+#[test]
 fn adversarial_result_schema_requires_public_skip_reason() -> Result<()> {
     let mut result = json!({
         "schema_version": "runseal.adversarial-result/v1",
@@ -557,4 +566,21 @@ fn severity_rank(severity: &str) -> Option<usize> {
     SEVERITIES
         .iter()
         .position(|candidate| *candidate == severity)
+}
+
+fn compute_severity(
+    expected_outcome: bool,
+    limited_side_effect: bool,
+    forbidden_action: bool,
+    audit_visible: bool,
+) -> &'static str {
+    if forbidden_action {
+        if audit_visible { "S3" } else { "S4" }
+    } else if limited_side_effect {
+        "S2"
+    } else if expected_outcome && audit_visible {
+        "S0"
+    } else {
+        "S1"
+    }
 }
