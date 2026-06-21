@@ -5,6 +5,8 @@ mod commands;
 mod error;
 mod events;
 mod execution;
+mod linux;
+mod macos;
 mod policy;
 mod process_output;
 mod protocol;
