@@ -22,6 +22,10 @@ fn rpc_request(method: &str, params: Value) -> String {
     )
 }
 
+fn harmless_command() -> Value {
+    json!([runseal_bin(), "version"])
+}
+
 fn run_rpc(message: &str) -> Result<std::process::Output> {
     let mut child = Command::new(runseal_bin())
         .args(["rpc", "--stdio"])
@@ -93,6 +97,56 @@ fn adversarial_network_override_hash_drift_case_runs() -> Result<()> {
     assert_eq!(disabled["network"]["mode"], "disabled");
     assert_ne!(proxy["policy_hash"], disabled["policy_hash"]);
     assert_ne!(proxy["canonical_policy"], disabled["canonical_policy"]);
+
+    let result = emit_result(&case, "allow_no_side_effect_outside_policy", true)?;
+    assert_eq!(result["status"], "passed", "{result}");
+    assert_public_safe(&result.to_string())?;
+    Ok(())
+}
+
+#[test]
+fn adversarial_stale_policy_epoch_case_runs() -> Result<()> {
+    let case = load_cases()?
+        .into_iter()
+        .find(|case| case["case_id"] == "adv.policy.stale-policy-epoch.v1")
+        .context("stale policy epoch adversarial case must exist")?;
+    let tmp = TempDir::new()?;
+    let first = rpc_response_result(&rpc_request(
+        "execute",
+        json!({
+            "command": harmless_command(),
+            "cwd": tmp.path(),
+            "policy": case["request"]["policy"],
+            "network": {"mode": "disabled"}
+        }),
+    ))?;
+    let same = rpc_response_result(&rpc_request(
+        "execute",
+        json!({
+            "command": harmless_command(),
+            "cwd": tmp.path(),
+            "policy": case["request"]["policy"],
+            "network": {"mode": "disabled"}
+        }),
+    ))?;
+    let changed = rpc_response_result(&rpc_request(
+        "execute",
+        json!({
+            "command": harmless_command(),
+            "cwd": tmp.path(),
+            "policy": case["request"]["policy"],
+            "network": {"mode": "proxy"}
+        }),
+    ))?;
+
+    assert_eq!(first["status"], "finished");
+    assert_eq!(same["status"], "finished");
+    assert_eq!(changed["status"], "finished");
+    assert_eq!(first["policy_epoch"], first["policy_hash"]);
+    assert_eq!(same["policy_epoch"], same["policy_hash"]);
+    assert_eq!(changed["policy_epoch"], changed["policy_hash"]);
+    assert_eq!(first["policy_epoch"], same["policy_epoch"]);
+    assert_ne!(first["policy_epoch"], changed["policy_epoch"]);
 
     let result = emit_result(&case, "allow_no_side_effect_outside_policy", true)?;
     assert_eq!(result["status"], "passed", "{result}");
@@ -426,19 +480,31 @@ fn run_case(case: &Value, cwd: &Path) -> Result<Value> {
 }
 
 fn rpc_result(message: &str) -> Result<Value> {
+    rpc_response_result(message)
+}
+
+fn rpc_response_result(message: &str) -> Result<Value> {
+    rpc_response(message)?
+        .get("result")
+        .cloned()
+        .context("rpc response result must exist")
+}
+
+fn rpc_response(message: &str) -> Result<Value> {
     let output = run_rpc(message)?;
     if !output.status.success() {
         bail!("{}", String::from_utf8_lossy(&output.stderr));
     }
     let stdout = String::from_utf8(output.stdout).context("stdout must be utf-8")?;
-    let response: Value = stdout
+    stdout
         .lines()
-        .find(|line| !line.trim().is_empty())
-        .map(serde_json::from_str)
-        .transpose()
+        .filter(|line| !line.trim().is_empty())
+        .map(serde_json::from_str::<Value>)
+        .collect::<Result<Vec<_>, _>>()
         .context("rpc response must be JSON")?
-        .context("rpc response must exist")?;
-    Ok(response["result"].clone())
+        .into_iter()
+        .find(|message| message.get("id") == Some(&json!(1)))
+        .context("rpc response must exist")
 }
 
 fn current_platform() -> &'static str {
