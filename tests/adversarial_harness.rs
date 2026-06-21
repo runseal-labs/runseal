@@ -247,6 +247,7 @@ fn adversarial_audit_metadata_redaction_cases_run() -> Result<()> {
             Some(
                 "adv.audit.secret-metadata-redaction.v1"
                     | "adv.audit.authorization-header-leakage.v1"
+                    | "adv.audit.proxy-credential-leakage.v1"
             )
         ) && string_array_contains(&case["platforms"], current_platform())
             && string_array_contains(&case["backend_status"], "local-baseline")
@@ -267,13 +268,14 @@ fn adversarial_audit_metadata_redaction_cases_run() -> Result<()> {
         assert!(audit_jsonl.contains("[REDACTED]"));
         assert!(audit_jsonl.contains("\"safe\":\"visible\""));
         assert!(!audit_jsonl.contains("Bearer secret"));
+        assert!(!audit_jsonl.contains("user:secret"));
         assert!(!audit_jsonl.contains("\"Authorization\":\"value\""));
         let result = emit_result(case, "audit_redacted", true)?;
         assert_eq!(result["status"], "passed", "{result}");
         assert_public_safe(&result.to_string())?;
     }
 
-    assert!(ran >= 2, "audit metadata redaction cases must run");
+    assert!(ran >= 3, "audit metadata redaction cases must run");
     Ok(())
 }
 
