@@ -1640,6 +1640,40 @@ fn service_stdio_parse_errors_do_not_close_loop() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn service_stdio_ignores_client_notification_and_continues() -> Result<()> {
+    let bin = require_runseal_bin()?;
+    let mut child = Command::new(bin)
+        .args(["service", "--stdio"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to spawn runseal service")?;
+    let mut stdin = child.stdin.take().context("service stdin unavailable")?;
+    let mut stdout = BufReader::new(child.stdout.take().context("service stdout unavailable")?);
+
+    let notification = json!({
+        "jsonrpc": "2.0",
+        "method": "getServiceStatus",
+        "params": {}
+    })
+    .to_string()
+        + "\n";
+    stdin.write_all(notification.as_bytes())?;
+    stdin.write_all(rpc_request_with_id(1, "getServiceStatus", json!({})).as_bytes())?;
+
+    let (notifications, response) = read_rpc_response(&mut stdout, 1)?;
+    assert!(notifications.is_empty());
+    assert_eq!(response["result"]["mode"], "service");
+    assert_eq!(response["result"]["stateful"], true);
+
+    drop(stdin);
+    let status = child.wait().context("failed to wait for runseal service")?;
+    assert!(status.success());
+    Ok(())
+}
+
 fn read_rpc_response(
     stdout: &mut BufReader<impl std::io::Read>,
     id: u64,
