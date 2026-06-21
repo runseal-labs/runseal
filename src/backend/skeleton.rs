@@ -157,6 +157,8 @@ impl SandboxBackend for LinuxCommunityBackend {
         );
         payload["backend_status"] = json!(self.status());
         payload["sandbox_levels"]["read-only"] = json!(CapabilityStatus::Experimental.as_str());
+        payload["sandbox_levels"]["workspace-write"] =
+            json!(CapabilityStatus::Experimental.as_str());
         payload["network_modes"]["disabled"] = json!(CapabilityStatus::Experimental.as_str());
         payload["capability_probes"] = crate::linux::capability_probe::capability_probes();
         payload
@@ -231,6 +233,16 @@ fn compile_linux_plan(
             policy,
         ));
     }
+    if policy.sandbox_level == SandboxLevel::WorkspaceWrite
+        && policy.network.mode == NetworkMode::Disabled
+    {
+        return Ok(PlatformSandboxPlan::linux_workspace_write_experimental(
+            backend,
+            execution_id,
+            cwd,
+            policy,
+        ));
+    }
     Err(BackendError::unsupported_with_plan(
         backend,
         policy,
@@ -254,14 +266,14 @@ fn execute_linux_plan(
     if !plan.is_sandbox_enforced() {
         return spawn_local_command(plan, command, cwd, stdin, env, timeout);
     }
-    if plan.enforcement != "linux-read-only-experimental" {
+    if plan.enforcement != "linux-experimental" {
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "unsupported Linux sandbox enforcement",
         ));
     }
     plan.prepare_runtime_roots()?;
-    let output = spawn_linux_bwrap_read_only(plan, command, cwd, stdin, env, timeout);
+    let output = spawn_linux_bwrap(plan, command, cwd, stdin, env, timeout);
     let cleanup = plan.cleanup_runtime_roots();
     match (output, cleanup) {
         (Ok(output), Ok(_)) => Ok(output),
@@ -273,7 +285,7 @@ fn execute_linux_plan(
     }
 }
 
-fn spawn_linux_bwrap_read_only(
+fn spawn_linux_bwrap(
     plan: &PlatformSandboxPlan,
     command: &[String],
     cwd: &Path,
@@ -287,6 +299,9 @@ fn spawn_linux_bwrap_read_only(
         "/".to_string(),
         "/".to_string(),
     ];
+    if plan.sandbox_level == SandboxLevel::WorkspaceWrite.as_str() {
+        bwrap_command.extend(["--bind".to_string(), path_string(cwd), path_string(cwd)]);
+    }
     for root in [
         plan.runtime_root.as_deref(),
         plan.profile_root.as_deref(),
@@ -297,6 +312,18 @@ fn spawn_linux_bwrap_read_only(
     .flatten()
     {
         bwrap_command.extend(["--bind".to_string(), root.to_string(), root.to_string()]);
+    }
+    if plan.sandbox_level == SandboxLevel::WorkspaceWrite.as_str() {
+        for protected in [".git", ".agents", ".codex"] {
+            let protected_root = cwd.join(protected);
+            if protected_root.exists() {
+                bwrap_command.extend([
+                    "--ro-bind".to_string(),
+                    path_string(&protected_root),
+                    path_string(&protected_root),
+                ]);
+            }
+        }
     }
     bwrap_command.extend([
         "--proc".to_string(),

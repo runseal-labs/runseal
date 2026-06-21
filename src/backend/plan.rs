@@ -155,7 +155,7 @@ impl PlatformSandboxPlan {
         }
     }
 
-    pub(super) fn linux_read_only_experimental(
+    pub(super) fn linux_experimental(
         backend: &dyn SandboxBackend,
         execution_id: &str,
         cwd: &Path,
@@ -173,19 +173,14 @@ impl PlatformSandboxPlan {
             policy_id: policy.id.clone(),
             policy_hash: policy.hash(),
             sandbox_level: policy.sandbox_level.as_str(),
-            enforcement: "linux-read-only-experimental",
+            enforcement: "linux-experimental",
             cwd: path_string(cwd),
             runtime_root: Some(path_string(&runtime_root)),
             profile_root: Some(path_string(&profile_root)),
             synthetic_home: Some(path_string(&synthetic_home)),
             temp_root: Some(path_string(&temp_root)),
             filesystem_read: vec!["workspace".to_string()],
-            filesystem_write: vec![
-                "runtime_root".to_string(),
-                "profile_root".to_string(),
-                "synthetic_home".to_string(),
-                "temp_root".to_string(),
-            ],
+            filesystem_write: linux_experimental_write_labels(policy),
             filesystem_deny: if policy.filesystem.deny.is_empty() {
                 Vec::new()
             } else {
@@ -222,6 +217,24 @@ impl PlatformSandboxPlan {
             ],
             required_backend_features: policy.required_backend_feature_names(),
         }
+    }
+
+    pub(super) fn linux_read_only_experimental(
+        backend: &dyn SandboxBackend,
+        execution_id: &str,
+        cwd: &Path,
+        policy: &SandboxPolicy,
+    ) -> Self {
+        Self::linux_experimental(backend, execution_id, cwd, policy)
+    }
+
+    pub(super) fn linux_workspace_write_experimental(
+        backend: &dyn SandboxBackend,
+        execution_id: &str,
+        cwd: &Path,
+        policy: &SandboxPolicy,
+    ) -> Self {
+        Self::linux_experimental(backend, execution_id, cwd, policy)
     }
 
     pub fn json(&self) -> Value {
@@ -267,7 +280,6 @@ impl PlatformSandboxPlan {
             "required_backend_features": self.required_backend_features.clone(),
         })
     }
-
     fn setup_json(&self) -> Value {
         json!({
             "requires_runtime_roots": self.runtime_root.is_some(),
@@ -682,5 +694,19 @@ pub(super) fn protected_filesystem_labels(policy: &SandboxPolicy) -> Vec<&'stati
         labels.push("host_profile");
         labels.push("credential_roots");
     }
+    labels
+}
+
+fn linux_experimental_write_labels(policy: &SandboxPolicy) -> Vec<String> {
+    let mut labels = Vec::new();
+    if policy.sandbox_level == SandboxLevel::WorkspaceWrite {
+        labels.push("workspace".to_string());
+    }
+    labels.extend([
+        "runtime_root".to_string(),
+        "profile_root".to_string(),
+        "synthetic_home".to_string(),
+        "temp_root".to_string(),
+    ]);
     labels
 }

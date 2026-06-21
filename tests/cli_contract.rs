@@ -190,6 +190,14 @@ fn expected_read_only_status() -> &'static str {
     }
 }
 
+fn expected_workspace_write_status() -> &'static str {
+    if cfg!(target_os = "linux") {
+        "experimental"
+    } else {
+        expected_status(expected_windows_sandbox_supported())
+    }
+}
+
 fn expected_network_disabled_status() -> &'static str {
     if cfg!(target_os = "linux") {
         "experimental"
@@ -746,6 +754,10 @@ fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
         expected_read_only_status()
     );
     assert_eq!(
+        payload["sandbox_levels"]["workspace-write"],
+        expected_workspace_write_status()
+    );
+    assert_eq!(
         payload["network_modes"]["proxy"],
         expected_status(expected_windows_sandbox_supported())
     );
@@ -1112,7 +1124,7 @@ fn sandboxed_exec_cli_uses_backend_or_reports_unavailable() -> Result<()> {
             assert_eq!(payload["sandbox"]["enforced"], true);
             assert_eq!(
                 payload["platform_plan"]["enforcement"],
-                "linux-read-only-experimental"
+                "linux-experimental"
             );
         } else {
             assert_eq!(payload["error"]["data"]["code"], "BACKEND_UNAVAILABLE");

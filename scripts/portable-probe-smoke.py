@@ -85,6 +85,8 @@ def assert_linux_read_only(payload: dict) -> None:
         raise SystemExit(f"Linux read-only must be experimental: {payload}")
     if payload.get("network_modes", {}).get("disabled") != "experimental":
         raise SystemExit(f"Linux network.disabled must be experimental: {payload}")
+    if payload.get("sandbox_levels", {}).get("workspace-write") != "experimental":
+        raise SystemExit(f"Linux workspace-write must be experimental: {payload}")
 
     target = "read-only-write.txt"
     command = shutil.which("python3") or shutil.which("python") or sys.executable
@@ -106,12 +108,63 @@ def assert_linux_read_only(payload: dict) -> None:
             expect_success=probe_available(payload, "bubblewrap"),
         )
         if probe_available(payload, "bubblewrap"):
-            if result.get("platform_plan", {}).get("enforcement") != "linux-read-only-experimental":
+            if result.get("platform_plan", {}).get("enforcement") != "linux-experimental":
                 raise SystemExit(f"unexpected Linux read-only plan: {result}")
             if result.get("exit_code") == 0 or write_target.exists():
                 raise SystemExit(f"Linux read-only did not block workspace write: {result}")
+            assert_linux_workspace_write(command)
         elif result.get("error", {}).get("data", {}).get("code") != "BACKEND_UNAVAILABLE":
             raise SystemExit(f"expected Linux backend unavailable without bubblewrap: {result}")
+
+
+def assert_linux_workspace_write(command: str) -> None:
+    with tempfile.TemporaryDirectory(prefix="runseal-linux-workspace-write-") as cwd:
+        workspace = Path(cwd)
+        inside = workspace / "inside.txt"
+        outside = workspace.parent / "runseal-outside-write.txt"
+        protected = workspace / ".git" / "blocked.txt"
+        protected.parent.mkdir()
+        _, result = run_json(
+            [
+                "exec",
+                "--json",
+                "--policy",
+                "workspace-write",
+                "--network",
+                "disabled",
+                "--cwd",
+                cwd,
+                "--",
+                command,
+                "-c",
+                f"from pathlib import Path; Path({str(inside)!r}).write_text('inside')",
+            ],
+            expect_success=True,
+        )
+        if result.get("platform_plan", {}).get("enforcement") != "linux-experimental":
+            raise SystemExit(f"unexpected Linux workspace-write plan: {result}")
+        if result.get("exit_code") != 0 or inside.read_text() != "inside":
+            raise SystemExit(f"Linux workspace-write did not allow workspace write: {result}")
+        for target in [outside, protected]:
+            _, result = run_json(
+                [
+                    "exec",
+                    "--json",
+                    "--policy",
+                    "workspace-write",
+                    "--network",
+                    "disabled",
+                    "--cwd",
+                    cwd,
+                    "--",
+                    command,
+                    "-c",
+                    f"from pathlib import Path; Path({str(target)!r}).write_text('blocked')",
+                ],
+                expect_success=True,
+            )
+            if result.get("exit_code") == 0 or target.exists():
+                raise SystemExit(f"Linux workspace-write did not block write to {target}: {result}")
 
 
 def assert_fail_closed(system: str) -> None:
