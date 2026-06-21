@@ -292,14 +292,14 @@ fn assert_no_private_windows_setup_terms(value: &Value) {
     }
 }
 
-fn assert_linux_fail_closed_preview(plan: &Value) {
-    if !cfg!(target_os = "linux") {
+fn assert_portable_fail_closed_preview(plan: &Value) {
+    if !cfg!(any(target_os = "linux", target_os = "macos")) {
         return;
     }
 
     assert_eq!(plan["backend"]["name"], expected_backend_name());
     assert_eq!(plan["backend"]["status"], expected_backend_status());
-    assert_eq!(plan["backend"]["platform"], "linux");
+    assert_eq!(plan["backend"]["platform"], expected_backend_platform());
     assert_eq!(plan["sandbox_level"], "read-only");
     assert_eq!(plan["enforcement"], "fail-closed-preview");
     assert_eq!(plan["process"]["boundary"], "platform-sandbox");
@@ -312,10 +312,18 @@ fn assert_linux_fail_closed_preview(plan: &Value) {
         json!(expected_missing_features(&["network_disabled"]))
     );
     let plan_text = plan.to_string();
-    for private_term in ["bubblewrap", "landlock", "namespace", "seccomp"] {
+    for private_term in [
+        "bubblewrap",
+        "landlock",
+        "namespace",
+        "seccomp",
+        "sandbox_exec",
+        "seatbelt",
+        "profile fragment",
+    ] {
         assert!(
             !plan_text.contains(private_term),
-            "portable preview must not expose private Linux mechanism term {private_term}"
+            "portable preview must not expose private mechanism term {private_term}"
         );
     }
 }
@@ -3432,7 +3440,7 @@ fn sandboxed_policy_uses_platform_backend_or_reports_unavailable() -> Result<()>
         response["error"]["data"]["missing_features"],
         json!(expected_missing_features(&["network_disabled"]))
     );
-    assert_linux_fail_closed_preview(&response["error"]["data"]["platform_plan"]);
+    assert_portable_fail_closed_preview(&response["error"]["data"]["platform_plan"]);
     let audit_path = response["error"]["data"]["audit_path"]
         .as_str()
         .expect("backend failure must return audit_path");
