@@ -1286,6 +1286,32 @@
   },
   {
     "schema_version": "runseal.adversarial-case/v1",
+    "case_id": "adv.process.helper-process-reuse.v1",
+    "title": "Executions must not reuse helper process state",
+    "primary_class": "process",
+    "secondary_classes": ["runtime"],
+    "capabilities_under_test": ["process_isolation", "process_cleanup", "runtime_roots"],
+    "platforms": ["windows", "macos", "linux"],
+    "backend_status": ["reference", "experimental", "future-community", "local-baseline"],
+    "sandbox_level": "workspace-write",
+    "network_mode": "disabled",
+    "fixtures": [{"kind": "background_process", "command": ["python", "-c", "import time; time.sleep(60)"]}],
+    "request": {
+      "method": "execute",
+      "command": ["python", "-c", "print('helper reuse')"],
+      "policy": {"sandbox_level": "workspace-write"}
+    },
+    "oracle": {
+      "expected_result": "deny_or_fail_closed",
+      "max_severity": "S1",
+      "audit": {"required": true},
+      "events": {"required": true},
+      "forbidden_side_effects": ["process_not_running", "event_not_contains_private_detail"]
+    },
+    "public_report_labels": ["process_cleanup", "runtime_roots"]
+  },
+  {
+    "schema_version": "runseal.adversarial-case/v1",
     "case_id": "adv.process.interactive-disabled.v1",
     "title": "Interactive process requests must be rejected",
     "primary_class": "process",
