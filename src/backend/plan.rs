@@ -100,18 +100,14 @@ impl PlatformSandboxPlan {
     pub(super) fn portable_fail_closed_preview(
         backend: &dyn SandboxBackend,
         execution_id: &str,
-        cwd: &Path,
+        _cwd: &Path,
         policy: &SandboxPolicy,
     ) -> Self {
-        let runtime_root = cwd.join(".runseal").join("runtime").join(execution_id);
-        let profile_root = runtime_root.join("profile");
-        let synthetic_home = runtime_root.join("home");
-        let temp_root = runtime_root.join("temp");
         let runtime_roots = [
-            path_string(&runtime_root),
-            path_string(&profile_root),
-            path_string(&synthetic_home),
-            path_string(&temp_root),
+            "runtime_root".to_string(),
+            "profile_root".to_string(),
+            "synthetic_home".to_string(),
+            "temp_root".to_string(),
         ];
         Self {
             backend: backend.name(),
@@ -122,20 +118,18 @@ impl PlatformSandboxPlan {
             policy_hash: policy.hash(),
             sandbox_level: policy.sandbox_level.as_str(),
             enforcement: "fail-closed-preview",
-            cwd: path_string(cwd),
+            cwd: "workspace".to_string(),
             runtime_root: Some(runtime_roots[0].clone()),
             profile_root: Some(runtime_roots[1].clone()),
             synthetic_home: Some(runtime_roots[2].clone()),
             temp_root: Some(runtime_roots[3].clone()),
-            filesystem_read: policy
-                .filesystem
-                .read
-                .iter()
-                .chain(policy.filesystem.read_only.iter())
-                .cloned()
-                .collect(),
+            filesystem_read: vec!["workspace".to_string()],
             filesystem_write: runtime_roots.to_vec(),
-            filesystem_deny: policy.filesystem.deny.clone(),
+            filesystem_deny: if policy.filesystem.deny.is_empty() {
+                Vec::new()
+            } else {
+                vec!["policy_denied_roots".to_string()]
+            },
             filesystem_protected: protected_filesystem_labels(policy),
             private_filesystem_deny: Vec::new(),
             private_filesystem_rules: Vec::new(),

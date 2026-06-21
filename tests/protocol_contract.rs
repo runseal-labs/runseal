@@ -302,6 +302,21 @@ fn assert_portable_fail_closed_preview(plan: &Value) {
     assert_eq!(plan["backend"]["platform"], expected_backend_platform());
     assert_eq!(plan["sandbox_level"], "read-only");
     assert_eq!(plan["enforcement"], "fail-closed-preview");
+    assert_eq!(plan["cwd"], "workspace");
+    assert_eq!(plan["runtime_root"], "runtime_root");
+    assert_eq!(plan["profile_root"], "profile_root");
+    assert_eq!(plan["synthetic_home"], "synthetic_home");
+    assert_eq!(plan["temp_root"], "temp_root");
+    assert_eq!(plan["filesystem"]["read"], json!(["workspace"]));
+    assert_eq!(
+        plan["filesystem"]["write"],
+        json!([
+            "runtime_root",
+            "profile_root",
+            "synthetic_home",
+            "temp_root"
+        ])
+    );
     assert_eq!(plan["process"]["boundary"], "platform-sandbox");
     assert_eq!(plan["process"]["identity"], "current-user");
     assert_eq!(plan["process"]["cleanup"], "process-tree");

@@ -498,15 +498,16 @@ fn linux_skeleton_fails_closed_for_sandboxed_policy() {
     assert_eq!(plan.platform, "linux");
     assert_eq!(plan.enforcement, "fail-closed-preview");
     assert_eq!(plan.sandbox_level, "read-only");
-    assert!(
-        plan.runtime_root
-            .as_deref()
-            .unwrap()
-            .ends_with("exec_linux_read_only")
-    );
+    assert_eq!(plan.cwd, "workspace");
+    assert_eq!(plan.runtime_root.as_deref(), Some("runtime_root"));
+    assert_eq!(plan.profile_root.as_deref(), Some("profile_root"));
+    assert_eq!(plan.synthetic_home.as_deref(), Some("synthetic_home"));
+    assert_eq!(plan.temp_root.as_deref(), Some("temp_root"));
+    assert_eq!(plan.filesystem_read, vec!["workspace".to_string()]);
     assert_eq!(plan.process_boundary, "platform-sandbox");
     assert_eq!(plan.network_direct_egress, "deny");
     let public_plan = plan.json().to_string();
+    assert!(!public_plan.contains("/workspace"));
     assert!(!public_plan.contains("bubblewrap"));
     assert!(!public_plan.contains("landlock"));
     assert!(!public_plan.contains("namespace"));
@@ -552,15 +553,16 @@ fn macos_skeleton_fails_closed_for_sandboxed_policy() {
     assert_eq!(plan.platform, "macos");
     assert_eq!(plan.enforcement, "fail-closed-preview");
     assert_eq!(plan.sandbox_level, "read-only");
-    assert!(
-        plan.runtime_root
-            .as_deref()
-            .unwrap()
-            .ends_with("exec_macos_read_only")
-    );
+    assert_eq!(plan.cwd, "workspace");
+    assert_eq!(plan.runtime_root.as_deref(), Some("runtime_root"));
+    assert_eq!(plan.profile_root.as_deref(), Some("profile_root"));
+    assert_eq!(plan.synthetic_home.as_deref(), Some("synthetic_home"));
+    assert_eq!(plan.temp_root.as_deref(), Some("temp_root"));
+    assert_eq!(plan.filesystem_read, vec!["workspace".to_string()]);
     assert_eq!(plan.process_boundary, "platform-sandbox");
     assert_eq!(plan.network_direct_egress, "deny");
     let public_plan = plan.json().to_string();
+    assert!(!public_plan.contains("/workspace"));
     assert!(!public_plan.contains("sandbox_exec"));
     assert!(!public_plan.contains("seatbelt"));
     assert!(!public_plan.contains("profile fragment"));
