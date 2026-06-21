@@ -54,7 +54,8 @@ The tests are black-box by design:
 Adversarial conformance follows RFC-0015's escape taxonomy: filesystem,
 runtime, process, network, policy, execution injection, and audit. Backend
 capabilities may be promoted only when the relevant adversarial cases produce
-S0 or S1 outcomes, and public output remains platform-neutral.
+S0 or S1 outcomes, and public result output remains platform-neutral and
+marked public-safe.
 RFC-0016 adversarial case manifests live under `adversarial/cases/`; their
 public shape and promotion-gate severity rules are validated by
 `adversarial_case_manifest`.
