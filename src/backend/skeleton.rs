@@ -105,8 +105,9 @@ impl SandboxBackend for MacosExperimentalBackend {
         payload["sandbox_levels"]["workspace-write"] =
             json!(CapabilityStatus::Experimental.as_str());
         payload["sandbox_levels"]["workspace-contained"] =
-            json!(CapabilityStatus::Experimental.as_str());
+            json!(CapabilityStatus::Unsupported.as_str());
         payload["network_modes"]["disabled"] = json!(CapabilityStatus::Experimental.as_str());
+        mark_portable_disabled_features_experimental(&mut payload);
         payload["capability_probes"] = crate::macos::capability_probe::capability_probes();
         payload
     }
@@ -166,10 +167,26 @@ impl SandboxBackend for LinuxCommunityBackend {
         payload["sandbox_levels"]["workspace-write"] =
             json!(CapabilityStatus::Experimental.as_str());
         payload["sandbox_levels"]["workspace-contained"] =
-            json!(CapabilityStatus::Experimental.as_str());
+            json!(CapabilityStatus::Unsupported.as_str());
         payload["network_modes"]["disabled"] = json!(CapabilityStatus::Experimental.as_str());
+        mark_portable_disabled_features_experimental(&mut payload);
         payload["capability_probes"] = crate::linux::capability_probe::capability_probes();
         payload
+    }
+}
+
+fn mark_portable_disabled_features_experimental(payload: &mut Value) {
+    for feature in [
+        "filesystem_policy",
+        "runtime_roots",
+        "runtime_environment",
+        "process_isolation",
+        "process_cleanup",
+        "direct_network_deny",
+        "network_disabled",
+        "policy_epoch",
+    ] {
+        payload["features"][feature] = json!(true);
     }
 }
 fn compile_local_execution_or_unsupported(
@@ -264,16 +281,6 @@ fn compile_linux_plan(
         && policy.network.mode == NetworkMode::Disabled
     {
         return Ok(PlatformSandboxPlan::linux_workspace_write_experimental(
-            backend,
-            execution_id,
-            cwd,
-            policy,
-        ));
-    }
-    if policy.sandbox_level == SandboxLevel::WorkspaceContained
-        && policy.network.mode == NetworkMode::Disabled
-    {
-        return Ok(PlatformSandboxPlan::linux_workspace_contained_experimental(
             backend,
             execution_id,
             cwd,
@@ -439,19 +446,8 @@ fn spawn_linux_bwrap(
     timeout: Option<Duration>,
 ) -> io::Result<BackendExecutionOutput> {
     let mut bwrap_command = vec!["bwrap".to_string()];
-    if plan.sandbox_level == SandboxLevel::WorkspaceContained.as_str() {
-        for root in ["/bin", "/usr", "/lib", "/lib64", "/etc"] {
-            if Path::new(root).exists() {
-                bwrap_command.extend(["--ro-bind".to_string(), root.to_string(), root.to_string()]);
-            }
-        }
-    } else {
-        bwrap_command.extend(["--ro-bind".to_string(), "/".to_string(), "/".to_string()]);
-    }
-    if matches!(
-        plan.sandbox_level,
-        "workspace-write" | "workspace-contained"
-    ) {
+    bwrap_command.extend(["--ro-bind".to_string(), "/".to_string(), "/".to_string()]);
+    if plan.sandbox_level == SandboxLevel::WorkspaceWrite.as_str() {
         bwrap_command.extend(["--bind".to_string(), path_string(cwd), path_string(cwd)]);
     }
     for root in [
@@ -465,10 +461,7 @@ fn spawn_linux_bwrap(
     {
         bwrap_command.extend(["--bind".to_string(), root.to_string(), root.to_string()]);
     }
-    if matches!(
-        plan.sandbox_level,
-        "workspace-write" | "workspace-contained"
-    ) {
+    if plan.sandbox_level == SandboxLevel::WorkspaceWrite.as_str() {
         for protected in [".git", ".agents", ".codex"] {
             let protected_root = cwd.join(protected);
             if protected_root.exists() {

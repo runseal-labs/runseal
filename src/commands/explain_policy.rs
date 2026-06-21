@@ -28,6 +28,8 @@ pub(crate) fn run(args: &[String]) -> Result<(), String> {
 }
 
 pub(crate) fn explain_policy_json(policy: &SandboxPolicy, cwd: &Path) -> Value {
+    #[cfg(not(windows))]
+    let _ = cwd;
     let backend = active_backend();
     let missing_features = backend.missing_feature_names(policy);
     let mut result = policy.explain_json();
@@ -41,8 +43,11 @@ pub(crate) fn explain_policy_json(policy: &SandboxPolicy, cwd: &Path) -> Value {
             }),
         );
         result.insert("missing_features".to_string(), json!(missing_features));
-        if let Ok(setup_status) = windows_sandbox_setup_status_for_cwd(cwd) {
-            result.insert("setup_status".to_string(), setup_status);
+        #[cfg(windows)]
+        {
+            if let Ok(setup_status) = windows_sandbox_setup_status_for_cwd(cwd) {
+                result.insert("setup_status".to_string(), setup_status);
+            }
         }
     }
     result

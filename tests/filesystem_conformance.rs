@@ -563,6 +563,64 @@ fn workspace_write_denies_external_write_when_supported_or_fails_closed() -> Res
 }
 
 #[test]
+fn workspace_write_denies_relative_cwd_write_escape_when_supported_or_fails_closed() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let workspace = tmp.path().join("workspace");
+    fs::create_dir_all(&workspace)?;
+    let outside = tmp.path().join("outside.txt");
+    let code = "from pathlib import Path; Path('../outside.txt').write_text('outside')".to_string();
+    let ps_code = ps_write_text(Path::new("../outside.txt"), "outside");
+    let response = execute_platform_script("workspace-write", &workspace, None, code, ps_code)?;
+
+    if is_backend_missing(&response) {
+        assert_backend_missing(&response, &workspace)?;
+        assert!(!outside.exists());
+        return Ok(());
+    }
+    if is_backend_unavailable(&response) {
+        assert_backend_unavailable(&response, &workspace)?;
+        assert!(!outside.exists());
+        return Ok(());
+    }
+
+    assert_eq!(response["result"]["status"], "finished");
+    assert_ne!(response["result"]["exit_code"], 0);
+    assert!(!outside.exists());
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn workspace_write_denies_symlink_write_escape_when_supported_or_fails_closed() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let workspace = tmp.path().join("workspace");
+    fs::create_dir_all(&workspace)?;
+    let outside = tmp.path().join("outside.txt");
+    fs::write(&outside, "outside-original")?;
+    let link = workspace.join("link-to-outside.txt");
+    std::os::unix::fs::symlink(&outside, &link)?;
+    let code = format!("from pathlib import Path; Path({link:?}).write_text('escaped')");
+    let response =
+        execute_platform_script("workspace-write", &workspace, None, code, String::new())?;
+
+    if is_backend_missing(&response) {
+        assert_backend_missing(&response, &workspace)?;
+        assert_eq!(fs::read_to_string(&outside)?, "outside-original");
+        return Ok(());
+    }
+    if is_backend_unavailable(&response) {
+        assert_backend_unavailable(&response, &workspace)?;
+        assert_eq!(fs::read_to_string(&outside)?, "outside-original");
+        return Ok(());
+    }
+
+    assert_eq!(response["result"]["status"], "finished");
+    assert_ne!(response["result"]["exit_code"], 0);
+    assert_eq!(fs::read_to_string(outside)?, "outside-original");
+    Ok(())
+}
+
+#[test]
 fn read_only_denies_workspace_write_when_supported_or_fails_closed() -> Result<()> {
     let tmp = TempDir::new()?;
     let workspace = tmp.path().join("workspace");
@@ -666,6 +724,50 @@ fn workspace_write_protects_workspace_metadata_when_supported_or_fails_closed() 
 }
 
 #[test]
+fn read_only_reads_workspace_and_writes_runtime_roots_when_supported_or_fails_closed() -> Result<()>
+{
+    let tmp = TempDir::new()?;
+    let workspace = tmp.path().join("workspace");
+    fs::create_dir_all(&workspace)?;
+    let input = workspace.join("input.txt");
+    fs::write(&input, "workspace-read-ok")?;
+    let code = "import os, pathlib\n\
+         print(pathlib.Path('input.txt').read_text(), end='')\n\
+         [(pathlib.Path(os.environ[key]) / 'read-only-runtime-write.txt').write_text(key, encoding='utf-8') for key in ['HOME', 'TMPDIR', 'RUNSEAL_HOME', 'RUNSEAL_TMP']]"
+        .to_string();
+    let ps_script = format!(
+        "Write-Output -NoNewline (Get-Content -Raw -LiteralPath {}); \
+         foreach ($root in @($env:USERPROFILE, $env:TEMP, $env:RUNSEAL_HOME, $env:RUNSEAL_TMP)) {{ \
+             Set-Content -LiteralPath (Join-Path $root 'read-only-runtime-write.txt') -Value $root -NoNewline \
+         }}",
+        ps_path(&input)
+    );
+    let response = execute_platform_script("read-only", &workspace, None, code, ps_script)?;
+
+    if is_backend_missing(&response) {
+        assert_backend_missing(&response, &workspace)?;
+        return Ok(());
+    }
+    if is_backend_unavailable(&response) {
+        assert_backend_unavailable(&response, &workspace)?;
+        return Ok(());
+    }
+
+    assert_eq!(response["result"]["status"], "finished");
+    assert_eq!(
+        response["result"]["exit_code"],
+        0,
+        "{}",
+        response["result"]["stderr"].as_str().unwrap_or_default()
+    );
+    assert_eq!(
+        response["result"]["stdout"].as_str().unwrap_or_default(),
+        "workspace-read-ok"
+    );
+    Ok(())
+}
+
+#[test]
 fn runtime_environment_roots_are_per_execution_when_supported_or_fails_closed() -> Result<()> {
     let tmp = TempDir::new()?;
     let workspace = tmp.path().join("workspace");
@@ -758,6 +860,44 @@ fn runtime_environment_roots_are_per_execution_when_supported_or_fails_closed() 
             .trim(),
     )?;
     assert_eq!(leaked, json!([]));
+    Ok(())
+}
+
+#[test]
+fn runtime_roots_are_cleaned_after_execution_when_supported_or_fails_closed() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let workspace = tmp.path().join("workspace");
+    fs::create_dir_all(&workspace)?;
+    let marker = "runseal-runtime-cleanup-marker.txt";
+    let code = format!(
+        "import os, pathlib\n\
+         path = pathlib.Path(os.environ['HOME']) / {marker:?}\n\
+         path.write_text('runtime marker', encoding='utf-8')"
+    );
+    let ps_script = format!(
+        "Set-Content -LiteralPath (Join-Path $env:USERPROFILE {}) -Value 'runtime marker' -NoNewline",
+        ps_literal(marker)
+    );
+    let response = execute_platform_script("workspace-write", &workspace, None, code, ps_script)?;
+
+    if is_backend_missing(&response) {
+        assert_backend_missing(&response, &workspace)?;
+        return Ok(());
+    }
+    if is_backend_unavailable(&response) {
+        assert_backend_unavailable(&response, &workspace)?;
+        return Ok(());
+    }
+
+    assert_eq!(response["result"]["status"], "finished");
+    assert_eq!(response["result"]["exit_code"], 0);
+    let runtime_root = response["result"]["platform_plan"]["runtime_root"]
+        .as_str()
+        .context("workspace-write execution must report runtime_root")?;
+    assert!(
+        !Path::new(runtime_root).exists(),
+        "runtime root should be removed after execution: {runtime_root}"
+    );
     Ok(())
 }
 

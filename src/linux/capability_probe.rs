@@ -7,7 +7,8 @@ pub(crate) fn capability_probes() -> Value {
         probe(
             "filesystem_policy",
             "landlock",
-            landlock_abi_version.is_some()
+            landlock_abi_version.is_some(),
+            false,
         ),
         probe_with_details(
             "filesystem_policy",
@@ -18,47 +19,59 @@ pub(crate) fn capability_probes() -> Value {
         probe(
             "process_isolation",
             "user_namespaces",
-            Path::new("/proc/self/ns/user").exists()
+            Path::new("/proc/self/ns/user").exists(),
+            true,
         ),
         probe(
             "process_isolation",
             "user_namespace_quota",
-            user_namespace_quota_available()
+            user_namespace_quota_available(),
+            true,
         ),
         probe(
             "process_isolation",
             "mount_namespaces",
-            Path::new("/proc/self/ns/mnt").exists()
+            Path::new("/proc/self/ns/mnt").exists(),
+            true,
         ),
         probe(
             "process_isolation",
             "pid_namespaces",
-            Path::new("/proc/self/ns/pid").exists()
+            Path::new("/proc/self/ns/pid").exists(),
+            true,
         ),
         probe(
             "network_disabled",
             "network_namespaces",
-            Path::new("/proc/self/ns/net").exists()
+            Path::new("/proc/self/ns/net").exists(),
+            true,
         ),
         probe(
             "process_isolation",
             "seccomp",
-            Path::new("/proc/self/status").exists()
+            Path::new("/proc/self/status").exists(),
+            false,
         ),
-        probe("process_isolation", "bubblewrap", command_exists("bwrap")),
+        probe(
+            "process_isolation",
+            "bubblewrap",
+            command_exists("bwrap"),
+            true
+        ),
         probe(
             "process_isolation",
             "unprivileged_user_namespaces",
-            unprivileged_user_namespaces_available()
+            unprivileged_user_namespaces_available(),
+            true,
         )
     ])
 }
 
-fn probe(capability: &str, mechanism: &str, available: bool) -> Value {
+fn probe(capability: &str, mechanism: &str, available: bool, active: bool) -> Value {
     json!({
         "capability": capability,
         "mechanism": mechanism,
-        "status": "unsupported",
+        "status": probe_status(available, active),
         "diagnostic_only": true,
         "available": available
     })
@@ -70,11 +83,21 @@ fn probe_with_details(
     available: bool,
     details: Option<Value>,
 ) -> Value {
-    let mut probe = probe(capability, mechanism, available);
+    let mut probe = probe(capability, mechanism, available, false);
     if let Some(details) = details {
         probe["details"] = details;
     }
     probe
+}
+
+fn probe_status(available: bool, active: bool) -> &'static str {
+    if active && available {
+        "experimental"
+    } else if active {
+        "unavailable"
+    } else {
+        "unsupported"
+    }
 }
 
 fn user_namespace_quota_available() -> bool {

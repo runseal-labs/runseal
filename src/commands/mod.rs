@@ -1,6 +1,7 @@
 use super::*;
 use crate::execution::{current_dir, execute_command, normalize_execution_cwd};
 use crate::protocol::error_payload::cli_error_payload;
+#[cfg(windows)]
 use setup::windows_sandbox_setup_status_for_cwd;
 
 pub(crate) mod capabilities;

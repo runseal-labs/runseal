@@ -237,15 +237,6 @@ impl PlatformSandboxPlan {
         Self::linux_experimental(backend, execution_id, cwd, policy)
     }
 
-    pub(super) fn linux_workspace_contained_experimental(
-        backend: &dyn SandboxBackend,
-        execution_id: &str,
-        cwd: &Path,
-        policy: &SandboxPolicy,
-    ) -> Self {
-        Self::linux_experimental(backend, execution_id, cwd, policy)
-    }
-
     pub(super) fn macos_read_only_experimental(
         backend: &dyn SandboxBackend,
         execution_id: &str,

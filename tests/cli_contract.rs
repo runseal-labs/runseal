@@ -180,16 +180,8 @@ fn expected_backend_platform() -> &'static str {
     }
 }
 
-fn expected_process_cleanup_supported() -> bool {
-    cfg!(windows)
-}
-
-fn expected_runtime_roots_supported() -> bool {
-    cfg!(windows)
-}
-
-fn expected_runtime_environment_supported() -> bool {
-    cfg!(windows)
+fn expected_disabled_feature_reported() -> bool {
+    cfg!(any(windows, target_os = "macos", target_os = "linux"))
 }
 
 fn expected_windows_sandbox_supported() -> bool {
@@ -221,6 +213,14 @@ fn expected_workspace_write_status() -> &'static str {
         "experimental"
     } else {
         expected_status(expected_windows_sandbox_supported())
+    }
+}
+
+fn expected_workspace_contained_status() -> &'static str {
+    if cfg!(windows) {
+        expected_status(expected_windows_sandbox_supported())
+    } else {
+        "unsupported"
     }
 }
 
@@ -343,7 +343,17 @@ fn assert_portable_capability_probe_contract(payload: &Value) {
             let Some(mechanism) = probe["mechanism"].as_str() else {
                 panic!("portable backend probe must report mechanism");
             };
-            assert_eq!(probe["status"], "unsupported");
+            assert!(
+                [
+                    "supported",
+                    "experimental",
+                    "unsupported",
+                    "unavailable",
+                    "requires_setup",
+                ]
+                .iter()
+                .any(|status| probe["status"] == *status)
+            );
             assert_eq!(probe["diagnostic_only"], true);
             assert!(probe["available"].is_boolean());
             mechanisms.push(mechanism);
@@ -727,27 +737,27 @@ fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
     assert_eq!(payload["features"]["local_execution"], true);
     assert_eq!(
         payload["features"]["filesystem_policy"],
-        expected_windows_sandbox_supported()
+        expected_disabled_feature_reported()
     );
     assert_eq!(
         payload["features"]["runtime_roots"],
-        expected_runtime_roots_supported()
+        expected_disabled_feature_reported()
     );
     assert_eq!(
         payload["features"]["runtime_environment"],
-        expected_runtime_environment_supported()
+        expected_disabled_feature_reported()
     );
     assert_eq!(
         payload["features"]["process_isolation"],
-        expected_windows_sandbox_supported()
+        expected_disabled_feature_reported()
     );
     assert_eq!(
         payload["features"]["process_cleanup"],
-        expected_process_cleanup_supported()
+        expected_disabled_feature_reported()
     );
     assert_eq!(
         payload["features"]["direct_network_deny"],
-        expected_windows_sandbox_supported()
+        expected_disabled_feature_reported()
     );
     assert_eq!(
         payload["features"]["managed_proxy"],
@@ -759,11 +769,11 @@ fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
     );
     assert_eq!(
         payload["features"]["network_disabled"],
-        expected_windows_sandbox_supported()
+        expected_disabled_feature_reported()
     );
     assert_eq!(
         payload["features"]["policy_epoch"],
-        expected_windows_sandbox_supported()
+        expected_disabled_feature_reported()
     );
     assert_eq!(payload["features"]["setup_readiness"], true);
     assert_eq!(payload["features"]["stdin_bytes"], true);
@@ -784,6 +794,10 @@ fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
         expected_workspace_write_status()
     );
     assert_eq!(
+        payload["sandbox_levels"]["workspace-contained"],
+        expected_workspace_contained_status()
+    );
+    assert_eq!(
         payload["network_modes"]["proxy"],
         expected_status(expected_windows_sandbox_supported())
     );
@@ -791,8 +805,12 @@ fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
         payload["network_modes"]["disabled"],
         expected_network_disabled_status()
     );
-    assert_eq!(payload["setup_status"]["setup"], "windows-sandbox");
-    assert!(payload["setup_status"]["next_action"].as_str().is_some());
+    if cfg!(windows) {
+        assert_eq!(payload["setup_status"]["setup"], "windows-sandbox");
+        assert!(payload["setup_status"]["next_action"].as_str().is_some());
+    } else {
+        assert!(payload.get("setup_status").is_none());
+    }
     assert_portable_capability_probe_contract(&payload);
     assert_no_private_windows_setup_terms(&payload.to_string());
     Ok(())
@@ -827,8 +845,12 @@ fn explain_policy_cli_materializes_standard_profile() -> Result<()> {
         payload["support"],
         expected_status(expected_windows_sandbox_supported())
     );
-    assert_eq!(payload["setup_status"]["setup"], "windows-sandbox");
-    assert!(payload["setup_status"]["can_run_setup_now"].is_boolean());
+    if cfg!(windows) {
+        assert_eq!(payload["setup_status"]["setup"], "windows-sandbox");
+        assert!(payload["setup_status"]["can_run_setup_now"].is_boolean());
+    } else {
+        assert!(payload.get("setup_status").is_none());
+    }
     assert_eq!(
         payload["required_backend_features"],
         serde_json::json!([
