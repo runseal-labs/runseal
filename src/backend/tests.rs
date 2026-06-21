@@ -542,6 +542,26 @@ fn macos_skeleton_fails_closed_for_sandboxed_policy() {
     assert_eq!(err.code, "BACKEND_CAPABILITY_MISSING");
     assert_eq!(err.support, "unsupported");
     assert_eq!(err.backend, MacosExperimentalBackend.name());
+    let plan = err
+        .plan
+        .as_deref()
+        .expect("macOS failure must include plan");
+    assert_eq!(plan.backend, MacosExperimentalBackend.name());
+    assert_eq!(plan.platform, "macos");
+    assert_eq!(plan.enforcement, "fail-closed-preview");
+    assert_eq!(plan.sandbox_level, "read-only");
+    assert!(
+        plan.runtime_root
+            .as_deref()
+            .unwrap()
+            .ends_with("exec_macos_read_only")
+    );
+    assert_eq!(plan.process_boundary, "platform-sandbox");
+    assert_eq!(plan.network_direct_egress, "deny");
+    let public_plan = plan.json().to_string();
+    assert!(!public_plan.contains("sandbox_exec"));
+    assert!(!public_plan.contains("seatbelt"));
+    assert!(!public_plan.contains("profile fragment"));
 }
 
 #[test]

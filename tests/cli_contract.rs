@@ -220,14 +220,14 @@ fn assert_no_private_windows_setup_terms(text: &str) {
     }
 }
 
-fn assert_linux_fail_closed_preview(plan: &Value) {
-    if !cfg!(target_os = "linux") {
+fn assert_portable_fail_closed_preview(plan: &Value) {
+    if !cfg!(any(target_os = "linux", target_os = "macos")) {
         return;
     }
 
     assert_eq!(plan["backend"]["name"], expected_backend_name());
     assert_eq!(plan["backend"]["status"], expected_backend_status());
-    assert_eq!(plan["backend"]["platform"], "linux");
+    assert_eq!(plan["backend"]["platform"], expected_backend_platform());
     assert_eq!(plan["sandbox_level"], "read-only");
     assert_eq!(plan["enforcement"], "fail-closed-preview");
     assert_eq!(plan["process"]["boundary"], "platform-sandbox");
@@ -248,10 +248,18 @@ fn assert_linux_fail_closed_preview(plan: &Value) {
         ])
     );
     let plan_text = plan.to_string();
-    for private_term in ["bubblewrap", "landlock", "namespace", "seccomp"] {
+    for private_term in [
+        "bubblewrap",
+        "landlock",
+        "namespace",
+        "seccomp",
+        "sandbox_exec",
+        "seatbelt",
+        "profile fragment",
+    ] {
         assert!(
             !plan_text.contains(private_term),
-            "portable preview must not expose private Linux mechanism term {private_term}"
+            "portable preview must not expose private mechanism term {private_term}"
         );
     }
 }
@@ -1100,7 +1108,7 @@ fn sandboxed_exec_cli_uses_backend_or_reports_unavailable() -> Result<()> {
             .contains("cannot enforce policy read-only"),
         "{payload}"
     );
-    assert_linux_fail_closed_preview(&payload["error"]["data"]["platform_plan"]);
+    assert_portable_fail_closed_preview(&payload["error"]["data"]["platform_plan"]);
     assert_no_private_windows_setup_terms(&payload.to_string());
 
     let audit_dir = tmp.path().join(".runseal").join("audit");
