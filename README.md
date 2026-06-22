@@ -113,6 +113,10 @@ The script places `runseal.exe`, `runseal-windows-sandbox-setup.exe`, and
 `runseal-command-runner.exe` in the selected `target\debug` or
 `target\release` directory.
 
+Pushing a `v*` tag runs the release workflow and publishes Windows x86_64,
+Windows arm64, Linux x86_64, Linux aarch64, macOS arm64, and macOS x86_64
+archives with SHA-256 checksum files.
+
 Run the first sandbox bootstrap explicitly from an elevated PowerShell session:
 
 ```powershell
