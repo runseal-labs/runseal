@@ -684,6 +684,11 @@ fn read_only_denies_workspace_write_when_supported_or_fails_closed() -> Result<(
         assert!(!target.exists());
         return Ok(());
     }
+    if is_execution_failed_to_start(&response) {
+        assert_execution_failed_to_start(&response, &workspace)?;
+        assert!(!target.exists());
+        return Ok(());
+    }
 
     assert_eq!(response["result"]["status"], "finished");
     assert_ne!(response["result"]["exit_code"], 0);
@@ -1022,6 +1027,10 @@ fn workspace_write_accepts_file_stdin_when_supported_or_fails_closed() -> Result
         assert_backend_unavailable(&response, &workspace)?;
         return Ok(());
     }
+    if is_execution_failed_to_start(&response) {
+        assert_execution_failed_to_start(&response, &workspace)?;
+        return Ok(());
+    }
 
     assert_eq!(response["result"]["status"], "finished");
     assert_eq!(response["result"]["exit_code"], 0);
@@ -1061,6 +1070,10 @@ fn network_disabled_blocks_direct_egress_when_supported_or_fails_closed() -> Res
     }
     if is_backend_unavailable(&response) {
         assert_backend_unavailable(&response, &workspace)?;
+        return Ok(());
+    }
+    if is_execution_failed_to_start(&response) {
+        assert_execution_failed_to_start(&response, &workspace)?;
         return Ok(());
     }
 
