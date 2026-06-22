@@ -556,6 +556,7 @@ fn adversarial_filesystem_path_denial_cases_run() -> Result<()> {
                     | "adv.filesystem.unc-path-injection.v1"
                     | "adv.filesystem.preexisting-symlinked-runtime-root.v1"
                     | "adv.filesystem.protected-subpath-write.v1"
+                    | "adv.filesystem.protected-git-metadata-write.v1"
                     | "adv.filesystem.external-write-from-workspace-write.v1"
                     | "adv.filesystem.external-read-from-workspace-contained.v1"
             )
@@ -564,8 +565,11 @@ fn adversarial_filesystem_path_denial_cases_run() -> Result<()> {
     });
 
     let mut ran = 0;
+    let mut ran_protected_git_metadata = false;
     for case in filesystem_cases {
         ran += 1;
+        ran_protected_git_metadata |=
+            case["case_id"] == "adv.filesystem.protected-git-metadata-write.v1";
         let tmp = TempDir::new()?;
         materialize_supported_fixtures(tmp.path(), case)?;
         let workspace = tmp.path().join("workspace");
@@ -587,6 +591,10 @@ fn adversarial_filesystem_path_denial_cases_run() -> Result<()> {
     }
 
     assert!(ran >= 6, "filesystem path denial cases must run");
+    assert!(
+        ran_protected_git_metadata,
+        "protected Git metadata case must run"
+    );
     Ok(())
 }
 
@@ -730,6 +738,7 @@ fn adversarial_network_fail_closed_cases_run() -> Result<()> {
             case["case_id"].as_str(),
             Some(
                 "adv.network.direct-egress-disabled.v1"
+                    | "adv.network.http-egress-disabled.v1"
                     | "adv.network.managed-proxy-bypass.v1"
                     | "adv.network.proxy-env-override.v1"
                     | "adv.network.proxy-credential-redaction.v1"
@@ -742,8 +751,10 @@ fn adversarial_network_fail_closed_cases_run() -> Result<()> {
     });
 
     let mut ran = 0;
+    let mut ran_disabled_http = false;
     for case in network_cases {
         ran += 1;
+        ran_disabled_http |= case["case_id"] == "adv.network.http-egress-disabled.v1";
         let tmp = TempDir::new()?;
         let workspace = tmp.path().join("workspace");
         fs::create_dir_all(&workspace)?;
@@ -773,7 +784,8 @@ fn adversarial_network_fail_closed_cases_run() -> Result<()> {
         assert_public_safe(&result.to_string())?;
     }
 
-    assert!(ran >= 7, "network fail-closed cases must run");
+    assert!(ran >= 8, "network fail-closed cases must run");
+    assert!(ran_disabled_http, "disabled HTTP egress case must run");
     Ok(())
 }
 
