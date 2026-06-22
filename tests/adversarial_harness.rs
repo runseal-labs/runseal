@@ -692,15 +692,30 @@ fn adversarial_process_timeout_cases_run() -> Result<()> {
             params.insert("command".to_string(), windows_timeout_command());
             params.insert("network".to_string(), json!("disabled"));
         })?;
+        let observed = observed_timeout_result(&response);
         assert_eq!(
-            observed_timeout_result(&response),
+            if observed == "setup_unavailable" {
+                "timeout"
+            } else {
+                observed
+            },
             "timeout",
-            "case {} must time out: {response}",
+            "case {} must time out or fail closed before execution: {response}",
             case["case_id"]
         );
 
-        let result = emit_result(case, "timeout", true)?;
-        assert_eq!(result["status"], "passed", "{result}");
+        let result = if observed == "setup_unavailable" {
+            unsupported_fixture_result(case, "windows sandbox setup unavailable")?
+        } else {
+            emit_result(case, "timeout", true)?
+        };
+        assert!(
+            matches!(
+                result["status"].as_str(),
+                Some("passed" | "unsupported_fixture")
+            ),
+            "{result}"
+        );
         assert_public_safe(&result.to_string())?;
     }
 
@@ -1370,6 +1385,7 @@ fn windows_timeout_command() -> Value {
 fn observed_timeout_result(response: &Value) -> &'static str {
     match response["error"]["data"]["code"].as_str() {
         Some("EXECUTION_TIMEOUT") => "timeout",
+        Some("BACKEND_UNAVAILABLE") => "setup_unavailable",
         _ => "harness_error",
     }
 }

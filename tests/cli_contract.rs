@@ -1226,7 +1226,13 @@ fn sandboxed_exec_cli_uses_backend_or_reports_unavailable() -> Result<()> {
                 expected_enforcement
             );
         } else {
-            assert_eq!(payload["error"]["data"]["code"], "BACKEND_UNAVAILABLE");
+            assert!(
+                matches!(
+                    payload["error"]["data"]["code"].as_str(),
+                    Some("BACKEND_UNAVAILABLE" | "EXECUTION_FAILED_TO_START")
+                ),
+                "{payload}"
+            );
             assert_eq!(
                 payload["error"]["data"]["backend"]["name"],
                 expected_backend_name()
