@@ -85,7 +85,7 @@ runseal exec --policy workspace-write --network proxy --cwd /workspace -- python
 runseal exec --policy workspace-write --network disabled --cwd /workspace --timeout-ms 30000 -- whoami
 runseal explain-policy --policy workspace-write --network proxy
 runseal capabilities
-runseal setup windows-sandbox --cwd C:\path\to\workspace
+runseal setup windows-sandbox --cwd C:\path\to\workspace --elevate
 runseal rpc --stdio
 runseal service --stdio
 runseal version
