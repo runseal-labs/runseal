@@ -2,10 +2,13 @@ use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use std::env;
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
+use std::thread;
+use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 const PRIVATE_TERMS: &[&str] = &["sid", "acl", "wfp", "seatbelt", "seccomp", "landlock"];
@@ -759,7 +762,18 @@ fn adversarial_network_fail_closed_cases_run() -> Result<()> {
         let workspace = tmp.path().join("workspace");
         fs::create_dir_all(&workspace)?;
 
-        let command = command_with_local_python(case)?;
+        let mut http_listener = None;
+        let command = if case["case_id"] == "adv.network.http-egress-disabled.v1" {
+            let (url, listener) = spawn_http_target()?;
+            http_listener = Some(listener);
+            json!([
+                python_bin(),
+                "-c",
+                format!("import urllib.request; urllib.request.urlopen({url:?}, timeout=1).read()")
+            ])
+        } else {
+            command_with_local_python(case)?
+        };
         let env = environment_fixtures(case)?;
         let response = run_case_with_overrides(case, &workspace, |params| {
             params.insert("command".to_string(), command);
@@ -767,6 +781,11 @@ fn adversarial_network_fail_closed_cases_run() -> Result<()> {
                 params.insert("env".to_string(), json!(env));
             }
         })?;
+        if let Some(listener) = http_listener {
+            listener
+                .join()
+                .map_err(|_| anyhow::anyhow!("HTTP target listener panicked"))??;
+        }
         assert_eq!(
             observed_filesystem_denial_result(&response),
             "deny_or_fail_closed",
@@ -1381,6 +1400,37 @@ fn command_with_local_python(case: &Value) -> Result<Value> {
         command[0] = json!(python_bin());
     }
     Ok(Value::Array(command))
+}
+
+fn spawn_http_target() -> Result<(String, thread::JoinHandle<Result<()>>)> {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).context("failed to bind HTTP target")?;
+    listener
+        .set_nonblocking(true)
+        .context("failed to configure HTTP target")?;
+    let url = format!("http://{}", listener.local_addr()?);
+    let handle = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let mut request = [0_u8; 512];
+                    let _ = stream.read(&mut request);
+                    stream
+                        .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+                        .context("failed to write HTTP target response")?;
+                    return Ok(());
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        return Ok(());
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(err) => return Err(err).context("failed to accept HTTP target connection"),
+            }
+        }
+    });
+    Ok((url, handle))
 }
 
 #[cfg(windows)]
