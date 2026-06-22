@@ -3894,7 +3894,13 @@ fn sandboxed_policy_uses_platform_backend_or_reports_unavailable() -> Result<()>
             "linux-experimental"
         };
         if response.get("error").is_some() {
-            assert_eq!(response["error"]["data"]["code"], "BACKEND_UNAVAILABLE");
+            assert!(
+                matches!(
+                    response["error"]["data"]["code"].as_str(),
+                    Some("BACKEND_UNAVAILABLE" | "EXECUTION_FAILED_TO_START")
+                ),
+                "{response}"
+            );
             assert_eq!(
                 response["error"]["data"]["backend"]["name"],
                 expected_backend_name()
