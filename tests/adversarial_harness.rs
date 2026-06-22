@@ -6,9 +6,12 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::OnceLock;
+use std::sync::{
+    Arc, OnceLock,
+    atomic::{AtomicBool, Ordering},
+};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tempfile::TempDir;
 
 const PRIVATE_TERMS: &[&str] = &["sid", "acl", "wfp", "seatbelt", "seccomp", "landlock"];
@@ -762,10 +765,10 @@ fn adversarial_network_fail_closed_cases_run() -> Result<()> {
         let workspace = tmp.path().join("workspace");
         fs::create_dir_all(&workspace)?;
 
-        let mut http_listener = None;
+        let mut http_target = None;
         let command = if case["case_id"] == "adv.network.http-egress-disabled.v1" {
-            let (url, listener) = spawn_http_target()?;
-            http_listener = Some(listener);
+            let (url, stop, listener) = spawn_http_target()?;
+            http_target = Some((stop, listener));
             json!([
                 python_bin(),
                 "-c",
@@ -781,7 +784,8 @@ fn adversarial_network_fail_closed_cases_run() -> Result<()> {
                 params.insert("env".to_string(), json!(env));
             }
         })?;
-        if let Some(listener) = http_listener {
+        if let Some((stop, listener)) = http_target {
+            stop.store(true, Ordering::Relaxed);
             listener
                 .join()
                 .map_err(|_| anyhow::anyhow!("HTTP target listener panicked"))??;
@@ -1402,14 +1406,15 @@ fn command_with_local_python(case: &Value) -> Result<Value> {
     Ok(Value::Array(command))
 }
 
-fn spawn_http_target() -> Result<(String, thread::JoinHandle<Result<()>>)> {
+fn spawn_http_target() -> Result<(String, Arc<AtomicBool>, thread::JoinHandle<Result<()>>)> {
     let listener = TcpListener::bind(("127.0.0.1", 0)).context("failed to bind HTTP target")?;
     listener
         .set_nonblocking(true)
         .context("failed to configure HTTP target")?;
     let url = format!("http://{}", listener.local_addr()?);
+    let stop = Arc::new(AtomicBool::new(false));
+    let thread_stop = Arc::clone(&stop);
     let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(1);
         loop {
             match listener.accept() {
                 Ok((mut stream, _)) => {
@@ -1421,7 +1426,7 @@ fn spawn_http_target() -> Result<(String, thread::JoinHandle<Result<()>>)> {
                     return Ok(());
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                    if Instant::now() >= deadline {
+                    if thread_stop.load(Ordering::Relaxed) {
                         return Ok(());
                     }
                     thread::sleep(Duration::from_millis(10));
@@ -1430,7 +1435,7 @@ fn spawn_http_target() -> Result<(String, thread::JoinHandle<Result<()>>)> {
             }
         }
     });
-    Ok((url, handle))
+    Ok((url, stop, handle))
 }
 
 #[cfg(windows)]
