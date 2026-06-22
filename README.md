@@ -10,9 +10,9 @@ RunSeal is **not** a cloud VM sandbox, a Docker Desktop replacement, or a microV
 
 ## Status
 
-`0.1.2` is the current technical-preview release for third-party integration. The repository includes a buildable CLI/RPC shell, standard policy profile normalization, canonical policy hashes, backend capability reporting, a Windows reference backend, `PlatformSandboxPlan` summaries, JSONL audit output, and black-box conformance tests.
+`0.1.2` is the current technical-preview release for third-party integration. The repository includes a buildable CLI/RPC shell, standard policy profile normalization, canonical policy hashes, backend capability reporting, a first-class Windows reference backend, `PlatformSandboxPlan` summaries, JSONL audit output, and black-box conformance tests.
 
-Execution support is intentionally narrow today: `danger-full-access` runs as local, non-sandboxed execution. On Windows, sandboxed policies (`read-only`, `workspace-contained`, `workspace-write`) execute through the reference backend. On macOS and Linux, `read-only` and `workspace-write` with `network.disabled` are experimental; other portable sandboxed policies fail closed until a backend can enforce them.
+Execution support is intentionally narrow today: `danger-full-access` runs as local, non-sandboxed execution. Windows is the most complete supported platform: sandboxed policies (`read-only`, `workspace-contained`, `workspace-write`) execute through the reference backend. macOS and Linux already have partial experimental enforcement for `read-only` and `workspace-write` with `network.disabled`, but they are not aligned with the Windows backend yet; remaining parity work is expected to come through community contributions.
 
 On Windows, a sandbox request produces a `PlatformSandboxPlan` covering runtime root, synthetic home, profile root, temp root, setup requirements, protected filesystem categories, process boundary state, network guard state, and policy path planning. The reference backend handles root creation and cleanup, environment redirects, process cleanup, filesystem enforcement, process isolation, and direct network deny-or-proxy guard enforcement.
 

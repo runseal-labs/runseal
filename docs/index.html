@@ -27,7 +27,7 @@
         <div class="hero-copy">
           <p class="eyebrow">Technical preview 0.1.2</p>
           <h1>RunSeal Docs</h1>
-          <p class="lede">OS-native sandboxing for local AI agent execution, with a Windows reference backend and portable experimental paths for macOS and Linux.</p>
+          <p class="lede">OS-native sandboxing for local AI agent execution, with Windows as the complete first-class backend and partial experimental macOS/Linux enforcement still catching up.</p>
           <div class="actions">
             <a href="https://github.com/runseal-labs/runseal/releases/latest">Download release</a>
             <a href="#quickstart">Start setup</a>
@@ -43,7 +43,7 @@
         </article>
         <article>
           <h2>Reference backend</h2>
-          <p>Windows is the reference path for sandboxed policies, setup readiness, runtime roots, process cleanup, filesystem enforcement, and network guards.</p>
+          <p>Windows is the complete first-class path for sandboxed policies, setup readiness, runtime roots, process cleanup, filesystem enforcement, and network guards.</p>
         </article>
         <article>
           <h2>Integration surfaces</h2>
@@ -104,7 +104,7 @@
                 </tbody>
               </table>
             </div>
-            <p class="note">Portable macOS and Linux paths enforce write and network boundaries, not workspace containment. Host files may remain readable until <code>workspace-contained</code> is implemented and reported separately.</p>
+            <p class="note">macOS and Linux already provide partial experimental enforcement, but they are not aligned with Windows yet. Current portable paths enforce write and network boundaries, not workspace containment; host files may remain readable until <code>workspace-contained</code> is implemented and reported separately.</p>
           </section>
 
           <section id="cli">
