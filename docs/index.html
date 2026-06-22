@@ -74,10 +74,10 @@
               <li><code>runseal-windows-sandbox-setup.exe</code></li>
               <li><code>runseal-command-runner.exe</code></li>
             </ul>
-            <pre><code>.\runseal.exe setup windows-sandbox --cwd C:\path\to\workspace
+            <pre><code>.\runseal.exe setup windows-sandbox --cwd C:\path\to\workspace --elevate
 .\runseal.exe capabilities
 .\runseal.exe exec --json --policy workspace-write --network disabled --cwd C:\path\to\workspace -- whoami.exe</code></pre>
-            <p class="note">Run the first setup command from an elevated PowerShell session. Sandboxed execution fails closed when setup is missing or stale.</p>
+            <p class="note">Use <code>--elevate</code> to request UAC when first setup cannot run in the current shell. Sandboxed execution fails closed when setup is missing or stale.</p>
           </section>
 
           <section id="status">
@@ -114,7 +114,7 @@
 runseal exec --policy workspace-write --network disabled --cwd /workspace --timeout-ms 30000 -- whoami
 runseal explain-policy --policy workspace-write --network proxy
 runseal capabilities
-runseal setup windows-sandbox --cwd C:\path\to\workspace
+runseal setup windows-sandbox --cwd C:\path\to\workspace --elevate
 runseal rpc --stdio
 runseal service --stdio
 runseal version</code></pre>

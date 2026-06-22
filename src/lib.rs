@@ -193,7 +193,7 @@ mod tests {
         assert_eq!(missing["next_action"], "open_elevated_shell");
         assert_eq!(
             missing["next_command"],
-            "runseal setup windows-sandbox --cwd <absolute-workspace-path> --json"
+            "runseal setup windows-sandbox --cwd <absolute-workspace-path> --json --elevate"
         );
         assert_eq!(unsupported["can_repair"], false);
         assert_eq!(unsupported["can_run_setup_now"], false);

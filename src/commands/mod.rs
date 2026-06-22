@@ -17,7 +17,7 @@ Commands:
   exec --policy <policy> [--network <mode>] [--cwd <path>] -- <command> [args...]
   explain-policy --policy <policy> [--network <mode>] [--cwd <path>]
   capabilities
-  setup windows-sandbox [--cwd <path>] [--status] [--json]
+  setup windows-sandbox [--cwd <path>] [--status] [--json] [--elevate]
   rpc --stdio
   service --stdio
   version

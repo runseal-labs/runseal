@@ -48,10 +48,10 @@ macOS 和 Linux 上，RunSeal 报告 experimental 的 `read-only` 和 `workspace
 - `runseal-windows-sandbox-setup.exe`
 - `runseal-command-runner.exe`
 
-在 elevated PowerShell 中安装或修复 Windows sandbox：
+安装或修复 Windows sandbox。当前 shell 未 elevated 时，使用 `--elevate` 主动请求 UAC：
 
 ```powershell
-.\runseal.exe setup windows-sandbox --cwd C:\path\to\workspace
+.\runseal.exe setup windows-sandbox --cwd C:\path\to\workspace --elevate
 ```
 
 查看 host capabilities：
@@ -114,10 +114,10 @@ runseal version
 
 推送 `v*` tag 会触发 `.github/workflows/release.yml`，构建原生 release archives 并发布 `.sha256` 校验文件。手动触发 workflow 并传入已有 tag 可以重新打包。
 
-首次 bootstrap 需要 elevated PowerShell：
+首次 bootstrap 可以用 `--elevate` 请求 UAC：
 
 ```powershell
-.\target\debug\runseal.exe setup windows-sandbox --cwd C:\path\to\workspace
+.\target\debug\runseal.exe setup windows-sandbox --cwd C:\path\to\workspace --elevate
 ```
 
 安装 scheduled setup broker 后，同一命令可以在不再次打开 UAC 的情况下修复 workspace setup state。

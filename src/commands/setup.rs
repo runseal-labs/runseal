@@ -3,12 +3,15 @@ use super::*;
 use crate::execution::validate_execution_cwd;
 #[cfg(windows)]
 use crate::policy::NetworkMode;
+#[cfg(windows)]
+use std::os::windows::ffi::OsStrExt;
 
 const SETUP_HELP_TEXT: &str = "\
-Usage: runseal setup windows-sandbox [--cwd <path>] [--status] [--json]
+Usage: runseal setup windows-sandbox [--cwd <path>] [--status] [--json] [--elevate]
 
 Windows sandbox setup:
-  First install requires an elevated PowerShell; later repairs reuse the sandbox broker when available.
+  Use --elevate to request UAC when first install cannot run in the current shell.
+  Later repairs reuse the sandbox broker when available.
   Sandboxed exec fails closed when setup is missing or stale.
   --status reports setup readiness without changing setup state.
   --json reports setup failures as structured JSON.
@@ -40,20 +43,21 @@ pub(crate) fn run(args: &[String]) -> Result<(), String> {
             if request.status {
                 return run_windows_sandbox_setup_status(&request.cwd, request.json);
             }
-            run_windows_sandbox_setup(&request.cwd, request.json)
+            run_windows_sandbox_setup(&request.cwd, request.json, request.elevate)
         }
         _ if args.iter().any(|arg| arg == "--json") => {
             println!(
                 "{}",
                 cli_error_payload(RunSealError::new(
                     "INVALID_REQUEST",
-                    "usage: runseal setup windows-sandbox [--cwd <path>] [--status] [--json]",
+                    "usage: runseal setup windows-sandbox [--cwd <path>] [--status] [--json] [--elevate]",
                 ))
             );
             Err(String::new())
         }
         _ => Err(
-            "usage: runseal setup windows-sandbox [--cwd <path>] [--status] [--json]".to_string(),
+            "usage: runseal setup windows-sandbox [--cwd <path>] [--status] [--json] [--elevate]"
+                .to_string(),
         ),
     }
 }
@@ -62,12 +66,14 @@ struct WindowsSetupArgs {
     cwd: PathBuf,
     status: bool,
     json: bool,
+    elevate: bool,
 }
 
 fn parse_windows_setup_args(args: &[String]) -> Result<WindowsSetupArgs, String> {
     let mut cwd = current_dir();
     let mut status = false;
     let mut json = false;
+    let mut elevate = false;
     let mut index = 0;
 
     while index < args.len() {
@@ -75,16 +81,17 @@ fn parse_windows_setup_args(args: &[String]) -> Result<WindowsSetupArgs, String>
             "--cwd" => {
                 index += 1;
                 let value = args.get(index).ok_or_else(|| {
-                    "usage: runseal setup windows-sandbox [--cwd <path>] [--status] [--json]"
+                    "usage: runseal setup windows-sandbox [--cwd <path>] [--status] [--json] [--elevate]"
                         .to_string()
                 })?;
                 cwd = PathBuf::from(value);
             }
             "--status" => status = true,
             "--json" => json = true,
+            "--elevate" => elevate = true,
             _ => {
                 return Err(
-                    "usage: runseal setup windows-sandbox [--cwd <path>] [--status] [--json]"
+                    "usage: runseal setup windows-sandbox [--cwd <path>] [--status] [--json] [--elevate]"
                         .to_string(),
                 );
             }
@@ -92,11 +99,25 @@ fn parse_windows_setup_args(args: &[String]) -> Result<WindowsSetupArgs, String>
         index += 1;
     }
 
-    Ok(WindowsSetupArgs { cwd, status, json })
+    Ok(WindowsSetupArgs {
+        cwd,
+        status,
+        json,
+        elevate,
+    })
 }
 
 #[cfg(windows)]
-fn run_windows_sandbox_setup(cwd: &Path, json_output: bool) -> Result<(), String> {
+fn run_windows_sandbox_setup(cwd: &Path, json_output: bool, elevate: bool) -> Result<(), String> {
+    run_windows_sandbox_setup_inner(cwd, json_output, elevate)
+}
+
+#[cfg(windows)]
+fn run_windows_sandbox_setup_inner(
+    cwd: &Path,
+    json_output: bool,
+    elevate: bool,
+) -> Result<(), String> {
     let cwd = match normalize_execution_cwd(cwd) {
         Ok(cwd) => cwd,
         Err(err) => {
@@ -127,6 +148,9 @@ fn run_windows_sandbox_setup(cwd: &Path, json_output: bool) -> Result<(), String
         return Ok(());
     }
     if !windows_sandbox_setup_can_run_now(&setup_status) {
+        if elevate {
+            return request_elevated_windows_sandbox_setup(cwd, json_output, setup_status);
+        }
         if json_output {
             println!(
                 "{}",
@@ -149,6 +173,132 @@ fn run_windows_sandbox_setup(cwd: &Path, json_output: bool) -> Result<(), String
     }
     println!("{}", windows_sandbox_setup_success_payload(cwd));
     Ok(())
+}
+
+#[cfg(windows)]
+fn request_elevated_windows_sandbox_setup(
+    cwd: &Path,
+    json_output: bool,
+    setup_status: Value,
+) -> Result<(), String> {
+    request_elevated_windows_sandbox_setup_launch(cwd, json_output)?;
+    if json_output {
+        println!(
+            "{}",
+            json!({
+                "status": "elevation_requested",
+                "setup": "windows-sandbox",
+                "setup_status": setup_status,
+            })
+        );
+    } else {
+        println!("windows sandbox setup elevation requested");
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn request_elevated_windows_sandbox_setup_launch(
+    cwd: &Path,
+    json_output: bool,
+) -> Result<(), String> {
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    let exe = std::env::current_exe().map_err(|err| format!("locate current executable: {err}"))?;
+    let mut args = vec![
+        "setup".to_string(),
+        "windows-sandbox".to_string(),
+        "--cwd".to_string(),
+        cwd.as_os_str().to_string_lossy().into_owned(),
+    ];
+    if json_output {
+        args.push("--json".to_string());
+    }
+    let params = args
+        .iter()
+        .map(|arg| quote_windows_arg(arg))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let verb = wide_null("runas");
+    let exe = wide_os_null(exe.as_os_str());
+    let params = wide_null(&params);
+
+    let result = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            verb.as_ptr(),
+            exe.as_ptr(),
+            params.as_ptr(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    } as isize;
+    if result <= 32 {
+        return Err(format!(
+            "request UAC elevation failed with ShellExecuteW code {result}"
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn quote_windows_arg(arg: &str) -> String {
+    if arg.is_empty()
+        || arg
+            .bytes()
+            .any(|byte| byte == b' ' || byte == b'\t' || byte == b'"')
+    {
+        let mut quoted = String::from("\"");
+        let mut backslashes = 0;
+        for ch in arg.chars() {
+            match ch {
+                '\\' => backslashes += 1,
+                '"' => {
+                    quoted.push_str(&"\\".repeat(backslashes * 2 + 1));
+                    quoted.push('"');
+                    backslashes = 0;
+                }
+                _ => {
+                    quoted.push_str(&"\\".repeat(backslashes));
+                    backslashes = 0;
+                    quoted.push(ch);
+                }
+            }
+        }
+        quoted.push_str(&"\\".repeat(backslashes * 2));
+        quoted.push('"');
+        quoted
+    } else {
+        arg.to_string()
+    }
+}
+
+#[cfg(windows)]
+fn wide_null(value: &str) -> Vec<u16> {
+    value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(windows)]
+fn wide_os_null(value: &std::ffi::OsStr) -> Vec<u16> {
+    value.encode_wide().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::quote_windows_arg;
+
+    #[test]
+    fn windows_elevation_args_are_quoted_for_shell_execute() {
+        assert_eq!(quote_windows_arg("setup"), "setup");
+        assert_eq!(
+            quote_windows_arg("C:\\Program Files\\RunSeal"),
+            "\"C:\\Program Files\\RunSeal\""
+        );
+        assert_eq!(quote_windows_arg("quoted\"arg"), "\"quoted\\\"arg\"");
+        assert_eq!(quote_windows_arg("trailing\\"), "trailing\\");
+        assert_eq!(quote_windows_arg("needs space\\"), "\"needs space\\\\\"");
+    }
 }
 
 #[cfg(windows)]
@@ -316,8 +466,9 @@ pub(crate) fn windows_sandbox_setup_status_payload(
         "open_elevated_shell"
     };
     let next_command = match next_action {
-        "run_setup" | "open_elevated_shell" => {
-            Some("runseal setup windows-sandbox --cwd <absolute-workspace-path> --json")
+        "run_setup" => Some("runseal setup windows-sandbox --cwd <absolute-workspace-path> --json"),
+        "open_elevated_shell" => {
+            Some("runseal setup windows-sandbox --cwd <absolute-workspace-path> --json --elevate")
         }
         _ => None,
     };
@@ -350,7 +501,7 @@ pub(crate) fn windows_sandbox_setup_success_payload(cwd: &Path) -> Value {
 }
 
 #[cfg(not(windows))]
-fn run_windows_sandbox_setup(cwd: &Path, json_output: bool) -> Result<(), String> {
+fn run_windows_sandbox_setup(cwd: &Path, json_output: bool, _elevate: bool) -> Result<(), String> {
     let cwd = match normalize_execution_cwd(cwd) {
         Ok(cwd) => cwd,
         Err(err) => {

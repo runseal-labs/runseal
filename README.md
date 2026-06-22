@@ -48,10 +48,11 @@ Download the Windows release archive and place the three executables in the same
 - `runseal-windows-sandbox-setup.exe`
 - `runseal-command-runner.exe`
 
-Install or repair the Windows sandbox from an elevated PowerShell session:
+Install or repair the Windows sandbox. Use `--elevate` to request UAC when the
+current shell is not already elevated:
 
 ```powershell
-.\runseal.exe setup windows-sandbox --cwd C:\path\to\workspace
+.\runseal.exe setup windows-sandbox --cwd C:\path\to\workspace --elevate
 ```
 
 Check host capabilities:
@@ -114,10 +115,11 @@ The script places `runseal.exe`, `runseal-windows-sandbox-setup.exe`, and `runse
 
 Pushing a `v*` tag triggers `.github/workflows/release.yml`, builds native release archives, and publishes them with SHA-256 checksum files. To repackage an existing release, dispatch the workflow manually with the tag input.
 
-Run the first sandbox bootstrap from an elevated PowerShell session:
+Run the first sandbox bootstrap. `--elevate` requests UAC when the current shell
+cannot run setup directly:
 
 ```powershell
-.\target\debug\runseal.exe setup windows-sandbox --cwd C:\path\to\workspace
+.\target\debug\runseal.exe setup windows-sandbox --cwd C:\path\to\workspace --elevate
 ```
 
 Once the scheduled setup broker exists, the same command can repair workspace setup state without opening UAC again.
