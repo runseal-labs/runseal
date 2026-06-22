@@ -113,7 +113,19 @@ For release artifacts:
 
 The script places `runseal.exe`, `runseal-windows-sandbox-setup.exe`, and `runseal-command-runner.exe` in the selected `target\debug` or `target\release` directory.
 
-Pushing a `v*` tag triggers `.github/workflows/release.yml`, builds native release archives, and publishes them with SHA-256 checksum files. To repackage an existing release, dispatch the workflow manually with the tag input.
+Pushing a `v*` tag triggers `.github/workflows/release.yml`, builds native release archives, and publishes SHA-256 checksum files, `SHA256SUMS`, and a CycloneDX SBOM. To repackage an existing release, dispatch the workflow manually with the tag input.
+
+Verify a downloaded archive with its checksum file:
+
+```bash
+sha256sum -c runseal-v0.1.2-linux-x86_64.tar.gz.sha256
+```
+
+Verify GitHub Artifact Attestations for build provenance and the SBOM without custom signing infrastructure:
+
+```bash
+gh attestation verify runseal-v0.1.2-linux-x86_64.tar.gz --repo runseal-labs/runseal
+```
 
 Run the first sandbox bootstrap. `--elevate` requests UAC when the current shell
 cannot run setup directly:

@@ -15,6 +15,7 @@ permissions:
 
 env:
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  CARGO_CYCLONEDX_VERSION: "0.5.9"
   RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
 jobs:
@@ -107,14 +108,54 @@ jobs:
     needs: package
     runs-on: ubuntu-24.04
     permissions:
+      attestations: write
       contents: write
+      id-token: write
     timeout-minutes: 10
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+
       - name: Download release artifacts
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
           path: dist
           merge-multiple: true
+
+      - name: Generate release SBOM
+        run: |
+          set -euo pipefail
+          cargo install cargo-cyclonedx --locked --version "$CARGO_CYCLONEDX_VERSION"
+          cargo cyclonedx --format json --target all --override-filename "runseal-${RELEASE_TAG}-sbom.cdx"
+          mv "runseal-${RELEASE_TAG}-sbom.cdx.json" dist/
+
+      - name: Generate aggregate checksums
+        run: |
+          set -euo pipefail
+          find dist -maxdepth 1 -type f \
+            ! -name '*.sha256' \
+            ! -name '*-sbom.cdx.json' \
+            ! -name 'SHA256SUMS' \
+            -printf '%f\0' |
+            sort -z |
+            xargs -0 -I{} sha256sum "dist/{}" > dist/SHA256SUMS
+
+      - name: Attest release artifact provenance
+        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
+        with:
+          subject-checksums: dist/SHA256SUMS
+
+      - name: Attest release SBOM
+        uses: actions/attest-sbom@51e74621a501c89df81fc1391c5a8f4cfc9fab2f # v3
+        with:
+          subject-checksums: dist/SHA256SUMS
+          sbom-path: dist/runseal-${{ env.RELEASE_TAG }}-sbom.cdx.json
 
       - name: Create GitHub release
         env:

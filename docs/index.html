@@ -193,7 +193,9 @@ cargo test</code></pre>
           <section id="release">
             <p class="section-label">Distribution</p>
             <h2>Release packaging</h2>
-            <p>Pushing a <code>v*</code> tag runs <code>.github/workflows/release.yml</code>, builds native release archives, and publishes SHA-256 checksum files. Dispatch the same workflow with a tag input to rebuild assets for an existing release.</p>
+            <p>Pushing a <code>v*</code> tag runs <code>.github/workflows/release.yml</code>, builds native release archives, and publishes SHA-256 checksum files, <code>SHA256SUMS</code>, and a CycloneDX SBOM. Dispatch the same workflow with a tag input to rebuild assets for an existing release.</p>
+            <pre><code>sha256sum -c runseal-v0.1.2-linux-x86_64.tar.gz.sha256
+gh attestation verify runseal-v0.1.2-linux-x86_64.tar.gz --repo runseal-labs/runseal</code></pre>
             <p><a href="https://github.com/runseal-labs/runseal/releases/latest">Open the latest release</a></p>
           </section>
 
