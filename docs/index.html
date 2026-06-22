@@ -25,7 +25,7 @@
     <main id="top">
       <section class="hero">
         <div class="hero-copy">
-          <p class="eyebrow">Technical preview 0.1.2</p>
+          <p class="eyebrow">Technical preview 0.1.3</p>
           <h1>RunSeal Docs</h1>
           <p class="lede">OS-native sandboxing for local AI agent execution, with Windows as the complete first-class backend and partial experimental macOS/Linux enforcement still catching up.</p>
           <div class="actions">
@@ -194,8 +194,8 @@ cargo test</code></pre>
             <p class="section-label">Distribution</p>
             <h2>Release packaging</h2>
             <p>Pushing a <code>v*</code> tag runs <code>.github/workflows/release.yml</code>, builds native release archives, and publishes SHA-256 checksum files, <code>SHA256SUMS</code>, and a CycloneDX SBOM. Dispatch the same workflow with a tag input to rebuild assets for an existing release.</p>
-            <pre><code>sha256sum -c runseal-v0.1.2-linux-x86_64.tar.gz.sha256
-gh attestation verify runseal-v0.1.2-linux-x86_64.tar.gz --repo runseal-labs/runseal</code></pre>
+            <pre><code>sha256sum -c runseal-v0.1.3-linux-x86_64.tar.gz.sha256
+gh attestation verify runseal-v0.1.3-linux-x86_64.tar.gz --repo runseal-labs/runseal</code></pre>
             <p><a href="https://github.com/runseal-labs/runseal/releases/latest">Open the latest release</a></p>
           </section>
 
