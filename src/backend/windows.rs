@@ -244,6 +244,18 @@ pub(super) fn execute_windows_sandbox_plan(
     env: &ExecutionEnv,
     timeout: Option<Duration>,
 ) -> io::Result<BackendExecutionOutput> {
+    let setup_status =
+        crate::commands::setup::windows_sandbox_setup_status_for_cwd(cwd).map_err(|err| {
+            io::Error::other(BackendUnavailableError {
+                reason: format!("windows sandbox setup unavailable: {err}"),
+            })
+        })?;
+    if setup_status["requires_setup"].as_bool().unwrap_or(true) {
+        return Err(io::Error::other(BackendUnavailableError {
+            reason: public_windows_setup_unavailable_reason("requires_setup"),
+        }));
+    }
+
     let _execution_guard = windows_sandbox_execution_gate(plan)?;
     let _runtime_root = required_plan_path(plan.runtime_root.as_deref(), "runtime_root")?;
     let stdin_bytes = match stdin {
@@ -258,17 +270,6 @@ pub(super) fn execute_windows_sandbox_plan(
 
     let result = (|| {
         prepare_vendor_sandbox_home(cwd, &vendor_sandbox_home)?;
-        let setup_status = crate::commands::setup::windows_sandbox_setup_status_for_cwd(cwd)
-            .map_err(|err| {
-                io::Error::other(BackendUnavailableError {
-                    reason: format!("windows sandbox setup unavailable: {err}"),
-                })
-            })?;
-        if setup_status["requires_setup"].as_bool().unwrap_or(true) {
-            return Err(io::Error::other(BackendUnavailableError {
-                reason: public_windows_setup_unavailable_reason("requires_setup"),
-            }));
-        }
         let managed_proxy = if plan.network_managed_proxy == "required" {
             Some(ManagedSandboxProxy::start().map_err(|err| {
                 io::Error::other(BackendUnavailableError {

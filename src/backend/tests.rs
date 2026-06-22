@@ -1413,14 +1413,13 @@ fn sandbox_cleanup_preserves_runtime_tree_after_filesystem_rollback_failure() ->
 
 #[cfg(windows)]
 #[test]
-fn sandbox_execution_cleans_runtime_tree_after_vendor_home_prepare_failure() -> io::Result<()> {
+fn sandbox_execution_fails_closed_before_runtime_setup_when_setup_is_missing() -> io::Result<()> {
     let _test_lock = windows_sandbox_gate_test_lock();
     let tmp = TempDir::new()?;
     let cwd = tmp.path().join("workspace");
-    fs::create_dir_all(cwd.join(".runseal"))?;
-    fs::write(cwd.join(".runseal").join("sandbox"), b"not a directory")?;
+    fs::create_dir_all(&cwd)?;
     let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
-    let plan = WindowsReferenceBackend.fail_closed_plan("exec_vendor_home_failure", &cwd, &policy);
+    let plan = WindowsReferenceBackend.fail_closed_plan("exec_setup_missing", &cwd, &policy);
     let runtime_root = PathBuf::from(plan.runtime_root.as_ref().unwrap());
     let command = vec![
         "cmd.exe".to_string(),
@@ -1436,9 +1435,13 @@ fn sandbox_execution_cleans_runtime_tree_after_vendor_home_prepare_failure() -> 
         &ExecutionEnv::default(),
         None,
     )
-    .expect_err("vendor sandbox home preparation must fail");
+    .expect_err("missing Windows setup must fail closed");
 
-    assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+    assert_eq!(err.kind(), io::ErrorKind::Other);
+    assert!(
+        err.to_string()
+            .contains("windows sandbox setup unavailable")
+    );
     assert!(!runtime_root.exists());
     Ok(())
 }

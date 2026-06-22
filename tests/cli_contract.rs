@@ -1197,10 +1197,14 @@ fn sandboxed_exec_cli_uses_backend_or_reports_unavailable() -> Result<()> {
             assert_no_private_windows_setup_terms(&audit_jsonl);
         }
         let runtime_dir = tmp.path().join(".runseal").join("runtime");
-        let runtime_entries = fs::read_dir(&runtime_dir)
-            .with_context(|| format!("runtime dir must exist at {}", runtime_dir.display()))?
-            .collect::<Result<Vec<_>, _>>()?;
-        assert_eq!(runtime_entries.len(), 0);
+        if runtime_dir.exists() {
+            let runtime_entries = fs::read_dir(&runtime_dir)
+                .with_context(|| {
+                    format!("runtime dir must be readable at {}", runtime_dir.display())
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            assert_eq!(runtime_entries.len(), 0);
+        }
         return Ok(());
     }
 

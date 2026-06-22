@@ -198,6 +198,8 @@ Windows 上，重建 helper binaries 后运行 dogfood smoke：
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows-smoke.ps1
 ```
 
+从 elevated shell 运行；如果要验证文档化的交互式 UAC bootstrap 路径，添加 `-AllowElevation`。
+
 Linux 或 macOS 上，构建 `runseal` 后运行 portable probe smoke：
 
 ```bash

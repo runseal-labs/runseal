@@ -201,6 +201,8 @@ On Windows, run the local dogfood smoke after rebuilding helper binaries:
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows-smoke.ps1
 ```
 
+Run it from an elevated shell, or add `-AllowElevation` when validating the documented interactive UAC bootstrap path.
+
 On Linux or macOS, run the portable probe smoke after building `runseal`:
 
 ```bash

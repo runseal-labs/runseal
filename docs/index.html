@@ -185,6 +185,7 @@ cargo clippy --tests -- -D warnings
 cargo test</code></pre>
             <p>Windows dogfood smoke:</p>
             <pre><code>powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows-smoke.ps1</code></pre>
+            <p>Run from an elevated shell, or add <code>-AllowElevation</code> to validate the documented interactive UAC bootstrap path.</p>
             <p>Linux or macOS portable smoke:</p>
             <pre><code>python3 scripts/portable-probe-smoke.py</code></pre>
           </section>

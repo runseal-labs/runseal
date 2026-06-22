@@ -147,6 +147,9 @@ fn run_windows_sandbox_setup_inner(
         println!("{}", windows_sandbox_setup_success_payload(cwd));
         return Ok(());
     }
+    if elevate && setup_status["elevated"].as_bool() == Some(false) {
+        return request_elevated_windows_sandbox_setup(cwd, json_output, setup_status);
+    }
     if !windows_sandbox_setup_can_run_now(&setup_status) {
         if elevate {
             return request_elevated_windows_sandbox_setup(cwd, json_output, setup_status);
@@ -203,7 +206,7 @@ fn request_elevated_windows_sandbox_setup_launch(
     json_output: bool,
 ) -> Result<(), String> {
     use windows_sys::Win32::UI::Shell::ShellExecuteW;
-    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE;
 
     let exe = std::env::current_exe().map_err(|err| format!("locate current executable: {err}"))?;
     let mut args = vec![
@@ -231,7 +234,7 @@ fn request_elevated_windows_sandbox_setup_launch(
             exe.as_ptr(),
             params.as_ptr(),
             std::ptr::null(),
-            SW_SHOWNORMAL,
+            SW_HIDE,
         )
     } as isize;
     if result <= 32 {
