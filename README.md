@@ -113,9 +113,9 @@ The script places `runseal.exe`, `runseal-windows-sandbox-setup.exe`, and
 `runseal-command-runner.exe` in the selected `target\debug` or
 `target\release` directory.
 
-Pushing a `v*` tag runs the release workflow and publishes Windows x86_64,
-Windows arm64, Linux x86_64, Linux aarch64, macOS arm64, and macOS x86_64
-archives with SHA-256 checksum files.
+Pushing a `v*` tag runs `.github/workflows/release.yml`, builds native release
+archives, and publishes them with SHA-256 checksum files. To rerun packaging
+for an existing release, dispatch the workflow manually with the tag input.
 
 Run the first sandbox bootstrap explicitly from an elevated PowerShell session:
 
