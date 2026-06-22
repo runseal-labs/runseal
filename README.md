@@ -10,7 +10,7 @@ RunSeal is **not** a cloud VM sandbox, a Docker Desktop replacement, or a microV
 
 ## Status
 
-`0.1.0` is the first technical-preview line for third-party integration. The repository contains a buildable CLI/RPC shell, standard policy profile normalization, canonical policy hashes, backend capability reporting, a Windows reference backend, `PlatformSandboxPlan` summaries, JSONL audit output, and black-box conformance tests.
+`0.1.2` is the current technical-preview release for third-party integration. The repository contains a buildable CLI/RPC shell, standard policy profile normalization, canonical policy hashes, backend capability reporting, a Windows reference backend, `PlatformSandboxPlan` summaries, JSONL audit output, and black-box conformance tests.
 
 Current execution support is intentionally narrow: explicit `danger-full-access` runs as local, non-sandboxed execution. On Windows, sandboxed policies such as `read-only`, `workspace-contained`, and `workspace-write` execute through the reference backend. On macOS and Linux, `read-only` and `workspace-write` with `network.disabled` are experimental. Other portable sandboxed policies still fail closed until a backend can enforce them.
 
