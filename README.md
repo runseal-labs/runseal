@@ -31,6 +31,22 @@ Capability clients should rely on `sandbox_levels`, `network_modes`, and `featur
 | `network.disabled` | supported | experimental | experimental |
 | `network.proxy` | supported | unsupported | unsupported |
 
+### macOS and Linux parity evidence
+
+Windows is the first-class reference backend. macOS and Linux entries below are
+contributor work items: a capability should only move toward `supported` after
+the listed conformance evidence passes on that platform.
+
+| Area | Windows reference | macOS experimental | Linux experimental | Evidence needed for promotion |
+| --- | --- | --- | --- | --- |
+| Filesystem levels | `read-only`, `workspace-write`, and `workspace-contained` supported | `read-only` and `workspace-write` experimental; `workspace-contained` unsupported | `read-only` and `workspace-write` experimental; `workspace-contained` unsupported | Shared filesystem conformance plus adversarial external read/write, parent traversal, symlink or junction traversal, protected metadata, and runtime-root cases. |
+| Network modes | `network.disabled` and `network.proxy` supported | `network.disabled` experimental; `network.proxy` unsupported | `network.disabled` experimental; `network.proxy` unsupported | Direct socket and HTTP egress denial for `network.disabled`; managed proxy routing, environment override resistance, direct egress bypass denial, audit/event coverage, and public-safe fail-closed output for `network.proxy`. |
+| Setup/readiness | Windows setup readiness supported | No platform setup; reports unsupported Windows setup without blocking portable experimental paths | No platform setup; reports unsupported Windows setup without blocking portable experimental paths | Platform-specific setup contract, structured `getSetupStatus`, setup failure audit/events, and fail-closed behavior when setup is unavailable. |
+| Runtime roots and synthetic home | Supported | Experimental | Experimental | Runtime root creation, environment redirect, cleanup, marker spoofing, symlink replacement, partial setup failure, and cross-execution contamination conformance. |
+| Process cleanup | Supported | Experimental | Experimental | Timeout, cancellation, child process, shell trampoline, nested process tree, and helper reuse conformance without terminating unrelated processes. |
+| Audit/events | Supported | Supported for current experimental paths | Supported for current experimental paths | Matching execution, denial, setup failure, and network decision events with JSONL audit records that do not expose backend-private details. |
+| Adversarial conformance | Required for reference readiness | Required before promoting experimental claims | Required before promoting experimental claims | RFC-0016 manifest cases must pass with public-safe results for the capability being promoted; unsupported gaps must stay explicit and fail closed. |
+
 The protocol and policy version strings are `runseal.protocol/v1` and `runseal.policy/v1`. The Rust package version remains pre-`1.0`; breaking changes to provisional CLI flags, JSON fields, and audit shapes may still land when the RFCs change.
 
 The design lives in the RFC repository:
