@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="RunSeal is an OS-native sandbox layer for AI agents.">
+    <title>RunSeal</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main>
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">Technical preview 0.1.2</p>
+          <h1>RunSeal</h1>
+          <p class="lede">OS-native sandboxing for local AI agent execution.</p>
+          <div class="actions">
+            <a href="https://github.com/runseal-labs/runseal/releases/latest">Download</a>
+            <a href="https://github.com/runseal-labs/runseal">GitHub</a>
+            <a href="https://github.com/runseal-labs/rfcs">RFCs</a>
+          </div>
+        </div>
+      </section>
+
+      <section class="grid" aria-label="RunSeal capabilities">
+        <article>
+          <h2>Local-first boundary</h2>
+          <p>Run commands under policy-governed filesystem, process, resource, and network boundaries without a Docker daemon or cloud VM control plane.</p>
+        </article>
+        <article>
+          <h2>Windows reference backend</h2>
+          <p>Windows is the reference path for sandboxed policies, setup readiness, runtime roots, process cleanup, direct network deny, and managed proxy enforcement.</p>
+        </article>
+        <article>
+          <h2>Stable integration surface</h2>
+          <p>Use the CLI, JSON-RPC stdio, service stdio, structured errors, audit events, and black-box conformance tests for integration.</p>
+        </article>
+      </section>
+
+      <section class="status">
+        <h2>Status</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Capability</th>
+              <th>Windows</th>
+              <th>macOS</th>
+              <th>Linux</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td><code>danger-full-access</code></td><td>supported</td><td>supported</td><td>supported</td></tr>
+            <tr><td><code>read-only</code></td><td>supported</td><td>experimental</td><td>experimental</td></tr>
+            <tr><td><code>workspace-write</code></td><td>supported</td><td>experimental</td><td>experimental</td></tr>
+            <tr><td><code>workspace-contained</code></td><td>supported</td><td>unsupported</td><td>unsupported</td></tr>
+            <tr><td><code>network.disabled</code></td><td>supported</td><td>experimental</td><td>experimental</td></tr>
+            <tr><td><code>network.proxy</code></td><td>supported</td><td>unsupported</td><td>unsupported</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="code">
+        <h2>Start with the CLI</h2>
+        <pre><code>runseal exec --json --policy workspace-write --network disabled --cwd C:\path\to\workspace -- whoami.exe</code></pre>
+      </section>
+    </main>
+  </body>
+</html>
