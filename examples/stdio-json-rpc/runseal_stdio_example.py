@@ -158,12 +158,9 @@ def gate_execution(
     allow_experimental: bool,
 ) -> None:
     sandbox_levels = capabilities.get("sandbox_levels", {})
-    network_modes = capabilities.get("network_modes", {})
 
     if not isinstance(sandbox_levels, dict):
         raise RunSealError("getCapabilities result is missing sandbox_levels")
-    if not isinstance(network_modes, dict):
-        raise RunSealError("getCapabilities result is missing network_modes")
 
     require_status(
         sandbox_levels.get(policy),
@@ -172,16 +169,20 @@ def gate_execution(
         allow_experimental=allow_experimental,
     )
 
-    require_status(
-        network_modes.get(network_mode),
-        field="network_modes",
-        requested=network_mode,
-        allow_experimental=allow_experimental,
-    )
-
     # Setup readiness is relevant for sandboxed execution. Do not require setup
-    # for explicit local unsandboxed execution.
+    # or network capability for explicit local unsandboxed execution.
     if policy != "danger-full-access":
+        network_modes = capabilities.get("network_modes", {})
+        if not isinstance(network_modes, dict):
+            raise RunSealError("getCapabilities result is missing network_modes")
+
+        require_status(
+            network_modes.get(network_mode),
+            field="network_modes",
+            requested=network_mode,
+            allow_experimental=allow_experimental,
+        )
+
         if setup_status.get("requires_setup"):
             next_action = setup_status.get("next_action")
             next_command = setup_status.get("next_command")
