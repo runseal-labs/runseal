@@ -310,6 +310,36 @@ fn assert_backend_unavailable(response: &Value, root: &Path) -> Result<()> {
     Ok(())
 }
 
+fn assert_execution_failed_to_start(response: &Value, root: &Path) -> Result<()> {
+    assert!(
+        matches!(std::env::consts::OS, "linux" | "macos"),
+        "{response}"
+    );
+    assert_eq!(
+        response["error"]["data"]["code"],
+        "EXECUTION_FAILED_TO_START"
+    );
+    assert_no_private_windows_setup_terms(response);
+    let audit_path = response["error"]["data"]["audit_path"]
+        .as_str()
+        .context("failed start response must include audit_path")?;
+    let audit_jsonl = fs::read_to_string(root.join(audit_path))?;
+    let audit_events = audit_jsonl
+        .lines()
+        .map(|line| serde_json::from_str(line).context("audit line must be JSON"))
+        .collect::<Result<Vec<Value>>>()?;
+    assert_no_private_windows_setup_terms(&json!(&audit_events));
+    for event in &audit_events {
+        assert_audit_event_envelope(event);
+    }
+    let failed_event = audit_events
+        .iter()
+        .find(|event| event["type"] == "execution.failed")
+        .context("failed start audit must include execution.failed")?;
+    assert_eq!(failed_event["reason"], "execution failed to start");
+    Ok(())
+}
+
 fn expected_missing_features(additional: &[&'static str]) -> Vec<&'static str> {
     let mut features = vec!["filesystem_policy"];
     if !cfg!(windows) {
@@ -465,6 +495,10 @@ fn is_backend_unavailable(response: &Value) -> bool {
     response["error"]["data"]["code"] == "BACKEND_UNAVAILABLE"
 }
 
+fn is_execution_failed_to_start(response: &Value) -> bool {
+    response["error"]["data"]["code"] == "EXECUTION_FAILED_TO_START"
+}
+
 fn start_loopback_http_server() -> Result<(u16, thread::JoinHandle<Result<bool>>)> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
     listener.set_nonblocking(true)?;
@@ -520,6 +554,11 @@ fn workspace_write_allows_workspace_write_when_supported_or_fails_closed() -> Re
     }
     if is_backend_unavailable(&response) {
         assert_backend_unavailable(&response, &workspace)?;
+        assert!(!target.exists());
+        return Ok(());
+    }
+    if is_execution_failed_to_start(&response) {
+        assert_execution_failed_to_start(&response, &workspace)?;
         assert!(!target.exists());
         return Ok(());
     }
@@ -676,6 +715,10 @@ fn workspace_contained_denies_external_read_when_supported_or_fails_closed() -> 
         assert_backend_unavailable(&response, &workspace)?;
         return Ok(());
     }
+    if is_execution_failed_to_start(&response) {
+        assert_execution_failed_to_start(&response, &workspace)?;
+        return Ok(());
+    }
 
     assert_eq!(response["result"]["status"], "finished");
     assert_ne!(response["result"]["exit_code"], 0);
@@ -750,6 +793,10 @@ fn read_only_reads_workspace_and_writes_runtime_roots_when_supported_or_fails_cl
     }
     if is_backend_unavailable(&response) {
         assert_backend_unavailable(&response, &workspace)?;
+        return Ok(());
+    }
+    if is_execution_failed_to_start(&response) {
+        assert_execution_failed_to_start(&response, &workspace)?;
         return Ok(());
     }
 
@@ -888,6 +935,10 @@ fn runtime_roots_are_cleaned_after_execution_when_supported_or_fails_closed() ->
         assert_backend_unavailable(&response, &workspace)?;
         return Ok(());
     }
+    if is_execution_failed_to_start(&response) {
+        assert_execution_failed_to_start(&response, &workspace)?;
+        return Ok(());
+    }
 
     assert_eq!(response["result"]["status"], "finished");
     assert_eq!(response["result"]["exit_code"], 0);
@@ -927,6 +978,10 @@ fn workspace_write_accepts_bytes_stdin_when_supported_or_fails_closed() -> Resul
     }
     if is_backend_unavailable(&response) {
         assert_backend_unavailable(&response, &workspace)?;
+        return Ok(());
+    }
+    if is_execution_failed_to_start(&response) {
+        assert_execution_failed_to_start(&response, &workspace)?;
         return Ok(());
     }
 

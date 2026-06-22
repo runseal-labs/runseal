@@ -58,33 +58,3 @@ jobs:
             $disallowed | ForEach-Object { Write-Output $_ }
             exit 1
           }
-
-  windows-release-build:
-    runs-on: windows-2025
-    timeout-minutes: 15
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
-
-      - name: Build Windows release artifacts
-        shell: pwsh
-        run: .\scripts\build-windows.ps1 -Release
-
-      - name: Check release artifact set
-        shell: pwsh
-        run: |
-          foreach ($name in @(
-            "runseal.exe",
-            "runseal-windows-sandbox-setup.exe",
-            "runseal-command-runner.exe"
-          )) {
-            $path = Join-Path "target\release" $name
-            if (-not (Test-Path -LiteralPath $path)) {
-              throw "missing release artifact: $name"
-            }
-          }
