@@ -3,68 +3,212 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="description" content="RunSeal is an OS-native sandbox layer for AI agents.">
-    <title>RunSeal</title>
+    <meta name="description" content="RunSeal documentation for OS-native AI agent sandboxing.">
+    <title>RunSeal Docs</title>
     <link rel="icon" href="favicon.ico" sizes="any">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
-    <main>
+    <header class="topbar">
+      <a class="brand" href="#top" aria-label="RunSeal home">RunSeal</a>
+      <nav aria-label="Primary">
+        <a href="#quickstart">Quickstart</a>
+        <a href="#status">Status</a>
+        <a href="#cli">CLI</a>
+        <a href="#rpc">RPC</a>
+        <a href="#testing">Testing</a>
+      </nav>
+      <a class="repo" href="https://github.com/runseal-labs/runseal">GitHub</a>
+    </header>
+
+    <main id="top">
       <section class="hero">
         <div class="hero-copy">
           <p class="eyebrow">Technical preview 0.1.2</p>
-          <h1>RunSeal</h1>
-          <p class="lede">OS-native sandboxing for local AI agent execution.</p>
+          <h1>RunSeal Docs</h1>
+          <p class="lede">OS-native sandboxing for local AI agent execution, with a Windows reference backend and portable experimental paths for macOS and Linux.</p>
           <div class="actions">
-            <a href="https://github.com/runseal-labs/runseal/releases/latest">Download</a>
-            <a href="https://github.com/runseal-labs/runseal">GitHub</a>
-            <a href="https://github.com/runseal-labs/rfcs">RFCs</a>
+            <a href="https://github.com/runseal-labs/runseal/releases/latest">Download release</a>
+            <a href="#quickstart">Start setup</a>
+            <a href="https://github.com/runseal-labs/rfcs">Read RFCs</a>
           </div>
         </div>
       </section>
 
-      <section class="grid" aria-label="RunSeal capabilities">
+      <section class="overview" aria-label="RunSeal overview">
         <article>
-          <h2>Local-first boundary</h2>
-          <p>Run commands under policy-governed filesystem, process, resource, and network boundaries without a Docker daemon or cloud VM control plane.</p>
+          <h2>Local execution boundary</h2>
+          <p>Run local commands inside policy-governed filesystem, process, resource, and network boundaries without a Docker daemon or cloud VM control plane.</p>
         </article>
         <article>
-          <h2>Windows reference backend</h2>
-          <p>Windows is the reference path for sandboxed policies, setup readiness, runtime roots, process cleanup, direct network deny, and managed proxy enforcement.</p>
+          <h2>Reference backend</h2>
+          <p>Windows is the reference path for sandboxed policies, setup readiness, runtime roots, process cleanup, filesystem enforcement, and network guards.</p>
         </article>
         <article>
-          <h2>Stable integration surface</h2>
-          <p>Use the CLI, JSON-RPC stdio, service stdio, structured errors, audit events, and black-box conformance tests for integration.</p>
+          <h2>Integration surfaces</h2>
+          <p>Integrate through the CLI, JSON-RPC stdio, service stdio, structured errors, audit events, and black-box conformance tests.</p>
         </article>
       </section>
 
-      <section class="status">
-        <h2>Status</h2>
-        <table>
-          <thead>
-            <tr>
-              <th>Capability</th>
-              <th>Windows</th>
-              <th>macOS</th>
-              <th>Linux</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr><td><code>danger-full-access</code></td><td>supported</td><td>supported</td><td>supported</td></tr>
-            <tr><td><code>read-only</code></td><td>supported</td><td>experimental</td><td>experimental</td></tr>
-            <tr><td><code>workspace-write</code></td><td>supported</td><td>experimental</td><td>experimental</td></tr>
-            <tr><td><code>workspace-contained</code></td><td>supported</td><td>unsupported</td><td>unsupported</td></tr>
-            <tr><td><code>network.disabled</code></td><td>supported</td><td>experimental</td><td>experimental</td></tr>
-            <tr><td><code>network.proxy</code></td><td>supported</td><td>unsupported</td><td>unsupported</td></tr>
-          </tbody>
-        </table>
-      </section>
+      <div class="docs-shell">
+        <aside class="toc" aria-label="Documentation sections">
+          <a href="#quickstart">Quickstart</a>
+          <a href="#status">Capability status</a>
+          <a href="#cli">CLI reference</a>
+          <a href="#rpc">JSON-RPC</a>
+          <a href="#windows-setup">Windows setup</a>
+          <a href="#integration">Integration</a>
+          <a href="#testing">Testing</a>
+          <a href="#release">Release packaging</a>
+          <a href="#rfcs">RFCs</a>
+        </aside>
 
-      <section class="code">
-        <h2>Start with the CLI</h2>
-        <pre><code>runseal exec --json --policy workspace-write --network disabled --cwd C:\path\to\workspace -- whoami.exe</code></pre>
-      </section>
+        <div class="content">
+          <section id="quickstart">
+            <p class="section-label">Get started</p>
+            <h2>Quickstart</h2>
+            <p>Download the Windows release archive and keep these executables in the same directory:</p>
+            <ul>
+              <li><code>runseal.exe</code></li>
+              <li><code>runseal-windows-sandbox-setup.exe</code></li>
+              <li><code>runseal-command-runner.exe</code></li>
+            </ul>
+            <pre><code>.\runseal.exe setup windows-sandbox --cwd C:\path\to\workspace
+.\runseal.exe capabilities
+.\runseal.exe exec --json --policy workspace-write --network disabled --cwd C:\path\to\workspace -- whoami.exe</code></pre>
+            <p class="note">Run the first setup command from an elevated PowerShell session. Sandboxed execution fails closed when setup is missing or stale.</p>
+          </section>
+
+          <section id="status">
+            <p class="section-label">Current behavior</p>
+            <h2>Capability status</h2>
+            <p>Use <code>sandbox_levels</code>, <code>network_modes</code>, and <code>feature_statuses</code> from <code>getCapabilities</code> for client decisions.</p>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Capability</th>
+                    <th>Windows</th>
+                    <th>macOS</th>
+                    <th>Linux</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr><td><code>danger-full-access</code></td><td>supported</td><td>supported</td><td>supported</td></tr>
+                  <tr><td><code>read-only</code></td><td>supported</td><td>experimental</td><td>experimental</td></tr>
+                  <tr><td><code>workspace-write</code></td><td>supported</td><td>experimental</td><td>experimental</td></tr>
+                  <tr><td><code>workspace-contained</code></td><td>supported</td><td>unsupported</td><td>unsupported</td></tr>
+                  <tr><td><code>network.disabled</code></td><td>supported</td><td>experimental</td><td>experimental</td></tr>
+                  <tr><td><code>network.proxy</code></td><td>supported</td><td>unsupported</td><td>unsupported</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p class="note">Portable macOS and Linux paths enforce write and network boundaries, not workspace containment. Host files may remain readable until <code>workspace-contained</code> is implemented and reported separately.</p>
+          </section>
+
+          <section id="cli">
+            <p class="section-label">Reference</p>
+            <h2>CLI reference</h2>
+            <pre><code>runseal exec --policy workspace-write --network proxy --cwd /workspace -- python skill.py
+runseal exec --policy workspace-write --network disabled --cwd /workspace --timeout-ms 30000 -- whoami
+runseal explain-policy --policy workspace-write --network proxy
+runseal capabilities
+runseal setup windows-sandbox --cwd C:\path\to\workspace
+runseal rpc --stdio
+runseal service --stdio
+runseal version</code></pre>
+            <p><code>exec</code> accepts <code>--json</code>, <code>--events</code>, <code>--policy</code>, <code>--network</code>, <code>--cwd</code>, and <code>--timeout-ms</code>. Flags must appear before <code>--</code>; the command and its arguments follow <code>--</code>.</p>
+          </section>
+
+          <section id="rpc">
+            <p class="section-label">Protocol</p>
+            <h2>JSON-RPC stdio</h2>
+            <pre><code>{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "execute",
+  "params": {
+    "command": ["python", "skill.py"],
+    "cwd": "/workspace",
+    "policy": "workspace-write",
+    "network": {"mode": "proxy"},
+    "timeout_ms": 30000
+  }
+}</code></pre>
+            <div class="method-grid" aria-label="JSON-RPC methods">
+              <span><code>getVersion</code></span>
+              <span><code>getCapabilities</code></span>
+              <span><code>getServiceStatus</code></span>
+              <span><code>explainPolicy</code></span>
+              <span><code>getSetupStatus</code></span>
+              <span><code>execute</code></span>
+              <span><code>getExecution</code></span>
+              <span><code>listExecutions</code></span>
+              <span><code>cancelExecution</code></span>
+              <span><code>subscribeEvents</code></span>
+              <span><code>getAuditEvents</code></span>
+              <span><code>tailAudit</code></span>
+              <span><code>disposeSession</code></span>
+            </div>
+            <p>Supported <code>execute</code> params are <code>command</code>, <code>cwd</code>, <code>policy</code>, <code>network</code>, <code>stdin</code>, <code>timeout_ms</code>, <code>metadata</code>, and <code>env</code>.</p>
+          </section>
+
+          <section id="windows-setup">
+            <p class="section-label">Windows backend</p>
+            <h2>Setup and readiness</h2>
+            <p>Build helper binaries locally when developing the Windows reference backend:</p>
+            <pre><code>.\scripts\build-windows.ps1
+.\scripts\build-windows.ps1 -Release</code></pre>
+            <p>Check setup readiness without changing state:</p>
+            <pre><code>.\target\debug\runseal.exe setup windows-sandbox --cwd C:\path\to\workspace --status</code></pre>
+            <p>The status payload reports <code>broker</code>, <code>elevated</code>, <code>can_repair</code>, <code>can_run_setup_now</code>, <code>requires_setup</code>, and <code>next_action</code>.</p>
+          </section>
+
+          <section id="integration">
+            <p class="section-label">Client guidance</p>
+            <h2>Third-party integration</h2>
+            <ol>
+              <li>Call <code>getVersion</code> and <code>getCapabilities</code> before sandboxed execution.</li>
+              <li>Gate requested sandbox levels and network modes on capability statuses.</li>
+              <li>Fail closed when a capability is unsupported or setup is unavailable.</li>
+              <li>Use <code>runseal service --stdio</code> when one process should own completed execution state.</li>
+              <li>Use conformance tests with <code>RUNSEAL_BIN=/path/to/runseal</code> for candidate implementations.</li>
+            </ol>
+          </section>
+
+          <section id="testing">
+            <p class="section-label">Verification</p>
+            <h2>Testing</h2>
+            <pre><code>cargo fmt --check
+cargo clippy --tests -- -D warnings
+cargo test</code></pre>
+            <p>Windows dogfood smoke:</p>
+            <pre><code>powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows-smoke.ps1</code></pre>
+            <p>Linux or macOS portable smoke:</p>
+            <pre><code>python3 scripts/portable-probe-smoke.py</code></pre>
+          </section>
+
+          <section id="release">
+            <p class="section-label">Distribution</p>
+            <h2>Release packaging</h2>
+            <p>Pushing a <code>v*</code> tag runs <code>.github/workflows/release.yml</code>, builds native release archives, and publishes SHA-256 checksum files. Dispatch the same workflow with a tag input to rebuild assets for an existing release.</p>
+            <p><a href="https://github.com/runseal-labs/runseal/releases/latest">Open the latest release</a></p>
+          </section>
+
+          <section id="rfcs">
+            <p class="section-label">Source of truth</p>
+            <h2>RFCs</h2>
+            <p>The public protocol and policy contract lives in the RFC repository.</p>
+            <ul>
+              <li><a href="https://github.com/runseal-labs/rfcs">RunSeal RFCs</a></li>
+              <li><a href="https://github.com/runseal-labs/rfcs/blob/main/rfcs/0006-stable-execution-protocol.md">Stable execution protocol</a></li>
+              <li><a href="https://github.com/runseal-labs/rfcs/blob/main/rfcs/0015-escape-definition-and-adversarial-conformance.md">Escape model</a></li>
+              <li><a href="https://github.com/runseal-labs/rfcs/blob/main/rfcs/0016-adversarial-conformance-harness-and-case-format.md">Adversarial conformance</a></li>
+            </ul>
+          </section>
+        </div>
+      </div>
     </main>
   </body>
 </html>
