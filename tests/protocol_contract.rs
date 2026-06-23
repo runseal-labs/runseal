@@ -278,7 +278,7 @@ fn expected_status(supported: bool) -> &'static str {
 
 fn expected_network_disabled_status() -> &'static str {
     if cfg!(any(target_os = "linux", target_os = "macos")) {
-        "experimental"
+        "supported"
     } else {
         expected_status(expected_windows_sandbox_supported())
     }
