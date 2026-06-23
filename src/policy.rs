@@ -855,8 +855,11 @@ fn environment_set(
     Ok(entries)
 }
 
-fn default_network_mode(_sandbox_level: SandboxLevel) -> NetworkMode {
-    NetworkMode::Unmanaged
+fn default_network_mode(sandbox_level: SandboxLevel) -> NetworkMode {
+    match sandbox_level {
+        SandboxLevel::WorkspaceContained => NetworkMode::Disabled,
+        _ => NetworkMode::Unmanaged,
+    }
 }
 
 fn default_network(mode: NetworkMode) -> NetworkPolicy {

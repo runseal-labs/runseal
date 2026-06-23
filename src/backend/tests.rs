@@ -765,7 +765,7 @@ fn macos_skeleton_fails_closed_for_unsupported_sandboxed_policy() {
     assert_eq!(plan.temp_root.as_deref(), Some("temp_root"));
     assert_eq!(plan.filesystem_read, vec!["workspace".to_string()]);
     assert_eq!(plan.process_boundary, "platform-sandbox");
-    assert_eq!(plan.network_direct_egress, "unmanaged");
+    assert_eq!(plan.network_direct_egress, "deny");
     let public_plan = plan.json().to_string();
     assert!(!public_plan.contains("/workspace"));
     assert!(!public_plan.contains("sandbox_exec"));
