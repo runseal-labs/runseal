@@ -10,7 +10,7 @@ RunSeal is **not** a cloud VM sandbox, a Docker Desktop replacement, or a microV
 
 ## Status
 
-`0.1.4` is the current technical-preview release for third-party integration. The repository includes a buildable CLI/RPC shell, standard policy profile normalization, canonical policy hashes, backend capability reporting, a first-class Windows reference backend, `PlatformSandboxPlan` summaries, JSONL audit output, and black-box conformance tests.
+RunSeal is a technical-preview release for third-party integration. The repository includes a buildable CLI/RPC shell, standard policy profile normalization, canonical policy hashes, backend capability reporting, a first-class Windows reference backend, `PlatformSandboxPlan` summaries, JSONL audit output, and black-box conformance tests.
 
 Execution support is intentionally narrow today: `danger-full-access` runs as local, non-sandboxed execution. `read-only` and `workspace-write` are supported on Windows, macOS, and Linux. Windows remains the most complete platform because it also supports `network.proxy`, while `workspace-contained` is a strict Windows-only compliance option for deployments that require host-read containment. macOS and Linux intentionally do not pursue `workspace-contained` because endpoint agents need practical host-side tool and desktop integration.
 
@@ -136,13 +136,13 @@ Pushing a `v*` tag triggers `.github/workflows/release.yml`, builds native relea
 Verify a downloaded archive with its checksum file:
 
 ```bash
-sha256sum -c runseal-v0.1.4-linux-x86_64.tar.gz.sha256
+sha256sum -c runseal-vX.Y.Z-linux-x86_64.tar.gz.sha256
 ```
 
 Verify GitHub Artifact Attestations for build provenance and the SBOM without custom signing infrastructure:
 
 ```bash
-gh attestation verify runseal-v0.1.4-linux-x86_64.tar.gz --repo runseal-labs/runseal
+gh attestation verify runseal-vX.Y.Z-linux-x86_64.tar.gz --repo runseal-labs/runseal
 ```
 
 Run the first sandbox bootstrap. `--elevate` requests UAC when the current shell
