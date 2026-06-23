@@ -1127,6 +1127,83 @@ fn network_proxy_blocks_direct_egress_when_supported_or_fails_closed() -> Result
 }
 
 #[test]
+fn network_proxy_blocks_child_process_direct_egress_when_supported_or_fails_closed() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let workspace = tmp.path().join("workspace");
+    fs::create_dir_all(&workspace)?;
+    let code = r#"
+import os, socket, subprocess, sys
+child = """
+import socket
+socket.create_connection(('1.1.1.1', 53), timeout=0.5)
+print('child-direct-network-ok')
+"""
+env = os.environ.copy()
+for key in [
+    'HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy',
+    'NO_PROXY', 'no_proxy', 'RUNSEAL_NETWORK_PROXY_AUTHORIZATION'
+]:
+    env.pop(key, None)
+result = subprocess.run([sys.executable, '-c', child], env=env, text=True, capture_output=True)
+sys.stdout.write(result.stdout)
+sys.stderr.write(result.stderr)
+sys.exit(result.returncode)
+"#
+    .to_string();
+    let ps_code = r#"
+$ErrorActionPreference = 'Stop'
+$child = @'
+$ErrorActionPreference = 'Stop'
+foreach ($key in @(
+    'HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy',
+    'NO_PROXY', 'no_proxy', 'RUNSEAL_NETWORK_PROXY_AUTHORIZATION'
+)) {
+    Remove-Item "Env:$key" -ErrorAction SilentlyContinue
+}
+$client = [Net.Sockets.TcpClient]::new()
+try {
+    $async = $client.BeginConnect('1.1.1.1', 53, $null, $null)
+    if ($async.AsyncWaitHandle.WaitOne(500)) {
+        $client.EndConnect($async)
+        'child-direct-network-ok'
+        exit 0
+    }
+    throw 'child direct network timeout'
+} finally {
+    $client.Dispose()
+}
+'@
+$output = & powershell.exe -NoProfile -Command $child 2>&1
+$exitCode = $LASTEXITCODE
+if ($output) { $output }
+exit $exitCode
+"#
+    .to_string();
+    let response =
+        execute_platform_script("workspace-write", &workspace, Some("proxy"), code, ps_code)?;
+
+    if is_backend_missing(&response) {
+        let expected_features = expected_missing_features(&["network_proxy", "managed_proxy"]);
+        assert_backend_missing_features(&response, &workspace, &expected_features)?;
+        return Ok(());
+    }
+    if is_backend_unavailable(&response) {
+        assert_backend_unavailable(&response, &workspace)?;
+        return Ok(());
+    }
+
+    assert_eq!(response["result"]["status"], "finished");
+    assert_ne!(response["result"]["exit_code"], 0);
+    assert!(
+        !response["result"]["stdout"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("child-direct-network-ok")
+    );
+    Ok(())
+}
+
+#[test]
 fn network_proxy_allows_http_through_managed_proxy_when_supported_or_fails_closed() -> Result<()> {
     let tmp = TempDir::new()?;
     let workspace = tmp.path().join("workspace");
@@ -1292,6 +1369,132 @@ $successText
         }),
         "managed proxy executions must stream proxy request events"
     );
+    Ok(())
+}
+
+#[test]
+fn network_proxy_overrides_client_proxy_environment_when_supported_or_fails_closed() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let workspace = tmp.path().join("workspace");
+    fs::create_dir_all(&workspace)?;
+    #[cfg(windows)]
+    let _guard = windows_conformance_lock()?;
+    let warmup = execute_params_unlocked(platform_script_params(
+        "workspace-write",
+        &workspace,
+        Some("proxy"),
+        "print('proxy-env-warmup')".to_string(),
+        "Write-Output proxy-env-warmup".to_string(),
+    ))?;
+    if is_backend_missing(&warmup) {
+        let expected_features = expected_missing_features(&["network_proxy", "managed_proxy"]);
+        assert_backend_missing_features(&warmup, &workspace, &expected_features)?;
+        return Ok(());
+    }
+    if is_backend_unavailable(&warmup) {
+        assert_backend_unavailable(&warmup, &workspace)?;
+        return Ok(());
+    }
+    assert_eq!(warmup["result"]["status"], "finished");
+    assert_eq!(warmup["result"]["exit_code"], 0);
+
+    let (port, upstream) = start_loopback_http_server()?;
+    let code = format!(
+        "import os, socket, urllib.parse\n\
+         assert 'attacker.invalid' not in os.environ['HTTP_PROXY']\n\
+         assert os.environ.get('NO_PROXY', '') == ''\n\
+         proxy = urllib.parse.urlparse(os.environ['HTTP_PROXY'])\n\
+         auth = os.environ['RUNSEAL_NETWORK_PROXY_AUTHORIZATION']\n\
+         assert auth.startswith('Basic ')\n\
+         request = f'GET http://127.0.0.1:{port}/proxy-ok HTTP/1.1\\r\\nHost: 127.0.0.1:{port}\\r\\nProxy-Authorization: {{auth}}\\r\\nConnection: close\\r\\n\\r\\n'.encode('ascii')\n\
+         with socket.create_connection((proxy.hostname, proxy.port), timeout=2) as s:\n\
+             s.settimeout(2)\n\
+             s.sendall(request)\n\
+             data = b''\n\
+             while True:\n\
+                 chunk = s.recv(4096)\n\
+                 if not chunk:\n\
+                     break\n\
+                 data += chunk\n\
+         text = data.decode('utf-8', 'replace')\n\
+         assert 'proxy-ok' in text, text\n\
+         print(text)"
+    );
+    let proxy_request = format!(
+        "\"GET http://127.0.0.1:{port}/proxy-ok HTTP/1.1`r`nHost: 127.0.0.1:{port}`r`nProxy-Authorization: $env:RUNSEAL_NETWORK_PROXY_AUTHORIZATION`r`nConnection: close`r`n`r`n\""
+    );
+    let ps_code = r#"
+$ErrorActionPreference = 'Stop'
+if ($env:HTTP_PROXY.Contains('attacker.invalid')) { throw 'managed proxy did not override HTTP_PROXY' }
+if ($env:NO_PROXY -ne '') { throw 'managed proxy did not clear NO_PROXY' }
+if (-not $env:RUNSEAL_NETWORK_PROXY_AUTHORIZATION.StartsWith('Basic ')) { throw 'managed proxy did not inject authorization' }
+$proxy = [Uri]$env:HTTP_PROXY
+$request = __REQUEST__
+$client = [Net.Sockets.TcpClient]::new()
+try {
+    $client.ReceiveTimeout = 2000
+    $client.SendTimeout = 2000
+    $client.Connect($proxy.Host, $proxy.Port)
+    $stream = $client.GetStream()
+    $bytes = [Text.Encoding]::ASCII.GetBytes($request)
+    $stream.Write($bytes, 0, $bytes.Length)
+    $buffer = New-Object byte[] 4096
+    $text = ''
+    while (($count = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+        $text += [Text.Encoding]::UTF8.GetString($buffer, 0, $count)
+    }
+    if (-not $text.Contains('proxy-ok')) { throw "unexpected proxy response: $text" }
+    $text
+} finally {
+    $client.Dispose()
+}
+"#
+    .replace("__REQUEST__", &proxy_request);
+    let mut params =
+        platform_script_params("workspace-write", &workspace, Some("proxy"), code, ps_code);
+    params["env"] = json!({
+        "HTTP_PROXY": "http://attacker.invalid:9",
+        "HTTPS_PROXY": "http://attacker.invalid:9",
+        "http_proxy": "http://attacker.invalid:9",
+        "ALL_PROXY": "http://attacker.invalid:9",
+        "NO_PROXY": "*",
+        "no_proxy": "*"
+    });
+    let response = execute_params_unlocked(params)?;
+
+    if is_backend_missing(&response) {
+        let upstream_hit = upstream.join().expect("upstream server thread")?;
+        assert!(!upstream_hit);
+        let expected_features = expected_missing_features(&["network_proxy", "managed_proxy"]);
+        assert_backend_missing_features(&response, &workspace, &expected_features)?;
+        return Ok(());
+    }
+    if is_backend_unavailable(&response) {
+        let upstream_hit = upstream.join().expect("upstream server thread")?;
+        assert!(!upstream_hit);
+        assert_backend_unavailable(&response, &workspace)?;
+        return Ok(());
+    }
+
+    let upstream_hit = upstream.join().expect("upstream server thread")?;
+
+    assert!(upstream_hit);
+    assert_eq!(response["result"]["status"], "finished");
+    assert_eq!(response["result"]["exit_code"], 0);
+    assert!(
+        response["result"]["stdout"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("proxy-ok")
+    );
+    assert_no_proxy_credential_terms(&response);
+    assert!(!response.to_string().contains("attacker.invalid"));
+    let audit_path = response["result"]["audit_path"]
+        .as_str()
+        .context("successful response must include audit_path")?;
+    let audit_jsonl = fs::read_to_string(workspace.join(audit_path))?;
+    assert_no_proxy_credential_terms_in_str(&audit_jsonl);
+    assert!(!audit_jsonl.contains("attacker.invalid"));
     Ok(())
 }
 
