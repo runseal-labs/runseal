@@ -101,12 +101,11 @@ impl SandboxBackend for MacosExperimentalBackend {
                 "unsupported sandboxed policies fail closed until conformance tests prove enforcement",
             ],
         );
-        payload["sandbox_levels"]["read-only"] = json!(CapabilityStatus::Experimental.as_str());
-        payload["sandbox_levels"]["workspace-write"] =
-            json!(CapabilityStatus::Experimental.as_str());
+        payload["sandbox_levels"]["read-only"] = json!(CapabilityStatus::Supported.as_str());
+        payload["sandbox_levels"]["workspace-write"] = json!(CapabilityStatus::Supported.as_str());
         payload["sandbox_levels"]["workspace-contained"] =
             json!(CapabilityStatus::Unsupported.as_str());
-        payload["network_modes"]["disabled"] = json!(CapabilityStatus::Experimental.as_str());
+        payload["network_modes"]["disabled"] = json!(CapabilityStatus::Supported.as_str());
         mark_portable_disabled_features_experimental(&mut payload);
         payload["capability_probes"] = crate::macos::capability_probe::capability_probes();
         payload
@@ -163,12 +162,11 @@ impl SandboxBackend for LinuxCommunityBackend {
             ],
         );
         payload["backend_status"] = json!(self.status());
-        payload["sandbox_levels"]["read-only"] = json!(CapabilityStatus::Experimental.as_str());
-        payload["sandbox_levels"]["workspace-write"] =
-            json!(CapabilityStatus::Experimental.as_str());
+        payload["sandbox_levels"]["read-only"] = json!(CapabilityStatus::Supported.as_str());
+        payload["sandbox_levels"]["workspace-write"] = json!(CapabilityStatus::Supported.as_str());
         payload["sandbox_levels"]["workspace-contained"] =
             json!(CapabilityStatus::Unsupported.as_str());
-        payload["network_modes"]["disabled"] = json!(CapabilityStatus::Experimental.as_str());
+        payload["network_modes"]["disabled"] = json!(CapabilityStatus::Supported.as_str());
         mark_portable_disabled_features_experimental(&mut payload);
         payload["capability_probes"] = crate::linux::capability_probe::capability_probes();
         payload

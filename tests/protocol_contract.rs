@@ -286,7 +286,7 @@ fn expected_network_disabled_status() -> &'static str {
 
 fn expected_read_only_status() -> &'static str {
     if cfg!(any(target_os = "linux", target_os = "macos")) {
-        "experimental"
+        "supported"
     } else {
         expected_status(expected_windows_sandbox_supported())
     }
@@ -294,7 +294,7 @@ fn expected_read_only_status() -> &'static str {
 
 fn expected_workspace_write_status() -> &'static str {
     if cfg!(any(target_os = "linux", target_os = "macos")) {
-        "experimental"
+        "supported"
     } else {
         expected_status(expected_windows_sandbox_supported())
     }

@@ -474,16 +474,16 @@ fn linux_skeleton_reports_experimental_disabled_features() {
     assert_eq!(capabilities["features"]["network_proxy"], false);
     assert_eq!(capabilities["features"]["managed_proxy"], false);
     assert_eq!(capabilities["features"]["policy_epoch"], true);
-    assert_eq!(capabilities["sandbox_levels"]["read-only"], "experimental");
+    assert_eq!(capabilities["sandbox_levels"]["read-only"], "supported");
     assert_eq!(
         capabilities["sandbox_levels"]["workspace-write"],
-        "experimental"
+        "supported"
     );
     assert_eq!(
         capabilities["sandbox_levels"]["workspace-contained"],
         "unsupported"
     );
-    assert_eq!(capabilities["network_modes"]["disabled"], "experimental");
+    assert_eq!(capabilities["network_modes"]["disabled"], "supported");
     assert_eq!(capabilities["network_modes"]["proxy"], "unsupported");
     let probes = capabilities["capability_probes"].as_array().unwrap();
     assert_eq!(probes.len(), 10);
@@ -637,16 +637,16 @@ fn macos_skeleton_reports_experimental_disabled_features() {
     assert_eq!(capabilities["features"]["network_proxy"], false);
     assert_eq!(capabilities["features"]["managed_proxy"], false);
     assert_eq!(capabilities["features"]["policy_epoch"], true);
-    assert_eq!(capabilities["sandbox_levels"]["read-only"], "experimental");
+    assert_eq!(capabilities["sandbox_levels"]["read-only"], "supported");
     assert_eq!(
         capabilities["sandbox_levels"]["workspace-write"],
-        "experimental"
+        "supported"
     );
     assert_eq!(
         capabilities["sandbox_levels"]["workspace-contained"],
         "unsupported"
     );
-    assert_eq!(capabilities["network_modes"]["disabled"], "experimental");
+    assert_eq!(capabilities["network_modes"]["disabled"], "supported");
     assert_eq!(capabilities["network_modes"]["proxy"], "unsupported");
     let probes = capabilities["capability_probes"].as_array().unwrap();
     assert_eq!(probes.len(), 6);

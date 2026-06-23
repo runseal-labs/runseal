@@ -12,23 +12,23 @@ RunSeal is **not** a cloud VM sandbox, a Docker Desktop replacement, or a microV
 
 `0.1.3` is the current technical-preview release for third-party integration. The repository includes a buildable CLI/RPC shell, standard policy profile normalization, canonical policy hashes, backend capability reporting, a first-class Windows reference backend, `PlatformSandboxPlan` summaries, JSONL audit output, and black-box conformance tests.
 
-Execution support is intentionally narrow today: `danger-full-access` runs as local, non-sandboxed execution. Windows is the most complete supported platform: normal sandboxed execution uses `read-only` or `workspace-write`, while `workspace-contained` is a strict Windows-only compliance option for deployments that require host-read containment. macOS and Linux already have partial experimental enforcement for `read-only` and `workspace-write` with `network.disabled`; they intentionally do not pursue `workspace-contained` because endpoint agents need practical host-side tool and desktop integration.
+Execution support is intentionally narrow today: `danger-full-access` runs as local, non-sandboxed execution. `read-only` and `workspace-write` are supported on Windows, macOS, and Linux. Windows remains the most complete platform because it also supports `network.proxy`, while `workspace-contained` is a strict Windows-only compliance option for deployments that require host-read containment. macOS and Linux intentionally do not pursue `workspace-contained` because endpoint agents need practical host-side tool and desktop integration.
 
 On Windows, a sandbox request produces a `PlatformSandboxPlan` covering runtime root, synthetic home, profile root, temp root, setup requirements, protected filesystem categories, process boundary state, network guard state, and policy path planning. The reference backend handles root creation and cleanup, environment redirects, process cleanup, filesystem enforcement, process isolation, and direct network deny-or-proxy guard enforcement.
 
 Low-level OS enforcement lives in a dedicated Windows sandbox implementation. RunSeal-specific code stays at the adapter layer: policy normalization, `PlatformSandboxPlan` mapping, audit events, capability reporting, and conformance gates. Do not reimplement setup-helper, command-runner, or OS-boundary code in the RunSeal adapter.
 
-On macOS and Linux, RunSeal reports experimental `read-only` and `workspace-write` paths while leaving other sandbox levels unsupported. These portable paths enforce write and network boundaries, not workspace containment; host files may remain readable by design. Portable process cleanup is experimental and should not be treated as equivalent to the Windows reference cleanup.
+On macOS and Linux, RunSeal supports `read-only` and `workspace-write` with `network.disabled` while leaving other sandbox levels unsupported. These portable paths enforce write and network boundaries, not workspace containment; host files may remain readable by design. Portable `network.proxy` remains unsupported.
 
 Capability clients should rely on `sandbox_levels`, `network_modes`, and `feature_statuses` for status decisions. The legacy `features` booleans are coarse presence flags; portable capability probes are diagnostic only and do not promote unsupported capabilities.
 
 | Capability | Windows | macOS | Linux |
 | --- | --- | --- | --- |
 | `danger-full-access` | supported | supported | supported |
-| `read-only` | supported | experimental with `network.disabled` | experimental with `network.disabled` |
-| `workspace-write` | supported | experimental with `network.disabled` | experimental with `network.disabled` |
+| `read-only` | supported | supported with `network.disabled` | supported with `network.disabled` |
+| `workspace-write` | supported | supported with `network.disabled` | supported with `network.disabled` |
 | `workspace-contained` | strict compliance option | not planned | not planned |
-| `network.disabled` | supported | experimental | experimental |
+| `network.disabled` | supported | supported | supported |
 | `network.proxy` | supported | unsupported | unsupported |
 
 ### macOS and Linux evidence
@@ -39,8 +39,8 @@ is intentionally excluded from portable promotion.
 
 | Area | Windows reference | macOS experimental | Linux experimental | Evidence needed for promotion |
 | --- | --- | --- | --- | --- |
-| Filesystem levels | `read-only` and `workspace-write` supported; `workspace-contained` available for strict compliance | `read-only` and `workspace-write` experimental; `workspace-contained` not planned | `read-only` and `workspace-write` experimental; `workspace-contained` not planned | Shared filesystem conformance plus adversarial external write, parent traversal, symlink or junction traversal, protected metadata, and runtime-root cases for claimed capabilities. |
-| Network modes | `network.disabled` and `network.proxy` supported | `network.disabled` experimental; `network.proxy` unsupported | `network.disabled` experimental; `network.proxy` unsupported | Direct socket and HTTP egress denial for `network.disabled`; managed proxy routing, environment override resistance, direct egress bypass denial, audit/event coverage, and public-safe fail-closed output for `network.proxy`. |
+| Filesystem levels | `read-only` and `workspace-write` supported; `workspace-contained` available for strict compliance | `read-only` and `workspace-write` supported; `workspace-contained` not planned | `read-only` and `workspace-write` supported; `workspace-contained` not planned | Shared filesystem conformance plus adversarial external write, parent traversal, symlink or junction traversal, protected metadata, and runtime-root cases for claimed capabilities. |
+| Network modes | `network.disabled` and `network.proxy` supported | `network.disabled` supported; `network.proxy` unsupported | `network.disabled` supported; `network.proxy` unsupported | Direct socket and HTTP egress denial for `network.disabled`; managed proxy routing, environment override resistance, direct egress bypass denial, audit/event coverage, and public-safe fail-closed output for `network.proxy`. |
 | Setup/readiness | Windows setup readiness supported | No platform setup; reports unsupported Windows setup without blocking portable experimental paths | No platform setup; reports unsupported Windows setup without blocking portable experimental paths | Platform-specific setup contract, structured `getSetupStatus`, setup failure audit/events, and fail-closed behavior when setup is unavailable. |
 | Runtime roots and synthetic home | Supported | Experimental | Experimental | Runtime root creation, environment redirect, cleanup, marker spoofing, symlink replacement, partial setup failure, and cross-execution contamination conformance. |
 | Process cleanup | Supported | Experimental | Experimental | Timeout, cancellation, child process, shell trampoline, nested process tree, and helper reuse conformance without terminating unrelated processes. |

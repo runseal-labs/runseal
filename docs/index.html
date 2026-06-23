@@ -96,15 +96,15 @@
                 </thead>
                 <tbody>
                   <tr><td><code>danger-full-access</code></td><td>supported</td><td>supported</td><td>supported</td></tr>
-                  <tr><td><code>read-only</code></td><td>supported</td><td>experimental</td><td>experimental</td></tr>
-                  <tr><td><code>workspace-write</code></td><td>supported</td><td>experimental</td><td>experimental</td></tr>
+                  <tr><td><code>read-only</code></td><td>supported</td><td>supported</td><td>supported</td></tr>
+                  <tr><td><code>workspace-write</code></td><td>supported</td><td>supported</td><td>supported</td></tr>
                   <tr><td><code>workspace-contained</code></td><td>strict compliance option</td><td>not planned</td><td>not planned</td></tr>
-                  <tr><td><code>network.disabled</code></td><td>supported</td><td>experimental</td><td>experimental</td></tr>
+                  <tr><td><code>network.disabled</code></td><td>supported</td><td>supported</td><td>supported</td></tr>
                   <tr><td><code>network.proxy</code></td><td>supported</td><td>unsupported</td><td>unsupported</td></tr>
                 </tbody>
               </table>
             </div>
-            <p class="note">macOS and Linux already provide partial experimental enforcement. Current portable paths enforce write and network boundaries, not workspace containment; host files may remain readable by design so endpoint agents keep practical host-side tool and desktop integration.</p>
+            <p class="note">macOS and Linux support <code>read-only</code> and <code>workspace-write</code> with <code>network.disabled</code>. Current portable paths enforce write and network boundaries, not workspace containment; host files may remain readable by design so endpoint agents keep practical host-side tool and desktop integration.</p>
             <h3>macOS and Linux evidence</h3>
             <p>Windows remains the reference backend. macOS and Linux should only move claimed capabilities toward <code>supported</code> after the matching conformance evidence passes on that platform. <code>workspace-contained</code> is intentionally excluded from portable promotion.</p>
             <div class="table-wrap">
@@ -119,8 +119,8 @@
                   </tr>
                 </thead>
                 <tbody>
-                  <tr><td>Filesystem levels</td><td><code>read-only</code> and <code>workspace-write</code> supported; <code>workspace-contained</code> available for strict compliance</td><td><code>read-only</code> and <code>workspace-write</code> experimental; <code>workspace-contained</code> not planned</td><td><code>read-only</code> and <code>workspace-write</code> experimental; <code>workspace-contained</code> not planned</td><td>Shared filesystem conformance plus adversarial external write, parent traversal, symlink or junction traversal, protected metadata, and runtime-root cases for claimed capabilities.</td></tr>
-                  <tr><td>Network modes</td><td><code>network.disabled</code> and <code>network.proxy</code> supported</td><td><code>network.disabled</code> experimental; <code>network.proxy</code> unsupported</td><td><code>network.disabled</code> experimental; <code>network.proxy</code> unsupported</td><td>Direct socket and HTTP egress denial for <code>network.disabled</code>; managed proxy routing, environment override resistance, direct egress bypass denial, audit/event coverage, and public-safe fail-closed output for <code>network.proxy</code>.</td></tr>
+                  <tr><td>Filesystem levels</td><td><code>read-only</code> and <code>workspace-write</code> supported; <code>workspace-contained</code> available for strict compliance</td><td><code>read-only</code> and <code>workspace-write</code> supported; <code>workspace-contained</code> not planned</td><td><code>read-only</code> and <code>workspace-write</code> supported; <code>workspace-contained</code> not planned</td><td>Shared filesystem conformance plus adversarial external write, parent traversal, symlink or junction traversal, protected metadata, and runtime-root cases for claimed capabilities.</td></tr>
+                  <tr><td>Network modes</td><td><code>network.disabled</code> and <code>network.proxy</code> supported</td><td><code>network.disabled</code> supported; <code>network.proxy</code> unsupported</td><td><code>network.disabled</code> supported; <code>network.proxy</code> unsupported</td><td>Direct socket and HTTP egress denial for <code>network.disabled</code>; managed proxy routing, environment override resistance, direct egress bypass denial, audit/event coverage, and public-safe fail-closed output for <code>network.proxy</code>.</td></tr>
                   <tr><td>Setup/readiness</td><td>Windows setup readiness supported</td><td>No platform setup; reports unsupported Windows setup without blocking portable experimental paths</td><td>No platform setup; reports unsupported Windows setup without blocking portable experimental paths</td><td>Platform-specific setup contract, structured <code>getSetupStatus</code>, setup failure audit/events, and fail-closed behavior when setup is unavailable.</td></tr>
                   <tr><td>Runtime roots and synthetic home</td><td>Supported</td><td>Experimental</td><td>Experimental</td><td>Runtime root creation, environment redirect, cleanup, marker spoofing, symlink replacement, partial setup failure, and cross-execution contamination conformance.</td></tr>
                   <tr><td>Process cleanup</td><td>Supported</td><td>Experimental</td><td>Experimental</td><td>Timeout, cancellation, child process, shell trampoline, nested process tree, and helper reuse conformance without terminating unrelated processes.</td></tr>
