@@ -594,6 +594,11 @@ fn workspace_write_denies_external_write_when_supported_or_fails_closed() -> Res
         assert!(!outside.exists());
         return Ok(());
     }
+    if is_execution_failed_to_start(&response) {
+        assert_execution_failed_to_start(&response, &workspace)?;
+        assert!(!outside.exists());
+        return Ok(());
+    }
 
     assert_eq!(response["result"]["status"], "finished");
     assert_ne!(response["result"]["exit_code"], 0);
@@ -618,6 +623,11 @@ fn workspace_write_denies_relative_cwd_write_escape_when_supported_or_fails_clos
     }
     if is_backend_unavailable(&response) {
         assert_backend_unavailable(&response, &workspace)?;
+        assert!(!outside.exists());
+        return Ok(());
+    }
+    if is_execution_failed_to_start(&response) {
+        assert_execution_failed_to_start(&response, &workspace)?;
         assert!(!outside.exists());
         return Ok(());
     }
@@ -649,6 +659,11 @@ fn workspace_write_denies_symlink_write_escape_when_supported_or_fails_closed() 
     }
     if is_backend_unavailable(&response) {
         assert_backend_unavailable(&response, &workspace)?;
+        assert_eq!(fs::read_to_string(&outside)?, "outside-original");
+        return Ok(());
+    }
+    if is_execution_failed_to_start(&response) {
+        assert_execution_failed_to_start(&response, &workspace)?;
         assert_eq!(fs::read_to_string(&outside)?, "outside-original");
         return Ok(());
     }
@@ -763,6 +778,11 @@ fn workspace_write_protects_workspace_metadata_when_supported_or_fails_closed() 
             assert!(!target.exists());
             continue;
         }
+        if is_execution_failed_to_start(&response) {
+            assert_execution_failed_to_start(&response, &workspace)?;
+            assert!(!target.exists());
+            continue;
+        }
 
         assert_eq!(response["result"]["status"], "finished");
         assert_ne!(response["result"]["exit_code"], 0);
@@ -874,6 +894,10 @@ fn runtime_environment_roots_are_per_execution_when_supported_or_fails_closed() 
     }
     if is_backend_unavailable(&first) {
         assert_backend_unavailable(&first, &workspace)?;
+        return Ok(());
+    }
+    if is_execution_failed_to_start(&first) {
+        assert_execution_failed_to_start(&first, &workspace)?;
         return Ok(());
     }
 
