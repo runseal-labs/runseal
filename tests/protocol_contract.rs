@@ -1357,6 +1357,7 @@ fn get_capabilities_rpc_contract() -> Result<()> {
         payload["network_modes"]["disabled"],
         expected_network_disabled_status()
     );
+    assert_eq!(payload["network_modes"]["unmanaged"], "supported");
     assert_eq!(
         payload["features"]["runtime_roots"],
         expected_disabled_feature_reported()
@@ -3399,7 +3400,7 @@ fn explain_policy_returns_effective_hash_and_network_mode() -> Result<()> {
             .unwrap_or_default()
             .starts_with("sha256:")
     );
-    assert_eq!(payload["network"]["mode"], "proxy");
+    assert_eq!(payload["network"]["mode"], "unmanaged");
     assert_eq!(payload["environment"]["inherit"], "minimal");
     assert_eq!(payload["backend_requirement"], "sandbox-backend");
     assert_eq!(
@@ -3419,10 +3420,7 @@ fn explain_policy_returns_effective_hash_and_network_mode() -> Result<()> {
             "runtime_roots",
             "runtime_environment",
             "process_isolation",
-            "process_cleanup",
-            "direct_network_deny",
-            "network_proxy",
-            "managed_proxy"
+            "process_cleanup"
         ])
     );
     assert_eq!(

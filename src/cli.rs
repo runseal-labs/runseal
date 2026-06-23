@@ -132,7 +132,7 @@ pub(crate) fn parse_policy_args(args: &[String]) -> Result<CliPolicyRequest, Str
 
 fn parse_network_mode(value: &str) -> Result<NetworkMode, String> {
     NetworkMode::from_str(value)
-        .ok_or_else(|| format!("network mode must be disabled or proxy, got {value}"))
+        .ok_or_else(|| format!("network mode must be unmanaged, disabled, or proxy, got {value}"))
 }
 
 fn parse_timeout_ms(value: &str) -> Result<Duration, String> {

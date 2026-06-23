@@ -18,16 +18,17 @@ On Windows, a sandbox request produces a `PlatformSandboxPlan` covering runtime 
 
 Low-level OS enforcement lives in a dedicated Windows sandbox implementation. RunSeal-specific code stays at the adapter layer: policy normalization, `PlatformSandboxPlan` mapping, audit events, capability reporting, and conformance gates. Do not reimplement setup-helper, command-runner, or OS-boundary code in the RunSeal adapter.
 
-On macOS and Linux, RunSeal supports `read-only` and `workspace-write` with `network.disabled` while leaving other sandbox levels unsupported. These portable paths enforce write and network boundaries, not workspace containment; host files may remain readable by design. Portable `network.proxy` remains unsupported.
+On macOS and Linux, RunSeal supports `read-only` and `workspace-write` with default unmanaged networking while leaving other sandbox levels unsupported. These portable paths enforce write boundaries, not workspace containment; host files may remain readable by design. `network.disabled` is available when callers explicitly want network denial. Portable `network.proxy` remains unsupported.
 
 Capability clients should rely on `sandbox_levels`, `network_modes`, and `feature_statuses` for status decisions. The legacy `features` booleans are coarse presence flags; portable capability probes are diagnostic only and do not promote unsupported capabilities.
 
 | Capability | Windows | macOS | Linux |
 | --- | --- | --- | --- |
 | `danger-full-access` | supported | supported | supported |
-| `read-only` | supported | supported with `network.disabled` | supported with `network.disabled` |
-| `workspace-write` | supported | supported with `network.disabled` | supported with `network.disabled` |
+| `read-only` | supported | supported | supported |
+| `workspace-write` | supported | supported | supported |
 | `workspace-contained` | strict compliance option | not planned | not planned |
+| `network.unmanaged` | supported | supported | supported |
 | `network.disabled` | supported | supported | supported |
 | `network.proxy` | supported | unsupported | unsupported |
 
@@ -40,7 +41,7 @@ is intentionally excluded from portable promotion.
 | Area | Windows reference | macOS experimental | Linux experimental | Evidence needed for promotion |
 | --- | --- | --- | --- | --- |
 | Filesystem levels | `read-only` and `workspace-write` supported; `workspace-contained` available for strict compliance | `read-only` and `workspace-write` supported; `workspace-contained` not planned | `read-only` and `workspace-write` supported; `workspace-contained` not planned | Shared filesystem conformance plus adversarial external write, parent traversal, symlink or junction traversal, protected metadata, and runtime-root cases for claimed capabilities. |
-| Network modes | `network.disabled` and `network.proxy` supported | `network.disabled` supported; `network.proxy` unsupported | `network.disabled` supported; `network.proxy` unsupported | Direct socket and HTTP egress denial for `network.disabled`; managed proxy routing, environment override resistance, direct egress bypass denial, audit/event coverage, and public-safe fail-closed output for `network.proxy`. |
+| Network modes | `network.unmanaged`, `network.disabled`, and `network.proxy` supported | `network.unmanaged` and `network.disabled` supported; `network.proxy` unsupported | `network.unmanaged` and `network.disabled` supported; `network.proxy` unsupported | Direct pass-through behavior for `network.unmanaged`; direct socket and HTTP egress denial for `network.disabled`; managed proxy routing, environment override resistance, direct egress bypass denial, audit/event coverage, and public-safe fail-closed output for `network.proxy`. |
 | Setup/readiness | Windows setup readiness supported | No platform setup; reports unsupported Windows setup without blocking portable experimental paths | No platform setup; reports unsupported Windows setup without blocking portable experimental paths | Platform-specific setup contract, structured `getSetupStatus`, setup failure audit/events, and fail-closed behavior when setup is unavailable. |
 | Runtime roots and synthetic home | Supported | Experimental | Experimental | Runtime root creation, environment redirect, cleanup, marker spoofing, symlink replacement, partial setup failure, and cross-execution contamination conformance. |
 | Process cleanup | Supported | Experimental | Experimental | Timeout, cancellation, child process, shell trampoline, nested process tree, and helper reuse conformance without terminating unrelated processes. |
@@ -92,6 +93,7 @@ The test suite is intentionally black-box and protocol-oriented. Runtime impleme
 ## Intended CLI
 
 ```bash
+runseal exec --policy workspace-write --cwd /workspace -- python skill.py
 runseal exec --policy workspace-write --network proxy --cwd /workspace -- python skill.py
 runseal exec --policy workspace-write --network disabled --cwd /workspace --timeout-ms 30000 -- whoami
 runseal explain-policy --policy workspace-write --network proxy
@@ -108,7 +110,7 @@ For explicit unsandboxed local execution:
 runseal exec --policy danger-full-access -- python skill.py
 ```
 
-Available `exec` flags: `--json`, `--events`, `--policy`, `--network`, `--cwd`, `--timeout-ms`. Flags must appear before `--`; the command and its arguments follow `--`.
+Available `exec` flags: `--json`, `--events`, `--policy`, `--network`, `--cwd`, `--timeout-ms`. Omit `--network` for unmanaged direct networking; use `disabled` or `proxy` only when requesting those network controls. Flags must appear before `--`; the command and its arguments follow `--`.
 
 When `runseal exec --json` fails, stdout contains a structured `error` object and the process exits non-zero.
 When `runseal exec --events` fails before an event stream completes, stdout contains one structured `error` object line and the process exits non-zero.
@@ -260,7 +262,7 @@ RUNSEAL_BIN=target/debug/runseal cargo test
 ## Non-goals
 
 - No Docker daemon dependency.
-- No unmanaged direct network access as an enterprise default.
+- No unmanaged direct network bypass when enterprise network controls are requested.
 - No direct secret injection into sandboxed processes.
 - No cloud multi-tenant sandbox control plane in the core runtime.
 - No claim that OS-native sandboxing prevents every kernel-level escape.

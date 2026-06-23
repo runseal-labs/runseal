@@ -241,12 +241,14 @@ pub(crate) struct WindowsNetworkPlan {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WindowsNetworkGuard {
+    Unmanaged,
     Disabled,
     Proxy,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WindowsDirectEgress {
+    Unmanaged,
     Deny,
 }
 
@@ -314,6 +316,7 @@ pub(crate) struct WindowsHostRoots {
 impl WindowsNetworkGuard {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
+            Self::Unmanaged => "unmanaged",
             Self::Disabled => "disabled",
             Self::Proxy => "proxy",
         }
@@ -323,6 +326,7 @@ impl WindowsNetworkGuard {
 impl WindowsDirectEgress {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
+            Self::Unmanaged => "unmanaged",
             Self::Deny => "deny",
         }
     }
@@ -430,11 +434,14 @@ impl WindowsPolicyPlan {
             }
         };
         let guard = match vendor_profile.network_policy() {
+            Some(WindowsVendorNetworkPolicy::Unmanaged) | None => WindowsNetworkGuard::Unmanaged,
             Some(WindowsVendorNetworkPolicy::Proxy) => WindowsNetworkGuard::Proxy,
-            Some(WindowsVendorNetworkPolicy::Disabled) | None => WindowsNetworkGuard::Disabled,
+            Some(WindowsVendorNetworkPolicy::Disabled) => WindowsNetworkGuard::Disabled,
         };
         let managed_proxy = match guard {
-            WindowsNetworkGuard::Disabled => WindowsManagedProxy::None,
+            WindowsNetworkGuard::Unmanaged | WindowsNetworkGuard::Disabled => {
+                WindowsManagedProxy::None
+            }
             WindowsNetworkGuard::Proxy => WindowsManagedProxy::Required,
         };
 
@@ -449,7 +456,12 @@ impl WindowsPolicyPlan {
             },
             network: WindowsNetworkPlan {
                 guard,
-                direct_egress: WindowsDirectEgress::Deny,
+                direct_egress: match guard {
+                    WindowsNetworkGuard::Unmanaged => WindowsDirectEgress::Unmanaged,
+                    WindowsNetworkGuard::Disabled | WindowsNetworkGuard::Proxy => {
+                        WindowsDirectEgress::Deny
+                    }
+                },
                 managed_proxy,
                 inject_proxy_environment: guard == WindowsNetworkGuard::Proxy
                     && policy.environment.proxy,
@@ -759,8 +771,8 @@ mod tests {
         assert!(plan.filesystem.effective_write_roots().is_empty());
         assert!(plan.filesystem.protected_roots.is_empty());
         assert!(plan.filesystem.private_protected_roots.is_empty());
-        assert_eq!(plan.network.guard, WindowsNetworkGuard::Disabled);
-        assert_eq!(plan.network.direct_egress, WindowsDirectEgress::Deny);
+        assert_eq!(plan.network.guard, WindowsNetworkGuard::Unmanaged);
+        assert_eq!(plan.network.direct_egress, WindowsDirectEgress::Unmanaged);
         assert_eq!(plan.network.managed_proxy, WindowsManagedProxy::None);
         assert!(!plan.network.inject_proxy_environment);
         assert!(plan.environment.runtime.is_empty());
@@ -802,10 +814,10 @@ mod tests {
         assert_eq!(plan.filesystem.effective_write_roots(), vec!["/workspace"]);
         assert_eq!(plan.filesystem.protected_roots, protected_roots);
         assert!(plan.filesystem.private_protected_roots.is_empty());
-        assert_eq!(plan.network.guard, WindowsNetworkGuard::Proxy);
-        assert_eq!(plan.network.direct_egress, WindowsDirectEgress::Deny);
-        assert_eq!(plan.network.managed_proxy, WindowsManagedProxy::Required);
-        assert!(plan.network.inject_proxy_environment);
+        assert_eq!(plan.network.guard, WindowsNetworkGuard::Unmanaged);
+        assert_eq!(plan.network.direct_egress, WindowsDirectEgress::Unmanaged);
+        assert_eq!(plan.network.managed_proxy, WindowsManagedProxy::None);
+        assert!(!plan.network.inject_proxy_environment);
         assert!(plan.environment.runtime.is_empty());
     }
 

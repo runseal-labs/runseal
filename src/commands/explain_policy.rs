@@ -5,7 +5,7 @@ Usage: runseal explain-policy [--policy <policy>] [--network <mode>] [--cwd <pat
 
 Options:
   --policy   danger-full-access, read-only, workspace-contained, or workspace-write
-  --network  disabled or proxy
+  --network  unmanaged, disabled, or proxy
   --cwd      existing workspace directory
 ";
 

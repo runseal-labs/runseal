@@ -5,7 +5,7 @@ Usage: runseal exec [--json|--events] [--policy <policy>] [--network <mode>] [--
 
 Options:
   --policy       danger-full-access, read-only, workspace-contained, or workspace-write
-  --network      disabled or proxy
+  --network      unmanaged, disabled, or proxy
   --cwd          existing workspace directory
   --timeout-ms   execution timeout in milliseconds
 ";

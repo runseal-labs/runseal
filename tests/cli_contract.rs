@@ -847,6 +847,7 @@ fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
         payload["network_modes"]["disabled"],
         expected_network_disabled_status()
     );
+    assert_eq!(payload["network_modes"]["unmanaged"], "supported");
     if cfg!(windows) {
         assert_eq!(payload["setup_status"]["setup"], "windows-sandbox");
         assert!(payload["setup_status"]["next_action"].as_str().is_some());

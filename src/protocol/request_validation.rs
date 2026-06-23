@@ -301,7 +301,10 @@ fn network_override_from_params(
     };
 
     NetworkMode::from_str(mode).map(Some).ok_or_else(|| {
-        RunSealError::new("POLICY_INVALID", "network.mode must be disabled or proxy")
+        RunSealError::new(
+            "POLICY_INVALID",
+            "network.mode must be unmanaged, disabled, or proxy",
+        )
     })
 }
 

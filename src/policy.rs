@@ -42,6 +42,7 @@ impl SandboxLevel {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NetworkMode {
+    Unmanaged,
     Disabled,
     Proxy,
 }
@@ -49,6 +50,7 @@ pub enum NetworkMode {
 impl NetworkMode {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Unmanaged => "unmanaged",
             Self::Disabled => "disabled",
             Self::Proxy => "proxy",
         }
@@ -56,6 +58,7 @@ impl NetworkMode {
 
     pub fn from_str(value: &str) -> Option<Self> {
         match value {
+            "unmanaged" => Some(Self::Unmanaged),
             "disabled" => Some(Self::Disabled),
             "proxy" => Some(Self::Proxy),
             _ => None,
@@ -307,14 +310,18 @@ impl SandboxPolicy {
             BackendFeature::RuntimeEnvironment,
             BackendFeature::ProcessIsolation,
             BackendFeature::ProcessCleanup,
-            BackendFeature::DirectNetworkDeny,
         ];
         if self.resources.memory_bytes.is_some() || self.resources.cpu_percent.is_some() {
             features.push(BackendFeature::ResourceLimits);
         }
         match self.network.mode {
-            NetworkMode::Disabled => features.push(BackendFeature::NetworkDisabled),
+            NetworkMode::Unmanaged => {}
+            NetworkMode::Disabled => {
+                features.push(BackendFeature::DirectNetworkDeny);
+                features.push(BackendFeature::NetworkDisabled);
+            }
             NetworkMode::Proxy => {
+                features.push(BackendFeature::DirectNetworkDeny);
                 features.push(BackendFeature::NetworkProxy);
                 features.push(BackendFeature::ManagedProxy);
             }
@@ -588,14 +595,14 @@ fn inline_network_mode(network: Option<&Value>) -> Option<Result<NetworkMode, Po
         }
         match optional_string(object, "mode") {
             Ok(Some(mode)) => mode,
-            Ok(None) => "disabled",
+            Ok(None) => "unmanaged",
             Err(err) => return Some(Err(err)),
         }
     };
 
     Some(NetworkMode::from_str(mode).ok_or_else(|| {
         PolicyError::invalid(format!(
-            "network.mode must be disabled or proxy, got {mode}"
+            "network.mode must be unmanaged, disabled, or proxy, got {mode}"
         ))
     }))
 }
@@ -841,11 +848,8 @@ fn environment_set(
     Ok(entries)
 }
 
-fn default_network_mode(sandbox_level: SandboxLevel) -> NetworkMode {
-    match sandbox_level {
-        SandboxLevel::WorkspaceWrite => NetworkMode::Proxy,
-        _ => NetworkMode::Disabled,
-    }
+fn default_network_mode(_sandbox_level: SandboxLevel) -> NetworkMode {
+    NetworkMode::Unmanaged
 }
 
 fn default_network(mode: NetworkMode) -> NetworkPolicy {
@@ -1181,7 +1185,7 @@ mod tests {
 
         assert_eq!(policy.id, "workspace-write");
         assert_eq!(policy.sandbox_level, SandboxLevel::WorkspaceWrite);
-        assert_eq!(policy.network.mode, NetworkMode::Proxy);
+        assert_eq!(policy.network.mode, NetworkMode::Unmanaged);
         assert!(policy.filesystem.protect_vcs);
         assert_eq!(
             policy.required_backend_feature_names(),
@@ -1190,10 +1194,7 @@ mod tests {
                 "runtime_roots",
                 "runtime_environment",
                 "process_isolation",
-                "process_cleanup",
-                "direct_network_deny",
-                "network_proxy",
-                "managed_proxy"
+                "process_cleanup"
             ]
         );
         assert_eq!(
@@ -1222,12 +1223,12 @@ mod tests {
     #[test]
     fn network_override_changes_canonical_hash() {
         let cwd = PathBuf::from("/workspace");
-        let proxy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+        let unmanaged = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
         let disabled =
             normalize_policy(&json!("workspace-write"), &cwd, Some(NetworkMode::Disabled)).unwrap();
 
         assert_eq!(disabled.network.mode, NetworkMode::Disabled);
-        assert_ne!(proxy.hash(), disabled.hash());
+        assert_ne!(unmanaged.hash(), disabled.hash());
     }
 
     #[test]
@@ -1613,7 +1614,7 @@ mod tests {
                     "mode": "none"
                 }
             }),
-            "network.mode must be disabled or proxy",
+            "network.mode must be unmanaged, disabled, or proxy",
         );
     }
 

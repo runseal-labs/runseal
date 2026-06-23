@@ -145,7 +145,7 @@ impl PlatformSandboxPlan {
             private_setup_payload: None,
             private_vendor_permission_profile: None,
             network_mode: policy.network.mode.as_str(),
-            network_direct_egress: "deny",
+            network_direct_egress: network_direct_egress(policy),
             network_managed_proxy: "none",
             environment_inherit: policy.environment.inherit.clone(),
             environment_scrub: policy.environment.scrub.clone(),
@@ -201,7 +201,7 @@ impl PlatformSandboxPlan {
             private_setup_payload: None,
             private_vendor_permission_profile: None,
             network_mode: policy.network.mode.as_str(),
-            network_direct_egress: "deny",
+            network_direct_egress: network_direct_egress(policy),
             network_managed_proxy: "none",
             environment_inherit: policy.environment.inherit.clone(),
             environment_scrub: policy.environment.scrub.clone(),
@@ -372,7 +372,9 @@ impl PlatformSandboxPlan {
                 self.network_direct_egress,
                 self.network_managed_proxy,
             ),
-            ("disabled", "deny", "none") | ("proxy", "deny", "required")
+            ("unmanaged", "unmanaged", "none")
+                | ("disabled", "deny", "none")
+                | ("proxy", "deny", "required")
         ) {
             return Ok(());
         }
@@ -705,6 +707,13 @@ pub(super) fn environment_runtime_json(entries: &[(String, String)]) -> Value {
         object.insert(key.clone(), json!(value));
     }
     Value::Object(object)
+}
+
+fn network_direct_egress(policy: &SandboxPolicy) -> &'static str {
+    match policy.network.mode {
+        NetworkMode::Unmanaged => "unmanaged",
+        NetworkMode::Disabled | NetworkMode::Proxy => "deny",
+    }
 }
 
 pub(super) fn protected_filesystem_labels(policy: &SandboxPolicy) -> Vec<&'static str> {

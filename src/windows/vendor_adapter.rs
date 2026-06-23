@@ -43,6 +43,7 @@ pub(crate) enum WindowsVendorFilesystemAccess {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WindowsVendorNetworkPolicy {
+    Unmanaged,
     Disabled,
     Proxy,
 }
@@ -69,6 +70,7 @@ impl WindowsVendorSandboxProfile {
                 entries: filesystem_entries(policy),
             },
             network: match policy.network.mode {
+                NetworkMode::Unmanaged => WindowsVendorNetworkPolicy::Unmanaged,
                 NetworkMode::Disabled => WindowsVendorNetworkPolicy::Disabled,
                 NetworkMode::Proxy => WindowsVendorNetworkPolicy::Proxy,
             },
@@ -112,7 +114,12 @@ impl WindowsVendorSandboxProfile {
 
     #[cfg(windows)]
     pub(crate) fn permission_profile(&self) -> Result<PermissionProfile, String> {
-        let Self::Managed { filesystem, .. } = self else {
+        let Self::Managed {
+            filesystem,
+            network,
+            ..
+        } = self
+        else {
             return Ok(PermissionProfile::Disabled);
         };
 
@@ -125,7 +132,12 @@ impl WindowsVendorSandboxProfile {
 
         Ok(PermissionProfile::Managed {
             file_system: ManagedFileSystemPermissions::from_sandbox_policy(&file_system),
-            network: NetworkSandboxPolicy::Restricted,
+            network: match network {
+                WindowsVendorNetworkPolicy::Unmanaged => NetworkSandboxPolicy::Enabled,
+                WindowsVendorNetworkPolicy::Disabled | WindowsVendorNetworkPolicy::Proxy => {
+                    NetworkSandboxPolicy::Restricted
+                }
+            },
         })
     }
 
@@ -315,7 +327,7 @@ mod tests {
                         },
                     ],
                 },
-                network: WindowsVendorNetworkPolicy::Proxy,
+                network: WindowsVendorNetworkPolicy::Unmanaged,
                 sandbox_user_model: WindowsVendorSandboxUserModel::SingleSandboxUser,
             }
         );
@@ -329,7 +341,7 @@ mod tests {
         );
         assert_eq!(
             profile.network_policy(),
-            Some(WindowsVendorNetworkPolicy::Proxy)
+            Some(WindowsVendorNetworkPolicy::Unmanaged)
         );
         assert_eq!(
             profile.read_roots(),
@@ -391,7 +403,7 @@ mod tests {
         }
         let (file_system, network) = permission_profile.to_runtime_permissions();
 
-        assert_eq!(network, NetworkSandboxPolicy::Restricted);
+        assert_eq!(network, NetworkSandboxPolicy::Enabled);
         assert_eq!(file_system.entries.len(), 5);
         assert_eq!(
             file_system

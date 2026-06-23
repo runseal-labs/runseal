@@ -220,9 +220,7 @@ fn compile_macos_plan(
             policy,
         ));
     }
-    if policy.sandbox_level == SandboxLevel::ReadOnly
-        && policy.network.mode == NetworkMode::Disabled
-    {
+    if policy.sandbox_level == SandboxLevel::ReadOnly && portable_network_mode(policy) {
         return Ok(PlatformSandboxPlan::macos_read_only_experimental(
             backend,
             execution_id,
@@ -230,9 +228,7 @@ fn compile_macos_plan(
             policy,
         ));
     }
-    if policy.sandbox_level == SandboxLevel::WorkspaceWrite
-        && policy.network.mode == NetworkMode::Disabled
-    {
+    if policy.sandbox_level == SandboxLevel::WorkspaceWrite && portable_network_mode(policy) {
         return Ok(PlatformSandboxPlan::macos_workspace_write_experimental(
             backend,
             execution_id,
@@ -266,9 +262,7 @@ fn compile_linux_plan(
             policy,
         ));
     }
-    if policy.sandbox_level == SandboxLevel::ReadOnly
-        && policy.network.mode == NetworkMode::Disabled
-    {
+    if policy.sandbox_level == SandboxLevel::ReadOnly && portable_network_mode(policy) {
         return Ok(PlatformSandboxPlan::linux_read_only_experimental(
             backend,
             execution_id,
@@ -276,9 +270,7 @@ fn compile_linux_plan(
             policy,
         ));
     }
-    if policy.sandbox_level == SandboxLevel::WorkspaceWrite
-        && policy.network.mode == NetworkMode::Disabled
-    {
+    if policy.sandbox_level == SandboxLevel::WorkspaceWrite && portable_network_mode(policy) {
         return Ok(PlatformSandboxPlan::linux_workspace_write_experimental(
             backend,
             execution_id,
@@ -296,6 +288,13 @@ fn compile_linux_plan(
             policy,
         )),
     ))
+}
+
+fn portable_network_mode(policy: &SandboxPolicy) -> bool {
+    matches!(
+        policy.network.mode,
+        NetworkMode::Unmanaged | NetworkMode::Disabled
+    )
 }
 
 fn execute_linux_plan(
@@ -413,6 +412,9 @@ fn macos_profile(plan: &PlatformSandboxPlan, cwd: &Path) -> io::Result<String> {
         "(version 1)(deny default)(allow process*)(allow sysctl-read)(allow mach-lookup)(allow file-read*)(allow file-write* {})",
         writable_roots.join(" ")
     );
+    if plan.network_direct_egress == "unmanaged" {
+        profile.push_str("(allow network*)");
+    }
     if plan.sandbox_level == SandboxLevel::WorkspaceWrite.as_str() {
         for protected in [".git", ".agents", ".codex"] {
             let protected_root = cwd.join(protected);
@@ -483,13 +485,15 @@ fn spawn_linux_bwrap(
         "--unshare-pid".to_string(),
         "--unshare-ipc".to_string(),
         "--unshare-uts".to_string(),
-        "--unshare-net".to_string(),
         "--die-with-parent".to_string(),
         "--clearenv".to_string(),
         "--setenv".to_string(),
         "PATH".to_string(),
         "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin".to_string(),
     ]);
+    if plan.network_direct_egress != "unmanaged" {
+        bwrap_command.push("--unshare-net".to_string());
+    }
     for (key, value) in &plan.environment_runtime {
         bwrap_command.extend(["--setenv".to_string(), key.clone(), value.clone()]);
     }

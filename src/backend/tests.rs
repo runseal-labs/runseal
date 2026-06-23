@@ -349,9 +349,6 @@ fn missing_features_excludes_supported_backend_features() {
             BackendFeature::RuntimeEnvironment,
             BackendFeature::ProcessIsolation,
             BackendFeature::ProcessCleanup,
-            BackendFeature::DirectNetworkDeny,
-            BackendFeature::NetworkProxy,
-            BackendFeature::ManagedProxy,
         ]
     );
 }
@@ -483,6 +480,7 @@ fn linux_skeleton_reports_experimental_disabled_features() {
         capabilities["sandbox_levels"]["workspace-contained"],
         "unsupported"
     );
+    assert_eq!(capabilities["network_modes"]["unmanaged"], "supported");
     assert_eq!(capabilities["network_modes"]["disabled"], "supported");
     assert_eq!(capabilities["network_modes"]["proxy"], "unsupported");
     let probes = capabilities["capability_probes"].as_array().unwrap();
@@ -553,7 +551,7 @@ fn linux_skeleton_compiles_experimental_read_only_policy() {
         ]
     );
     assert_eq!(plan.process_boundary, "platform-sandbox");
-    assert_eq!(plan.network_direct_egress, "deny");
+    assert_eq!(plan.network_direct_egress, "unmanaged");
     let public_plan = plan.json().to_string();
     assert!(!public_plan.contains("bubblewrap"));
     assert!(!public_plan.contains("landlock"));
@@ -646,6 +644,7 @@ fn macos_skeleton_reports_experimental_disabled_features() {
         capabilities["sandbox_levels"]["workspace-contained"],
         "unsupported"
     );
+    assert_eq!(capabilities["network_modes"]["unmanaged"], "supported");
     assert_eq!(capabilities["network_modes"]["disabled"], "supported");
     assert_eq!(capabilities["network_modes"]["proxy"], "unsupported");
     let probes = capabilities["capability_probes"].as_array().unwrap();
@@ -701,7 +700,7 @@ fn macos_skeleton_compiles_experimental_read_only_policy() {
         ]
     );
     assert_eq!(plan.process_boundary, "platform-sandbox");
-    assert_eq!(plan.network_direct_egress, "deny");
+    assert_eq!(plan.network_direct_egress, "unmanaged");
     let public_plan = plan.json().to_string();
     assert!(!public_plan.contains("sandbox_exec"));
     assert!(!public_plan.contains("seatbelt"));
@@ -766,7 +765,7 @@ fn macos_skeleton_fails_closed_for_unsupported_sandboxed_policy() {
     assert_eq!(plan.temp_root.as_deref(), Some("temp_root"));
     assert_eq!(plan.filesystem_read, vec!["workspace".to_string()]);
     assert_eq!(plan.process_boundary, "platform-sandbox");
-    assert_eq!(plan.network_direct_egress, "deny");
+    assert_eq!(plan.network_direct_egress, "unmanaged");
     let public_plan = plan.json().to_string();
     assert!(!public_plan.contains("/workspace"));
     assert!(!public_plan.contains("sandbox_exec"));
@@ -779,7 +778,8 @@ fn windows_fail_closed_preview_includes_runtime_write_roots() -> io::Result<()> 
     let tmp = TempDir::new()?;
     let cwd = tmp.path().join("workspace");
     fs::create_dir_all(&cwd)?;
-    let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+    let policy =
+        normalize_policy(&json!("workspace-write"), &cwd, Some(NetworkMode::Proxy)).unwrap();
 
     let plan = WindowsReferenceBackend.fail_closed_plan("exec_preview", &cwd, &policy);
 
@@ -854,7 +854,8 @@ fn windows_fail_closed_preview_includes_proxy_network_guard() -> io::Result<()> 
     let tmp = TempDir::new()?;
     let cwd = tmp.path().join("workspace");
     fs::create_dir_all(&cwd)?;
-    let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+    let policy =
+        normalize_policy(&json!("workspace-write"), &cwd, Some(NetworkMode::Proxy)).unwrap();
 
     let plan = WindowsReferenceBackend.fail_closed_plan("exec_proxy", &cwd, &policy);
 
@@ -937,7 +938,8 @@ fn windows_sandbox_workspace_roots_include_runtime_roots() -> io::Result<()> {
     let tmp = TempDir::new()?;
     let cwd = tmp.path().join("workspace");
     fs::create_dir_all(&cwd)?;
-    let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+    let policy =
+        normalize_policy(&json!("workspace-write"), &cwd, Some(NetworkMode::Proxy)).unwrap();
     let plan = WindowsReferenceBackend.fail_closed_plan("exec_vendor_roots", &cwd, &policy);
 
     let roots = windows_sandbox_workspace_roots_for_plan(&cwd, &plan)?;
@@ -965,7 +967,8 @@ fn windows_sandbox_write_roots_include_runtime_roots() -> io::Result<()> {
     let tmp = TempDir::new()?;
     let cwd = tmp.path().join("workspace");
     fs::create_dir_all(&cwd)?;
-    let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+    let policy =
+        normalize_policy(&json!("workspace-write"), &cwd, Some(NetworkMode::Proxy)).unwrap();
     let plan = WindowsReferenceBackend.fail_closed_plan("exec_vendor_write_roots", &cwd, &policy);
 
     let roots = windows_sandbox_write_roots_for_plan(&plan)
@@ -1746,7 +1749,8 @@ fn sandbox_setup_rejects_incomplete_network_guard_before_runtime_tree() -> io::R
     let tmp = TempDir::new()?;
     let cwd = tmp.path().join("workspace");
     fs::create_dir_all(&cwd)?;
-    let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
+    let policy =
+        normalize_policy(&json!("workspace-write"), &cwd, Some(NetworkMode::Proxy)).unwrap();
     let mut plan =
         WindowsReferenceBackend.fail_closed_plan("exec_bad_network_guard", &cwd, &policy);
     let runtime_root = PathBuf::from(plan.runtime_root.as_ref().unwrap());

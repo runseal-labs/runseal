@@ -41,8 +41,6 @@ pub(super) fn capabilities_json_for(backend: &dyn SandboxBackend, notes: &[&'sta
             BackendFeature::RuntimeEnvironment,
             BackendFeature::ProcessIsolation,
             BackendFeature::ProcessCleanup,
-            BackendFeature::DirectNetworkDeny,
-            BackendFeature::NetworkDisabled,
         ],
     );
     let workspace_write = capability_status(
@@ -53,9 +51,6 @@ pub(super) fn capabilities_json_for(backend: &dyn SandboxBackend, notes: &[&'sta
             BackendFeature::RuntimeEnvironment,
             BackendFeature::ProcessIsolation,
             BackendFeature::ProcessCleanup,
-            BackendFeature::DirectNetworkDeny,
-            BackendFeature::NetworkProxy,
-            BackendFeature::ManagedProxy,
         ],
     );
     let network_disabled = capability_status(
@@ -123,6 +118,7 @@ pub(super) fn capabilities_json_for(backend: &dyn SandboxBackend, notes: &[&'sta
             "danger-full-access": CapabilityStatus::Supported.as_str(),
         },
         "network_modes": {
+            "unmanaged": CapabilityStatus::Supported.as_str(),
             "disabled": network_disabled,
             "proxy": network_proxy,
         },
