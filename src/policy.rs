@@ -6,6 +6,7 @@ pub const POLICY_VERSION: &str = "runseal.policy/v1";
 const MAX_ENV_ENTRIES: usize = 64;
 const MAX_ENV_KEY_BYTES: usize = 128;
 const MAX_ENV_VALUE_BYTES: usize = 4096;
+pub const PROTECTED_WORKSPACE_SUBPATHS: [&str; 4] = [".git", ".runseal", ".agents", ".codex"];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SandboxLevel {
@@ -922,7 +923,7 @@ fn infer_level(filesystem: Option<&Map<String, Value>>) -> SandboxLevel {
 }
 
 fn protected_subpaths(cwd: &Path) -> Vec<String> {
-    [".git", ".agents", ".codex"]
+    PROTECTED_WORKSPACE_SUBPATHS
         .into_iter()
         .map(|name| path_string(&cwd.join(name)))
         .collect()

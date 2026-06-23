@@ -290,7 +290,7 @@ fn extend_entries(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::policy::normalize_policy;
+    use crate::policy::{PROTECTED_WORKSPACE_SUBPATHS, normalize_policy};
     use serde_json::json;
     use std::path::PathBuf;
 
@@ -315,6 +315,10 @@ mod tests {
                         },
                         WindowsVendorFilesystemEntry {
                             path: cwd.join(".git").to_string_lossy().to_string(),
+                            access: WindowsVendorFilesystemAccess::Deny,
+                        },
+                        WindowsVendorFilesystemEntry {
+                            path: cwd.join(".runseal").to_string_lossy().to_string(),
                             access: WindowsVendorFilesystemAccess::Deny,
                         },
                         WindowsVendorFilesystemEntry {
@@ -353,7 +357,7 @@ mod tests {
         );
         assert_eq!(
             profile.deny_roots(),
-            [".git", ".agents", ".codex"]
+            PROTECTED_WORKSPACE_SUBPATHS
                 .into_iter()
                 .map(|path| cwd.join(path).to_string_lossy().to_string())
                 .collect::<Vec<_>>()
@@ -404,7 +408,7 @@ mod tests {
         let (file_system, network) = permission_profile.to_runtime_permissions();
 
         assert_eq!(network, NetworkSandboxPolicy::Enabled);
-        assert_eq!(file_system.entries.len(), 5);
+        assert_eq!(file_system.entries.len(), 6);
         assert_eq!(
             file_system
                 .entries

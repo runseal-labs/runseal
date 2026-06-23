@@ -738,7 +738,7 @@ fn workspace_contained_denies_external_read_when_supported_or_fails_closed() -> 
 
 #[test]
 fn workspace_write_protects_workspace_metadata_when_supported_or_fails_closed() -> Result<()> {
-    for protected_subpath in [".git", ".agents", ".codex"] {
+    for protected_subpath in [".git", ".runseal", ".agents", ".codex"] {
         let tmp = TempDir::new()?;
         let workspace = tmp.path().join("workspace");
         let protected_root = workspace.join(protected_subpath);

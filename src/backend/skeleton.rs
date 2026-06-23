@@ -416,7 +416,7 @@ fn macos_profile(plan: &PlatformSandboxPlan, cwd: &Path) -> io::Result<String> {
         profile.push_str("(allow network*)");
     }
     if plan.sandbox_level == SandboxLevel::WorkspaceWrite.as_str() {
-        for protected in [".git", ".agents", ".codex"] {
+        for protected in PROTECTED_WORKSPACE_SUBPATHS {
             let protected_root = cwd.join(protected);
             if protected_root.exists() {
                 profile.push_str(&format!(
@@ -463,7 +463,7 @@ fn spawn_linux_bwrap(
         bwrap_command.extend(["--bind".to_string(), root.to_string(), root.to_string()]);
     }
     if plan.sandbox_level == SandboxLevel::WorkspaceWrite.as_str() {
-        for protected in [".git", ".agents", ".codex"] {
+        for protected in PROTECTED_WORKSPACE_SUBPATHS {
             let protected_root = cwd.join(protected);
             if protected_root.exists() {
                 bwrap_command.extend([

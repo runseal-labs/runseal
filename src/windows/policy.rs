@@ -750,7 +750,7 @@ fn env_path(key: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::policy::{NetworkMode, normalize_policy};
+    use crate::policy::{NetworkMode, PROTECTED_WORKSPACE_SUBPATHS, normalize_policy};
     use serde_json::json;
     use std::path::PathBuf;
 
@@ -797,7 +797,7 @@ mod tests {
     fn workspace_write_policy_uses_writable_roots_plan() {
         let cwd = PathBuf::from("/workspace");
         let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
-        let protected_roots = [".git", ".agents", ".codex"]
+        let protected_roots = PROTECTED_WORKSPACE_SUBPATHS
             .into_iter()
             .map(|path| cwd.join(path).to_string_lossy().to_string())
             .collect::<Vec<_>>();
@@ -869,7 +869,7 @@ mod tests {
             }
         );
         assert_eq!(
-            rules[3],
+            rules[PROTECTED_WORKSPACE_SUBPATHS.len()],
             WindowsFilesystemRule {
                 access: WindowsFilesystemAccess::ReadWrite,
                 source: WindowsFilesystemRuleSource::PolicyWrite,
