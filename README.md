@@ -32,21 +32,21 @@ Capability clients should rely on `sandbox_levels`, `network_modes`, and `featur
 | `network.disabled` | supported | supported | supported |
 | `network.proxy` | supported | unsupported | unsupported |
 
-### macOS and Linux evidence
+### macOS and Linux hardening evidence
 
 Windows is the first-class reference backend. macOS and Linux entries below track
-the evidence needed for the capabilities they actually claim. `workspace-contained`
-is intentionally excluded from portable promotion.
+the extra hardening evidence for capabilities they already claim. `workspace-contained`
+is intentionally excluded from portable support.
 
-| Area | Windows reference | macOS experimental | Linux experimental | Evidence needed for promotion |
+| Area | Windows reference | macOS portable | Linux portable | Evidence tracked |
 | --- | --- | --- | --- | --- |
 | Filesystem levels | `read-only` and `workspace-write` supported; `workspace-contained` available for strict compliance | `read-only` and `workspace-write` supported; `workspace-contained` not planned | `read-only` and `workspace-write` supported; `workspace-contained` not planned | Shared filesystem conformance plus adversarial external write, parent traversal, symlink or junction traversal, protected metadata, and runtime-root cases for claimed capabilities. |
 | Network modes | `network.unmanaged`, `network.disabled`, and `network.proxy` supported | `network.unmanaged` and `network.disabled` supported; `network.proxy` unsupported | `network.unmanaged` and `network.disabled` supported; `network.proxy` unsupported | Direct pass-through behavior for `network.unmanaged`; direct socket and HTTP egress denial for `network.disabled`; managed proxy routing, environment override resistance, direct egress bypass denial, audit/event coverage, and public-safe fail-closed output for `network.proxy`. |
-| Setup/readiness | Windows setup readiness supported | No platform setup; reports unsupported Windows setup without blocking portable experimental paths | No platform setup; reports unsupported Windows setup without blocking portable experimental paths | Platform-specific setup contract, structured `getSetupStatus`, setup failure audit/events, and fail-closed behavior when setup is unavailable. |
+| Setup/readiness | Windows setup readiness supported | No platform setup; reports unsupported Windows setup without blocking portable enforcement paths | No platform setup; reports unsupported Windows setup without blocking portable enforcement paths | Platform-specific setup contract, structured `getSetupStatus`, setup failure audit/events, and fail-closed behavior when setup is unavailable. |
 | Runtime roots and synthetic home | Supported | Experimental | Experimental | Runtime root creation, environment redirect, cleanup, marker spoofing, symlink replacement, partial setup failure, and cross-execution contamination conformance. |
 | Process cleanup | Supported | Experimental | Experimental | Timeout, cancellation, child process, shell trampoline, nested process tree, and helper reuse conformance without terminating unrelated processes. |
-| Audit/events | Supported | Supported for current experimental paths | Supported for current experimental paths | Matching execution, denial, setup failure, and network decision events with JSONL audit records that do not expose backend-private details. |
-| Adversarial conformance | Required for reference readiness | Required before promoting experimental claims | Required before promoting experimental claims | RFC-0016 manifest cases must pass with public-safe results for the capability being promoted; unsupported gaps must stay explicit and fail closed. |
+| Audit/events | Supported | Supported for current portable paths | Supported for current portable paths | Matching execution, denial, setup failure, and network decision events with JSONL audit records that do not expose backend-private details. |
+| Adversarial conformance | Required for reference readiness | Tracked for supported portable claims | Tracked for supported portable claims | RFC-0016 manifest cases must pass with public-safe results for the claimed capability; unsupported gaps must stay explicit and fail closed. |
 
 The protocol and policy version strings are `runseal.protocol/v1` and `runseal.policy/v1`. The Rust package version remains pre-`1.0`; breaking changes to provisional CLI flags, JSON fields, and audit shapes may still land when the RFCs change.
 
@@ -241,7 +241,7 @@ On Linux or macOS, run the portable probe smoke after building `runseal`:
 python3 scripts/portable-probe-smoke.py
 ```
 
-The portable smoke checks diagnostic capability probes, experimental portable enforcement where available, and structured fail-closed behavior for unsupported sandboxed policies. It does not promote portable capabilities to supported.
+The portable smoke checks diagnostic capability probes, supported portable enforcement, and structured fail-closed behavior for unsupported sandboxed policies.
 
 Windows reference-backend readiness requires the smoke check plus the Rust checks above to pass on a Windows host.
 

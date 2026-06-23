@@ -25,9 +25,9 @@
     <main id="top">
       <section class="hero">
         <div class="hero-copy">
-          <p class="eyebrow">Technical preview 0.1.4</p>
+          <p class="eyebrow">Technical preview</p>
           <h1>RunSeal Docs</h1>
-          <p class="lede">OS-native sandboxing for local AI agent execution, with Windows as the complete first-class backend and partial experimental macOS/Linux enforcement still catching up.</p>
+          <p class="lede">OS-native sandboxing for local AI agent execution, with Windows as the complete first-class backend and portable macOS/Linux write and network-deny boundaries.</p>
           <div class="actions">
             <a href="https://github.com/runseal-labs/runseal/releases/latest">Download release</a>
             <a href="#quickstart">Start setup</a>
@@ -42,8 +42,8 @@
           <p>Run local commands inside policy-governed filesystem, process, resource, and network boundaries without a Docker daemon or cloud VM control plane.</p>
         </article>
         <article>
-          <h2>Reference backend</h2>
-          <p>Windows is the complete first-class path for sandboxed policies, setup readiness, runtime roots, process cleanup, filesystem enforcement, and network guards.</p>
+          <h2>Platform coverage</h2>
+          <p>Windows is the complete first-class path; macOS and Linux support portable <code>read-only</code>, <code>workspace-write</code>, and <code>network.disabled</code> execution.</p>
         </article>
         <article>
           <h2>Integration surfaces</h2>
@@ -105,27 +105,27 @@
               </table>
             </div>
             <p class="note">macOS and Linux support <code>read-only</code> and <code>workspace-write</code> with <code>network.disabled</code>. Current portable paths enforce write and network boundaries, not workspace containment; host files may remain readable by design so endpoint agents keep practical host-side tool and desktop integration.</p>
-            <h3>macOS and Linux evidence</h3>
-            <p>Windows remains the reference backend. macOS and Linux should only move claimed capabilities toward <code>supported</code> after the matching conformance evidence passes on that platform. <code>workspace-contained</code> is intentionally excluded from portable promotion.</p>
+            <h3>macOS and Linux hardening evidence</h3>
+            <p>Windows remains the reference backend. macOS and Linux track extra hardening evidence for the portable capabilities they already claim. <code>workspace-contained</code> is intentionally excluded from portable support.</p>
             <div class="table-wrap">
               <table>
                 <thead>
                   <tr>
                     <th>Area</th>
                     <th>Windows reference</th>
-                    <th>macOS experimental</th>
-                    <th>Linux experimental</th>
-                    <th>Evidence needed for promotion</th>
+                    <th>macOS portable</th>
+                    <th>Linux portable</th>
+                    <th>Evidence tracked</th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr><td>Filesystem levels</td><td><code>read-only</code> and <code>workspace-write</code> supported; <code>workspace-contained</code> available for strict compliance</td><td><code>read-only</code> and <code>workspace-write</code> supported; <code>workspace-contained</code> not planned</td><td><code>read-only</code> and <code>workspace-write</code> supported; <code>workspace-contained</code> not planned</td><td>Shared filesystem conformance plus adversarial external write, parent traversal, symlink or junction traversal, protected metadata, and runtime-root cases for claimed capabilities.</td></tr>
                   <tr><td>Network modes</td><td><code>network.disabled</code> and <code>network.proxy</code> supported</td><td><code>network.disabled</code> supported; <code>network.proxy</code> unsupported</td><td><code>network.disabled</code> supported; <code>network.proxy</code> unsupported</td><td>Direct socket and HTTP egress denial for <code>network.disabled</code>; managed proxy routing, environment override resistance, direct egress bypass denial, audit/event coverage, and public-safe fail-closed output for <code>network.proxy</code>.</td></tr>
-                  <tr><td>Setup/readiness</td><td>Windows setup readiness supported</td><td>No platform setup; reports unsupported Windows setup without blocking portable experimental paths</td><td>No platform setup; reports unsupported Windows setup without blocking portable experimental paths</td><td>Platform-specific setup contract, structured <code>getSetupStatus</code>, setup failure audit/events, and fail-closed behavior when setup is unavailable.</td></tr>
+                  <tr><td>Setup/readiness</td><td>Windows setup readiness supported</td><td>No platform setup; reports unsupported Windows setup without blocking portable enforcement paths</td><td>No platform setup; reports unsupported Windows setup without blocking portable enforcement paths</td><td>Platform-specific setup contract, structured <code>getSetupStatus</code>, setup failure audit/events, and fail-closed behavior when setup is unavailable.</td></tr>
                   <tr><td>Runtime roots and synthetic home</td><td>Supported</td><td>Experimental</td><td>Experimental</td><td>Runtime root creation, environment redirect, cleanup, marker spoofing, symlink replacement, partial setup failure, and cross-execution contamination conformance.</td></tr>
                   <tr><td>Process cleanup</td><td>Supported</td><td>Experimental</td><td>Experimental</td><td>Timeout, cancellation, child process, shell trampoline, nested process tree, and helper reuse conformance without terminating unrelated processes.</td></tr>
-                  <tr><td>Audit/events</td><td>Supported</td><td>Supported for current experimental paths</td><td>Supported for current experimental paths</td><td>Matching execution, denial, setup failure, and network decision events with JSONL audit records that do not expose backend-private details.</td></tr>
-                  <tr><td>Adversarial conformance</td><td>Required for reference readiness</td><td>Required before promoting experimental claims</td><td>Required before promoting experimental claims</td><td>RFC-0016 manifest cases must pass with public-safe results for the capability being promoted; unsupported gaps must stay explicit and fail closed.</td></tr>
+                  <tr><td>Audit/events</td><td>Supported</td><td>Supported for current portable paths</td><td>Supported for current portable paths</td><td>Matching execution, denial, setup failure, and network decision events with JSONL audit records that do not expose backend-private details.</td></tr>
+                  <tr><td>Adversarial conformance</td><td>Required for reference readiness</td><td>Tracked for supported portable claims</td><td>Tracked for supported portable claims</td><td>RFC-0016 manifest cases must pass with public-safe results for the claimed capability; unsupported gaps must stay explicit and fail closed.</td></tr>
                 </tbody>
               </table>
             </div>
@@ -218,8 +218,8 @@ cargo test</code></pre>
             <p class="section-label">Distribution</p>
             <h2>Release packaging</h2>
             <p>Pushing a <code>v*</code> tag runs <code>.github/workflows/release.yml</code>, builds native release archives, and publishes SHA-256 checksum files, <code>SHA256SUMS</code>, and a CycloneDX SBOM. Dispatch the same workflow with a tag input to rebuild assets for an existing release.</p>
-            <pre><code>sha256sum -c runseal-v0.1.4-linux-x86_64.tar.gz.sha256
-gh attestation verify runseal-v0.1.4-linux-x86_64.tar.gz --repo runseal-labs/runseal</code></pre>
+            <pre><code>sha256sum -c runseal-vX.Y.Z-linux-x86_64.tar.gz.sha256
+gh attestation verify runseal-vX.Y.Z-linux-x86_64.tar.gz --repo runseal-labs/runseal</code></pre>
             <p><a href="https://github.com/runseal-labs/runseal/releases/latest">Open the latest release</a></p>
           </section>
 
