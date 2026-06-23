@@ -834,15 +834,19 @@ fn runtime_environment_roots_are_per_execution_when_supported_or_fails_closed() 
         "TMP",
     ];
     let writer_code = format!(
-        "import os, pathlib\n\
-keys = {env_keys:?}\n\
-roots = [os.environ[key] for key in keys if key in os.environ]\n\
-if 'HOMEDRIVE' in os.environ and 'HOMEPATH' in os.environ:\n\
-    roots.append(os.environ['HOMEDRIVE'] + os.environ['HOMEPATH'])\n\
-for root in roots:\n\
-    path = pathlib.Path(root) / {marker:?}\n\
-    path.parent.mkdir(parents=True, exist_ok=True)\n\
-    path.write_text(root, encoding='utf-8')"
+        concat!(
+            "import os, pathlib\n",
+            "keys = {env_keys:?}\n",
+            "roots = [os.environ[key] for key in keys if key in os.environ]\n",
+            "if 'HOMEDRIVE' in os.environ and 'HOMEPATH' in os.environ:\n",
+            "    roots.append(os.environ['HOMEDRIVE'] + os.environ['HOMEPATH'])\n",
+            "for root in roots:\n",
+            "    path = pathlib.Path(root) / {marker:?}\n",
+            "    path.parent.mkdir(parents=True, exist_ok=True)\n",
+            "    path.write_text(root, encoding='utf-8')",
+        ),
+        env_keys = env_keys,
+        marker = marker
     );
     let ps_writer = format!(
         "$keys = @({}); \
@@ -877,13 +881,17 @@ for root in roots:\n\
     assert_eq!(first["result"]["exit_code"], 0);
 
     let reader_code = format!(
-        "import json, os, pathlib\n\
-keys = {env_keys:?}\n\
-roots = [(key, os.environ[key]) for key in keys if key in os.environ]\n\
-if 'HOMEDRIVE' in os.environ and 'HOMEPATH' in os.environ:\n\
-    roots.append(('HOMEDRIVE+HOMEPATH', os.environ['HOMEDRIVE'] + os.environ['HOMEPATH']))\n\
-leaked = [key for key, root in roots if (pathlib.Path(root) / {marker:?}).exists()]\n\
-print(json.dumps(leaked))"
+        concat!(
+            "import json, os, pathlib\n",
+            "keys = {env_keys:?}\n",
+            "roots = [(key, os.environ[key]) for key in keys if key in os.environ]\n",
+            "if 'HOMEDRIVE' in os.environ and 'HOMEPATH' in os.environ:\n",
+            "    roots.append(('HOMEDRIVE+HOMEPATH', os.environ['HOMEDRIVE'] + os.environ['HOMEPATH']))\n",
+            "leaked = [key for key, root in roots if (pathlib.Path(root) / {marker:?}).exists()]\n",
+            "print(json.dumps(leaked))",
+        ),
+        env_keys = env_keys,
+        marker = marker
     );
     let ps_reader = format!(
         "$keys = @({}); \
