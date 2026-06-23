@@ -835,14 +835,14 @@ fn runtime_environment_roots_are_per_execution_when_supported_or_fails_closed() 
     ];
     let writer_code = format!(
         "import os, pathlib\n\
-         keys = {env_keys:?}\n\
-         roots = [os.environ[key] for key in keys if key in os.environ]\n\
-         if 'HOMEDRIVE' in os.environ and 'HOMEPATH' in os.environ:\n\
-             roots.append(os.environ['HOMEDRIVE'] + os.environ['HOMEPATH'])\n\
-         for root in roots:\n\
-             path = pathlib.Path(root) / {marker:?}\n\
-             path.parent.mkdir(parents=True, exist_ok=True)\n\
-             path.write_text(root, encoding='utf-8')"
+keys = {env_keys:?}\n\
+roots = [os.environ[key] for key in keys if key in os.environ]\n\
+if 'HOMEDRIVE' in os.environ and 'HOMEPATH' in os.environ:\n\
+    roots.append(os.environ['HOMEDRIVE'] + os.environ['HOMEPATH'])\n\
+for root in roots:\n\
+    path = pathlib.Path(root) / {marker:?}\n\
+    path.parent.mkdir(parents=True, exist_ok=True)\n\
+    path.write_text(root, encoding='utf-8')"
     );
     let ps_writer = format!(
         "$keys = @({}); \
@@ -878,12 +878,12 @@ fn runtime_environment_roots_are_per_execution_when_supported_or_fails_closed() 
 
     let reader_code = format!(
         "import json, os, pathlib\n\
-         keys = {env_keys:?}\n\
-         roots = [(key, os.environ[key]) for key in keys if key in os.environ]\n\
-         if 'HOMEDRIVE' in os.environ and 'HOMEPATH' in os.environ:\n\
-             roots.append(('HOMEDRIVE+HOMEPATH', os.environ['HOMEDRIVE'] + os.environ['HOMEPATH']))\n\
-         leaked = [key for key, root in roots if (pathlib.Path(root) / {marker:?}).exists()]\n\
-         print(json.dumps(leaked))"
+keys = {env_keys:?}\n\
+roots = [(key, os.environ[key]) for key in keys if key in os.environ]\n\
+if 'HOMEDRIVE' in os.environ and 'HOMEPATH' in os.environ:\n\
+    roots.append(('HOMEDRIVE+HOMEPATH', os.environ['HOMEDRIVE'] + os.environ['HOMEPATH']))\n\
+leaked = [key for key, root in roots if (pathlib.Path(root) / {marker:?}).exists()]\n\
+print(json.dumps(leaked))"
     );
     let ps_reader = format!(
         "$keys = @({}); \
