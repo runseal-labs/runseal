@@ -318,7 +318,14 @@ mod tests {
                             access: WindowsVendorFilesystemAccess::Deny,
                         },
                         WindowsVendorFilesystemEntry {
-                            path: cwd.join(".runseal").to_string_lossy().to_string(),
+                            path: cwd.join(".runseal/audit").to_string_lossy().to_string(),
+                            access: WindowsVendorFilesystemAccess::Deny,
+                        },
+                        WindowsVendorFilesystemEntry {
+                            path: cwd
+                                .join(".runseal/audit.jsonl")
+                                .to_string_lossy()
+                                .to_string(),
                             access: WindowsVendorFilesystemAccess::Deny,
                         },
                         WindowsVendorFilesystemEntry {
@@ -408,7 +415,7 @@ mod tests {
         let (file_system, network) = permission_profile.to_runtime_permissions();
 
         assert_eq!(network, NetworkSandboxPolicy::Enabled);
-        assert_eq!(file_system.entries.len(), 6);
+        assert_eq!(file_system.entries.len(), 7);
         assert_eq!(
             file_system
                 .entries

@@ -6,7 +6,13 @@ pub const POLICY_VERSION: &str = "runseal.policy/v1";
 const MAX_ENV_ENTRIES: usize = 64;
 const MAX_ENV_KEY_BYTES: usize = 128;
 const MAX_ENV_VALUE_BYTES: usize = 4096;
-pub const PROTECTED_WORKSPACE_SUBPATHS: [&str; 4] = [".git", ".runseal", ".agents", ".codex"];
+pub const PROTECTED_WORKSPACE_SUBPATHS: [&str; 5] = [
+    ".git",
+    ".runseal/audit",
+    ".runseal/audit.jsonl",
+    ".agents",
+    ".codex",
+];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SandboxLevel {
