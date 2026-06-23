@@ -104,7 +104,7 @@
                 </tbody>
               </table>
             </div>
-            <p class="note">macOS and Linux support <code>read-only</code> and <code>workspace-write</code> with <code>network.disabled</code>. Current portable paths enforce write and network boundaries, not workspace containment; host files may remain readable by design so endpoint agents keep practical host-side tool and desktop integration.</p>
+            <p class="note">macOS and Linux support <code>read-only</code> and <code>workspace-write</code> with <code>network.disabled</code>. Current portable paths enforce write and network boundaries, not workspace containment; host files may remain readable by design so endpoint agents keep practical host-side tool and desktop integration. Backend status and low-level feature statuses remain <code>experimental</code>; clients should key decisions off the public sandbox level and network mode statuses.</p>
             <h3>macOS and Linux hardening evidence</h3>
             <p>Windows remains the reference backend. macOS and Linux track extra hardening evidence for the portable capabilities they already claim. <code>workspace-contained</code> is intentionally excluded from portable support.</p>
             <div class="table-wrap">

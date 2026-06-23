@@ -20,7 +20,7 @@ Windows 上，沙箱请求会产生一个 `PlatformSandboxPlan`，涵盖 runtime
 
 macOS 和 Linux 上，RunSeal 支持 `read-only` 和 `workspace-write`，默认网络语义是 unmanaged 直通，其他 sandbox level 仍为 unsupported。这些 portable 路径只强制写边界，不包含 workspace containment；host 文件可能可读是有意的产品取舍。需要拒绝网络时可以显式请求 `network.disabled`；portable `network.proxy` 仍为 unsupported。
 
-客户端应优先使用 `sandbox_levels`、`network_modes` 和 `feature_statuses` 做状态判断。旧的 `features` 布尔值只是粗粒度的存在标记；portable capability probe 仅用于诊断，不会提升 unsupported capability。
+macOS 和 Linux 的 backend status 以及底层 feature status 仍为 `experimental`；下面的 `supported` 只针对当前 portable enforcement paths 已执行的公开 sandbox level 和 network mode。客户端应优先使用 `sandbox_levels`、`network_modes` 和 `feature_statuses` 做状态判断。旧的 `features` 布尔值只是粗粒度的存在标记；portable capability probe 仅用于诊断，不会提升 unsupported capability。
 
 | Capability | Windows | macOS | Linux |
 | --- | --- | --- | --- |

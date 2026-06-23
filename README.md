@@ -20,7 +20,7 @@ Low-level OS enforcement lives in a dedicated Windows sandbox implementation. Ru
 
 On macOS and Linux, RunSeal supports `read-only` and `workspace-write` with default unmanaged networking while leaving other sandbox levels unsupported. These portable paths enforce write boundaries, not workspace containment; host files may remain readable by design. `network.disabled` is available when callers explicitly want network denial. Portable `network.proxy` remains unsupported.
 
-Capability clients should rely on `sandbox_levels`, `network_modes`, and `feature_statuses` for status decisions. The legacy `features` booleans are coarse presence flags; portable capability probes are diagnostic only and do not promote unsupported capabilities.
+The macOS and Linux backend status and low-level feature statuses remain `experimental`; the `supported` claims below apply to the public sandbox levels and network modes that execute through the current portable enforcement paths. Capability clients should rely on `sandbox_levels`, `network_modes`, and `feature_statuses` for status decisions. The legacy `features` booleans are coarse presence flags; portable capability probes are diagnostic only and do not promote unsupported capabilities.
 
 | Capability | Windows | macOS | Linux |
 | --- | --- | --- | --- |

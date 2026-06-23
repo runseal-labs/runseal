@@ -65,8 +65,10 @@ def assert_probes(payload: dict, system: str) -> None:
     if mechanisms != PROBES[system]:
         raise SystemExit(f"unexpected probe mechanisms: {mechanisms}")
     for probe in probes:
-        if probe.get("status") != "unsupported" or probe.get("diagnostic_only") is not True:
-            raise SystemExit(f"probe is not diagnostic-only unsupported: {probe}")
+        if probe.get("status") not in {"experimental", "unavailable", "unsupported"}:
+            raise SystemExit(f"unexpected diagnostic probe status: {probe}")
+        if probe.get("diagnostic_only") is not True:
+            raise SystemExit(f"probe is not diagnostic-only: {probe}")
         if not isinstance(probe.get("available"), bool):
             raise SystemExit(f"probe availability must be boolean: {probe}")
         if (
@@ -119,14 +121,14 @@ def assert_network_disabled_blocks_direct_egress(system: str, command: str) -> N
 def assert_linux_read_only(payload: dict) -> None:
     if payload.get("backend_status") != "experimental":
         raise SystemExit(f"unexpected Linux backend status: {payload}")
-    if payload.get("sandbox_levels", {}).get("read-only") != "experimental":
-        raise SystemExit(f"Linux read-only must be experimental: {payload}")
-    if payload.get("network_modes", {}).get("disabled") != "experimental":
-        raise SystemExit(f"Linux network.disabled must be experimental: {payload}")
-    if payload.get("sandbox_levels", {}).get("workspace-write") != "experimental":
-        raise SystemExit(f"Linux workspace-write must be experimental: {payload}")
-    if payload.get("sandbox_levels", {}).get("workspace-contained") != "experimental":
-        raise SystemExit(f"Linux workspace-contained must be experimental: {payload}")
+    if payload.get("sandbox_levels", {}).get("read-only") != "supported":
+        raise SystemExit(f"Linux read-only must be supported: {payload}")
+    if payload.get("network_modes", {}).get("disabled") != "supported":
+        raise SystemExit(f"Linux network.disabled must be supported: {payload}")
+    if payload.get("sandbox_levels", {}).get("workspace-write") != "supported":
+        raise SystemExit(f"Linux workspace-write must be supported: {payload}")
+    if payload.get("sandbox_levels", {}).get("workspace-contained") != "unsupported":
+        raise SystemExit(f"Linux workspace-contained must be unsupported: {payload}")
 
     target = "read-only-write.txt"
     command = shutil.which("python3") or shutil.which("python") or sys.executable
@@ -154,7 +156,7 @@ def assert_linux_read_only(payload: dict) -> None:
                 raise SystemExit(f"Linux read-only did not block workspace write: {result}")
             assert_linux_workspace_write(command)
             assert_network_disabled_blocks_direct_egress("Linux", command)
-            assert_linux_proxy_fail_closed(command)
+            assert_portable_proxy_fail_closed("Linux", command)
         elif result.get("error", {}).get("data", {}).get("code") != "BACKEND_UNAVAILABLE":
             raise SystemExit(f"expected Linux backend unavailable without bubblewrap: {result}")
 
@@ -207,60 +209,11 @@ def assert_linux_workspace_write(command: str) -> None:
             )
             if result.get("exit_code") == 0 or target.exists():
                 raise SystemExit(f"Linux workspace-write did not block write to {target}: {result}")
-        assert_linux_workspace_contained(command)
+        assert_portable_workspace_contained_fail_closed("Linux", command)
 
 
-def assert_linux_workspace_contained(command: str) -> None:
-    with tempfile.TemporaryDirectory(prefix="runseal-linux-workspace-contained-") as cwd:
-        workspace = Path(cwd)
-        inside = workspace / "inside.txt"
-        outside = workspace.parent / "runseal-contained-outside-read.txt"
-        inside.write_text("inside")
-        outside.write_text("outside")
-        _, result = run_json(
-            [
-                "exec",
-                "--json",
-                "--policy",
-                "workspace-contained",
-                "--network",
-                "disabled",
-                "--cwd",
-                cwd,
-                "--",
-                command,
-                "-c",
-                f"from pathlib import Path; Path({str(inside)!r}).read_text(); Path({str(workspace / 'write.txt')!r}).write_text('ok')",
-            ],
-            expect_success=True,
-        )
-        if result.get("platform_plan", {}).get("enforcement") != "linux-experimental":
-            raise SystemExit(f"unexpected Linux workspace-contained plan: {result}")
-        if result.get("exit_code") != 0:
-            raise SystemExit(f"Linux workspace-contained did not allow workspace access: {result}")
-        _, result = run_json(
-            [
-                "exec",
-                "--json",
-                "--policy",
-                "workspace-contained",
-                "--network",
-                "disabled",
-                "--cwd",
-                cwd,
-                "--",
-                command,
-                "-c",
-                f"from pathlib import Path; Path({str(outside)!r}).read_text()",
-            ],
-            expect_success=True,
-        )
-        if result.get("exit_code") == 0:
-            raise SystemExit(f"Linux workspace-contained did not block external read: {result}")
-
-
-def assert_linux_proxy_fail_closed(command: str) -> None:
-    with tempfile.TemporaryDirectory(prefix="runseal-linux-proxy-") as cwd:
+def assert_portable_proxy_fail_closed(system: str, command: str) -> None:
+    with tempfile.TemporaryDirectory(prefix="runseal-portable-proxy-") as cwd:
         _, payload = run_json(
             [
                 "exec",
@@ -280,32 +233,34 @@ def assert_linux_proxy_fail_closed(command: str) -> None:
         )
     data = payload["error"]["data"]
     if data.get("code") != "BACKEND_CAPABILITY_MISSING" or data.get("support") != "unsupported":
-        raise SystemExit(f"unexpected Linux proxy fail-closed error: {data}")
+        raise SystemExit(f"unexpected portable proxy fail-closed error: {data}")
+    expected_backend = {
+        "Darwin": ("runseal-macos-experimental", "experimental", "macos"),
+        "Linux": ("runseal-linux-community", "experimental", "linux"),
+    }[system]
     backend = data.get("backend", {})
-    if (
-        backend.get("name"),
-        backend.get("status"),
-        backend.get("platform"),
-    ) != ("runseal-linux-community", "experimental", "linux"):
-        raise SystemExit(f"unexpected Linux backend details: {backend}")
+    if (backend.get("name"), backend.get("status"), backend.get("platform")) != expected_backend:
+        raise SystemExit(f"unexpected portable backend details: {backend}")
     missing = data.get("missing_features", [])
     for feature in ["network_proxy", "managed_proxy"]:
         if feature not in missing:
-            raise SystemExit(f"Linux proxy fail-closed missing feature {feature}: {data}")
+            raise SystemExit(f"portable proxy fail-closed missing feature {feature}: {data}")
     plan = data.get("platform_plan", {})
     if plan.get("cwd") != "workspace" or plan.get("runtime_root") != "runtime_root":
-        raise SystemExit(f"Linux proxy fail-closed preview is not public-safe: {plan}")
+        raise SystemExit(f"portable proxy fail-closed preview is not public-safe: {plan}")
 
 
 def assert_macos_read_only(payload: dict) -> None:
     if payload.get("backend_status") != "experimental":
         raise SystemExit(f"unexpected macOS backend status: {payload}")
-    if payload.get("sandbox_levels", {}).get("read-only") != "experimental":
-        raise SystemExit(f"macOS read-only must be experimental: {payload}")
-    if payload.get("sandbox_levels", {}).get("workspace-write") != "experimental":
-        raise SystemExit(f"macOS workspace-write must be experimental: {payload}")
-    if payload.get("network_modes", {}).get("disabled") != "experimental":
-        raise SystemExit(f"macOS network.disabled must be experimental: {payload}")
+    if payload.get("sandbox_levels", {}).get("read-only") != "supported":
+        raise SystemExit(f"macOS read-only must be supported: {payload}")
+    if payload.get("sandbox_levels", {}).get("workspace-write") != "supported":
+        raise SystemExit(f"macOS workspace-write must be supported: {payload}")
+    if payload.get("sandbox_levels", {}).get("workspace-contained") != "unsupported":
+        raise SystemExit(f"macOS workspace-contained must be unsupported: {payload}")
+    if payload.get("network_modes", {}).get("disabled") != "supported":
+        raise SystemExit(f"macOS network.disabled must be supported: {payload}")
 
     command = shutil.which("python3") or shutil.which("python") or sys.executable
     with tempfile.TemporaryDirectory(prefix="runseal-macos-read-only-") as cwd:
@@ -332,7 +287,7 @@ def assert_macos_read_only(payload: dict) -> None:
         assert_macos_workspace_write(command)
         assert_network_disabled_blocks_direct_egress("Darwin", command)
         assert_portable_workspace_contained_fail_closed("Darwin", command)
-        assert_fail_closed("Darwin")
+        assert_portable_proxy_fail_closed("Darwin", command)
 
 
 def assert_macos_workspace_write(command: str) -> None:
@@ -417,38 +372,6 @@ def assert_portable_workspace_contained_fail_closed(system: str, command: str) -
     plan = data.get("platform_plan", {})
     if plan.get("cwd") != "workspace" or plan.get("runtime_root") != "runtime_root":
         raise SystemExit(f"workspace-contained preview is not public-safe: {plan}")
-
-
-def assert_fail_closed(system: str) -> None:
-    command = shutil.which("python3") or shutil.which("python") or sys.executable
-    with tempfile.TemporaryDirectory(prefix="runseal-portable-probe-") as cwd:
-        _, payload = run_json(
-            [
-                "exec",
-                "--json",
-                "--policy",
-                "workspace-write" if system == "Darwin" else "read-only",
-                "--cwd",
-                cwd,
-                "--",
-                command,
-                "-c",
-                "print('must not run')",
-            ],
-            expect_success=False,
-        )
-    data = payload["error"]["data"]
-    expected_backend = {
-        "Darwin": ("runseal-macos-experimental", "experimental", "macos"),
-    }[system]
-    if data.get("code") != "BACKEND_CAPABILITY_MISSING" or data.get("support") != "unsupported":
-        raise SystemExit(f"unexpected fail-closed error: {data}")
-    backend = data.get("backend", {})
-    if (backend.get("name"), backend.get("status"), backend.get("platform")) != expected_backend:
-        raise SystemExit(f"unexpected backend details: {backend}")
-    plan = data.get("platform_plan", {})
-    if plan.get("cwd") != "workspace" or plan.get("runtime_root") != "runtime_root":
-        raise SystemExit(f"portable fail-closed preview is not public-safe: {plan}")
 
 
 def main() -> None:
