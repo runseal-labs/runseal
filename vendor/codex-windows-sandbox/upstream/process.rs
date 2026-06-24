@@ -153,7 +153,7 @@ pub unsafe fn create_process_as_user(
                     creation_flags,
                 );
                 logging::debug_log(&msg, logs_base_dir);
-                return Err(anyhow!("CreateProcessAsUserW failed: {err}"));
+                return Err(anyhow!(msg));
             }
             Ok(CreatedProcess {
                 process_info: pi,
@@ -196,7 +196,7 @@ pub unsafe fn create_process_as_user(
                     creation_flags,
                 );
                 logging::debug_log(&msg, logs_base_dir);
-                return Err(anyhow!("CreateProcessAsUserW failed: {err}"));
+                return Err(anyhow!(msg));
             }
             Ok(CreatedProcess {
                 process_info: pi,

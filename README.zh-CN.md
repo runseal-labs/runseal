@@ -218,6 +218,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows-smoke.ps1
 ```
 
 从 elevated shell 运行；如果要验证文档化的交互式 UAC bootstrap 路径，添加 `-AllowElevation`。
+该 smoke 也会检查 Windows helper binaries 是否齐全，并确认最终 sandbox runner token 能在允许的 workspace root 内创建和写入文件。
 
 Linux 或 macOS 上，构建 `runseal` 后运行 portable probe smoke：
 

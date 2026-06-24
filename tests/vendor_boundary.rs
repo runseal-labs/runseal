@@ -41,6 +41,7 @@ const WINDOWS_SANDBOX_SETUP_MAIN: &str =
     include_str!("../vendor/codex-windows-sandbox/upstream/bin/setup_main/main.rs");
 const WINDOWS_SANDBOX_RUNNER_MAIN: &str =
     include_str!("../vendor/codex-windows-sandbox/upstream/bin/command_runner/main.rs");
+const RELEASE_WORKFLOW: &str = include_str!("../.github/workflows/release.yml");
 
 const VENDOR_TIMEOUT_SOURCES: &[(&str, &str)] = &[
     (
@@ -200,6 +201,38 @@ fn vendored_windows_runner_suppresses_startup_feedback() {
 
     assert!(runner_client.contains("STARTF_FORCEOFFFEEDBACK"));
     assert!(runner_client.contains("si.dwFlags = STARTF_FORCEOFFFEEDBACK"));
+}
+
+#[test]
+fn vendored_windows_process_spawn_errors_include_context() {
+    let process = VENDOR_SETUP_SOURCES
+        .iter()
+        .find_map(|(name, source)| (*name == "process.rs").then_some(*source))
+        .expect("process.rs must be included");
+
+    assert!(process.contains("CreateProcessAsUserW failed: {} ({}) | cwd={} | cmd={}"));
+    assert!(process.contains("return Err(anyhow!(msg));"));
+    assert!(!process.contains("return Err(anyhow!(\"CreateProcessAsUserW failed: {err}\"));"));
+}
+
+#[test]
+fn release_windows_archives_include_runner_helpers() {
+    let package_step = RELEASE_WORKFLOW
+        .split_once("Package Windows release artifacts")
+        .and_then(|(_, tail)| tail.split_once("Build Unix release artifact"))
+        .map(|(step, _)| step)
+        .expect("Windows release packaging step must be present");
+
+    for required in [
+        "target\\release\\runseal.exe",
+        "target\\release\\runseal-windows-sandbox-setup.exe",
+        "target\\release\\runseal-command-runner.exe",
+    ] {
+        assert!(
+            package_step.contains(required),
+            "Windows release archive must include {required}"
+        );
+    }
 }
 
 #[test]

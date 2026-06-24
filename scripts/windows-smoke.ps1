@@ -81,6 +81,16 @@ $stderr
     }
 }
 
+function Assert-BuiltWindowsBinaries {
+    $targetDir = Split-Path -Parent $bin
+    foreach ($name in @("runseal.exe", "runseal-windows-sandbox-setup.exe", "runseal-command-runner.exe")) {
+        $path = Join-Path $targetDir $name
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            throw "missing Windows helper binary: $path"
+        }
+    }
+}
+
 function Assert-SetupReady {
     param([object]$Payload)
 
@@ -162,6 +172,7 @@ Push-Location $repoRoot
 try {
     Write-Host "Building Windows binaries"
     & (Join-Path $PSScriptRoot "build-windows.ps1")
+    Assert-BuiltWindowsBinaries
     Write-Host "Using runseal binary: $bin"
     New-Item -ItemType Directory -Path $workspace -Force | Out-Null
 
@@ -249,6 +260,23 @@ try {
     ) -TimeoutSeconds 10).Json
     if ($identity.exit_code -ne 0 -or $identity.stdout -notmatch "runsealsandbox") {
         throw "sandbox identity smoke failed: $($identity.stderr)"
+    }
+
+    Write-Host "Checking sandbox runner can write allowed workspace root"
+    $writeProbePath = Join-Path $workspace "runner-token-write.txt"
+    Remove-Item -LiteralPath $writeProbePath -Force -ErrorAction SilentlyContinue
+    $writeProbe = (Invoke-RunSealJson -RunArgs @(
+        "exec", "--json", "--policy", "workspace-write", "--network", "disabled", "--cwd", $workspace, "--timeout-ms", "5000", "--",
+        "cmd", "/C", "echo runseal-write-ok>runner-token-write.txt"
+    ) -TimeoutSeconds 10).Json
+    if ($writeProbe.exit_code -ne 0) {
+        throw "sandbox write probe failed: $($writeProbe.stderr)"
+    }
+    if (-not (Test-Path -LiteralPath $writeProbePath -PathType Leaf)) {
+        throw "sandbox write probe did not create file in workspace"
+    }
+    if (((Get-Content -LiteralPath $writeProbePath -Raw).Trim()) -ne "runseal-write-ok") {
+        throw "sandbox write probe wrote unexpected file content"
     }
 
     Write-Host "Checking execution timeout"

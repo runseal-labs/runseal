@@ -236,6 +236,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows-smoke.ps1
 ```
 
 Run it from an elevated shell, or add `-AllowElevation` when validating the documented interactive UAC bootstrap path.
+The smoke also checks that the Windows helper binaries are present and that the final sandbox runner token can create and write inside the allowed workspace root.
 
 On Linux or macOS, run the portable probe smoke after building `runseal`:
 
