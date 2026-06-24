@@ -196,6 +196,7 @@ runseal version</code></pre>
               <li>Call <code>getVersion</code> and <code>getCapabilities</code> before sandboxed execution.</li>
               <li>Gate requested sandbox levels and network modes on capability statuses.</li>
               <li>Fail closed when a capability is unsupported or setup is unavailable.</li>
+              <li>Treat the canonical policy plus workspace path as the policy epoch. Same-epoch executions may run concurrently; boundary-changing different-epoch requests must return <code>POLICY_TRANSITION_BUSY</code> unless they use isolated sandbox workers, identities, and setup state.</li>
               <li>Use <code>runseal service --stdio</code> when one process should own completed execution state.</li>
               <li>Use conformance tests with <code>RUNSEAL_BIN=/path/to/runseal</code> for candidate implementations.</li>
             </ol>
