@@ -155,6 +155,8 @@ pub use cap::workspace_write_root_overlaps_path;
 #[cfg(target_os = "windows")]
 pub use conpty::ConptyInstance;
 #[cfg(target_os = "windows")]
+pub use conpty::resize_conpty_handle;
+#[cfg(target_os = "windows")]
 pub use conpty::spawn_conpty_process_as_user;
 #[cfg(target_os = "windows")]
 pub use deny_read_acl::apply_deny_read_acls;

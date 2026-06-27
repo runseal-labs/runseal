@@ -51,6 +51,7 @@ mod psuedocon;
 pub use conpty::ConPtySystem;
 pub use psuedocon::PsuedoCon;
 pub use psuedocon::conpty_supported;
+pub use psuedocon::resize_pseudoconsole;
 
 #[derive(Debug)]
 pub struct WinChild {

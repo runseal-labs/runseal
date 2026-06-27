@@ -65,6 +65,8 @@ Download the Windows release archive and place the three executables in the same
 - `runseal-windows-sandbox-setup.exe`
 - `runseal-command-runner.exe`
 
+Windows sandbox support requires Windows 10 1809 / build 17763 or newer.
+
 Install or repair the Windows sandbox. Use `--elevate` to request UAC when the
 current shell is not already elevated:
 
@@ -116,6 +118,8 @@ When `runseal exec --json` fails, stdout contains a structured `error` object an
 When `runseal exec --events` fails before an event stream completes, stdout contains one structured `error` object line and the process exits non-zero.
 
 ## Windows sandbox setup
+
+Windows sandbox support requires Windows 10 1809 / build 17763 or newer.
 
 Build all Windows binaries, including the setup helper and command runner:
 

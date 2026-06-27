@@ -39,3 +39,5 @@ pub use pty::spawn_process as spawn_pty_process;
 pub use win::PsuedoCon;
 #[cfg(windows)]
 pub use win::conpty::RawConPty;
+#[cfg(windows)]
+pub use win::resize_pseudoconsole;

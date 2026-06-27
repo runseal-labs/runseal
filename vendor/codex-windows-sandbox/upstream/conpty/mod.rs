@@ -17,6 +17,7 @@ use codex_utils_pty::RawConPty;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::os::windows::io::IntoRawHandle;
+use std::os::windows::io::RawHandle;
 use std::path::Path;
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::GetLastError;
@@ -84,6 +85,10 @@ pub fn create_conpty(cols: i16, rows: i16) -> Result<ConptyInstance> {
         output_read: output_read.into_raw_handle() as HANDLE,
         _desktop: None,
     })
+}
+
+pub fn resize_conpty_handle(hpc: HANDLE, cols: i16, rows: i16) -> Result<()> {
+    codex_utils_pty::resize_pseudoconsole(hpc as RawHandle, cols, rows)
 }
 
 /// Spawn a process under `h_token` with ConPTY attached.

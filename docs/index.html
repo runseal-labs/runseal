@@ -77,7 +77,7 @@
             <pre><code>.\runseal.exe setup windows-sandbox --cwd C:\path\to\workspace --elevate
 .\runseal.exe capabilities
 .\runseal.exe exec --json --policy workspace-write --network disabled --cwd C:\path\to\workspace -- whoami.exe</code></pre>
-            <p class="note">Use <code>--elevate</code> to request UAC when first setup cannot run in the current shell. Sandboxed execution fails closed when setup is missing or stale.</p>
+            <p class="note">Windows sandbox support requires Windows 10 1809 / build 17763 or newer. Use <code>--elevate</code> to request UAC when first setup cannot run in the current shell. Sandboxed execution fails closed when setup is missing or stale.</p>
           </section>
 
           <section id="status">
@@ -181,6 +181,7 @@ runseal version</code></pre>
           <section id="windows-setup">
             <p class="section-label">Windows backend</p>
             <h2>Setup and readiness</h2>
+            <p>Windows sandbox support requires Windows 10 1809 / build 17763 or newer.</p>
             <p>Build helper binaries locally when developing the Windows reference backend:</p>
             <pre><code>.\scripts\build-windows.ps1
 .\scripts\build-windows.ps1 -Release</code></pre>

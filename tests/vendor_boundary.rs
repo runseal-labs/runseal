@@ -41,6 +41,14 @@ const WINDOWS_SANDBOX_SETUP_MAIN: &str =
     include_str!("../vendor/codex-windows-sandbox/upstream/bin/setup_main/main.rs");
 const WINDOWS_SANDBOX_RUNNER_MAIN: &str =
     include_str!("../vendor/codex-windows-sandbox/upstream/bin/command_runner/main.rs");
+const WINDOWS_SANDBOX_COMMAND_RUNNER_SOURCE: &str =
+    include_str!("../vendor/codex-windows-sandbox/upstream/bin/command_runner/win.rs");
+const WINDOWS_SANDBOX_CONPTY_SOURCE: &str =
+    include_str!("../vendor/codex-windows-sandbox/upstream/conpty/mod.rs");
+const WINDOWS_SANDBOX_LEGACY_BACKEND_SOURCE: &str =
+    include_str!("../vendor/codex-windows-sandbox/upstream/unified_exec/backends/legacy.rs");
+const CODEX_UTILS_PTY_PSEUDOCON_SOURCE: &str =
+    include_str!("../vendor/codex-utils-pty/src/win/psuedocon.rs");
 const RELEASE_WORKFLOW: &str = include_str!("../.github/workflows/release.yml");
 
 const VENDOR_TIMEOUT_SOURCES: &[(&str, &str)] = &[
@@ -269,6 +277,42 @@ fn vendored_windows_timeouts_keep_explicit_limits_finite() {
         assert!(
             !source.contains("ms.min(u32::MAX as u64) as u32"),
             "{name} must not map explicit timeouts to Win32 INFINITE"
+        );
+    }
+}
+
+#[test]
+fn vendored_windows_conpty_resize_is_dynamically_loaded() {
+    assert!(CODEX_UTILS_PTY_PSEUDOCON_SOURCE.contains("shared_library!(ConPtyFuncs"));
+    assert!(CODEX_UTILS_PTY_PSEUDOCON_SOURCE.contains("pub fn ResizePseudoConsole"));
+    assert!(CODEX_UTILS_PTY_PSEUDOCON_SOURCE.contains("pub fn resize_pseudoconsole"));
+    assert!(
+        CODEX_UTILS_PTY_PSEUDOCON_SOURCE
+            .contains("Result<ConPtyFuncs, shared_library::LoadingError>")
+    );
+    assert!(WINDOWS_SANDBOX_CONPTY_SOURCE.contains("codex_utils_pty::resize_pseudoconsole"));
+
+    for (name, source) in [
+        (
+            "command_runner/win.rs",
+            WINDOWS_SANDBOX_COMMAND_RUNNER_SOURCE,
+        ),
+        (
+            "unified_exec/backends/legacy.rs",
+            WINDOWS_SANDBOX_LEGACY_BACKEND_SOURCE,
+        ),
+    ] {
+        assert!(
+            !source.contains("ResizePseudoConsole"),
+            "{name} must not call ResizePseudoConsole directly"
+        );
+        assert!(
+            !source.contains("Win32::System::Console"),
+            "{name} must not depend on console APIs directly"
+        );
+        assert!(
+            source.contains("resize_conpty_handle"),
+            "{name} must resize ConPTY through the dynamically loaded helper"
         );
     }
 }

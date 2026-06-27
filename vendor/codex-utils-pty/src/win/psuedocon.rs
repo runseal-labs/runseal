@@ -38,6 +38,7 @@ use std::os::windows::ffi::OsStrExt;
 use std::os::windows::ffi::OsStringExt;
 use std::os::windows::io::AsRawHandle;
 use std::os::windows::io::FromRawHandle;
+use std::os::windows::io::RawHandle;
 use std::path::Path;
 use std::ptr;
 use std::sync::Mutex;
@@ -84,24 +85,46 @@ shared_library!(Ntdll,
     ) -> NTSTATUS,
 );
 
-fn load_conpty() -> ConPtyFuncs {
-    let kernel = ConPtyFuncs::open(Path::new("kernel32.dll")).expect(
-        "this system does not support conpty.  Windows 10 October 2018 or newer is required",
-    );
+fn load_conpty() -> Result<ConPtyFuncs, shared_library::LoadingError> {
+    let kernel = ConPtyFuncs::open(Path::new("kernel32.dll"))?;
 
     if let Ok(sideloaded) = ConPtyFuncs::open(Path::new("conpty.dll")) {
-        sideloaded
+        Ok(sideloaded)
     } else {
-        kernel
+        Ok(kernel)
     }
 }
 
 lazy_static! {
-    static ref CONPTY: ConPtyFuncs = load_conpty();
+    static ref CONPTY: Result<ConPtyFuncs, shared_library::LoadingError> = load_conpty();
+}
+
+fn conpty_funcs() -> Result<&'static ConPtyFuncs, Error> {
+    match CONPTY.as_ref() {
+        Ok(funcs) => Ok(funcs),
+        Err(err) => bail!(
+            "this system does not support conpty. Windows 10 October 2018 or newer is required: {err:?}"
+        ),
+    }
 }
 
 pub fn conpty_supported() -> bool {
     windows_build_number().is_some_and(|build| build >= MIN_CONPTY_BUILD)
+}
+
+pub fn resize_pseudoconsole(handle: RawHandle, cols: i16, rows: i16) -> Result<(), Error> {
+    ensure!(
+        conpty_supported(),
+        "this system does not support conpty. Windows 10 October 2018 or newer is required"
+    );
+    let conpty = conpty_funcs()?;
+    let result =
+        unsafe { (conpty.ResizePseudoConsole)(handle as HPCON, COORD { X: cols, Y: rows }) };
+    ensure!(
+        result == S_OK,
+        "failed to resize console to {cols}x{rows}: HRESULT: {result}"
+    );
+    Ok(())
 }
 
 fn windows_build_number() -> Option<u32> {
@@ -129,7 +152,9 @@ unsafe impl Sync for PsuedoCon {}
 
 impl Drop for PsuedoCon {
     fn drop(&mut self) {
-        unsafe { (CONPTY.ClosePseudoConsole)(self.con) };
+        if let Ok(conpty) = conpty_funcs() {
+            unsafe { (conpty.ClosePseudoConsole)(self.con) };
+        }
     }
 }
 
@@ -139,9 +164,14 @@ impl PsuedoCon {
     }
 
     pub fn new(size: COORD, input: FileDescriptor, output: FileDescriptor) -> Result<Self, Error> {
+        ensure!(
+            conpty_supported(),
+            "this system does not support conpty. Windows 10 October 2018 or newer is required"
+        );
+        let conpty = conpty_funcs()?;
         let mut con: HPCON = INVALID_HANDLE_VALUE;
         let result = unsafe {
-            (CONPTY.CreatePseudoConsole)(
+            (conpty.CreatePseudoConsole)(
                 size,
                 input.as_raw_handle() as _,
                 output.as_raw_handle() as _,
@@ -161,15 +191,7 @@ impl PsuedoCon {
     }
 
     pub fn resize(&self, size: COORD) -> Result<(), Error> {
-        let result = unsafe { (CONPTY.ResizePseudoConsole)(self.con, size) };
-        ensure!(
-            result == S_OK,
-            "failed to resize console to {}x{}: HRESULT: {}",
-            size.X,
-            size.Y,
-            result
-        );
-        Ok(())
+        resize_pseudoconsole(self.con as RawHandle, size.X, size.Y)
     }
 
     pub fn spawn_command(&self, cmd: CommandBuilder) -> anyhow::Result<WinChild> {
