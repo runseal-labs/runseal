@@ -365,7 +365,7 @@ fn metadata_from_params(params: &Map<String, Value>) -> Result<Option<Value>, Ru
     Ok(Some(metadata))
 }
 
-fn env_from_params(
+pub(crate) fn env_from_params(
     params: &Map<String, Value>,
     policy: &SandboxPolicy,
 ) -> Result<ExecutionEnv, RunSealError> {

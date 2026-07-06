@@ -221,7 +221,7 @@ Start with one of these surfaces:
 
 A runnable stdio JSON-RPC client is available in [`examples/stdio-json-rpc`](examples/stdio-json-rpc).
 
-The MCP server exposes exactly one model-controlled tool, `runseal_exec`. The server owner fixes `policy` and `network` at startup; the agent cannot call `capabilities`, explain policy, change network mode, change sandbox level, pass custom environment variables, or provide stdin through MCP. Tool calls accept only `command`, optional `cwd`, and optional `timeout_ms`. This keeps the MCP surface useful for coding agents while preventing the model from granting itself broader execution permissions.
+The MCP server exposes exactly one model-controlled tool, `runseal_exec`. The server owner fixes `policy` and `network` at startup; the agent cannot call `capabilities`, explain policy, change network mode, change sandbox level, or provide stdin through MCP. Tool calls accept only `command`, optional `cwd`, optional `timeout_ms`, and optional `env` string overrides. `env` is still subject to the fixed RunSeal policy scrub rules. This keeps the MCP surface useful for coding agents while preventing the model from granting itself broader execution permissions.
 
 Minimal MCP host config:
 
@@ -242,7 +242,8 @@ Use the absolute `runseal` binary path when the MCP host does not inherit your s
 {
   "command": ["/usr/bin/python3", "-c", "print('hello from runseal')"],
   "cwd": "/workspace",
-  "timeout_ms": 30000
+  "timeout_ms": 30000,
+  "env": {"PYTHONUNBUFFERED": "1"}
 }
 ```
 

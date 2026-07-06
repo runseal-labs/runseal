@@ -164,7 +164,7 @@ fn mcp_tools_list_exposes_only_exec() -> Result<()> {
     );
     assert!(tool["inputSchema"]["properties"].get("policy").is_none());
     assert!(tool["inputSchema"]["properties"].get("network").is_none());
-    assert!(tool["inputSchema"]["properties"].get("env").is_none());
+    assert!(tool["inputSchema"]["properties"].get("env").is_some());
     assert_eq!(tool["inputSchema"]["additionalProperties"], false);
     Ok(())
 }
@@ -254,9 +254,99 @@ fn mcp_exec_reports_command_failures_as_tool_errors() -> Result<()> {
 }
 
 #[test]
-fn mcp_exec_rejects_policy_network_and_env_overrides_as_tool_errors() -> Result<()> {
+fn mcp_exec_accepts_non_secret_environment_overrides() -> Result<()> {
     let tmp = TempDir::new()?;
-    for forbidden in ["policy", "network", "env", "stdin"] {
+    let output = run_mcp(
+        &[
+            "--policy",
+            "danger-full-access",
+            "--cwd",
+            &tmp.path().to_string_lossy(),
+        ],
+        &mcp_request(
+            1,
+            "tools/call",
+            json!({
+                "name": "runseal_exec",
+                "arguments": {
+                    "command": [
+                        python_bin(),
+                        "-c",
+                        "import os; print(os.environ.get('RUNSEAL_TEST_VALUE', 'missing'))"
+                    ],
+                    "env": {"RUNSEAL_TEST_VALUE": "from-mcp"}
+                }
+            }),
+        ),
+    )?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let result = &messages[0]["result"];
+    assert_eq!(result["isError"], false, "{result}");
+    assert!(
+        result["structuredContent"]["stdout"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("from-mcp"),
+        "{result}"
+    );
+    Ok(())
+}
+
+#[test]
+fn mcp_exec_rejects_secret_environment_overrides_as_tool_errors() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let output = run_mcp(
+        &[
+            "--policy",
+            "danger-full-access",
+            "--cwd",
+            &tmp.path().to_string_lossy(),
+        ],
+        &mcp_request(
+            1,
+            "tools/call",
+            json!({
+                "name": "runseal_exec",
+                "arguments": {
+                    "command": [python_bin(), "-c", "print('must not run')"],
+                    "env": {"OPENAI_API_KEY": "blocked"}
+                }
+            }),
+        ),
+    )?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let result = &messages[0]["result"];
+    assert_eq!(result["isError"], true, "{result}");
+    assert_eq!(
+        result["structuredContent"]["error"]["data"]["code"], "INVALID_REQUEST",
+        "{result}"
+    );
+    assert!(
+        result["structuredContent"]["error"]["data"]["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("environment scrub"),
+        "{result}"
+    );
+    Ok(())
+}
+
+#[test]
+fn mcp_exec_rejects_policy_and_network_overrides_as_tool_errors() -> Result<()> {
+    let tmp = TempDir::new()?;
+    for forbidden in ["policy", "network", "stdin"] {
         let output = run_mcp(
             &[
                 "--policy",

@@ -203,7 +203,7 @@ Windows sandbox 支持要求 Windows 10 1809 / build 17763 或更新版本。
 
 可运行的 stdio JSON-RPC client 示例见 [`examples/stdio-json-rpc`](examples/stdio-json-rpc)。
 
-MCP server 只暴露一个 model-controlled tool：`runseal_exec`。服务启动者在启动时固定 `policy` 和 `network`；agent 不能通过 MCP 调用 `capabilities`、解释 policy、切换 network mode、切换 sandbox level、传入自定义环境变量或提供 stdin。tool call 只接受 `command`、可选 `cwd` 和可选 `timeout_ms`。这样 MCP 面保留 coding agent 所需的执行能力，但不会让模型给自己放宽权限。
+MCP server 只暴露一个 model-controlled tool：`runseal_exec`。服务启动者在启动时固定 `policy` 和 `network`；agent 不能通过 MCP 调用 `capabilities`、解释 policy、切换 network mode、切换 sandbox level 或提供 stdin。tool call 只接受 `command`、可选 `cwd`、可选 `timeout_ms` 和可选字符串 `env` 覆盖。`env` 仍受固定 RunSeal policy 的 scrub 规则约束。这样 MCP 面保留 coding agent 所需的执行能力，但不会让模型给自己放宽权限。
 
 最小 MCP host 配置：
 
@@ -224,7 +224,8 @@ MCP server 只暴露一个 model-controlled tool：`runseal_exec`。服务启动
 {
   "command": ["/usr/bin/python3", "-c", "print('hello from runseal')"],
   "cwd": "/workspace",
-  "timeout_ms": 30000
+  "timeout_ms": 30000,
+  "env": {"PYTHONUNBUFFERED": "1"}
 }
 ```
 

@@ -1,5 +1,6 @@
 use super::*;
 use crate::policy::NetworkMode;
+use crate::protocol::request_validation::env_from_params;
 use serde_json::{Map, Value, json};
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -13,7 +14,7 @@ Options:
   --network  fixed network mode for all MCP executions (default: unmanaged)
   --cwd      default workspace directory; tools/call may override cwd per execution
 
-MCP exposes exactly one tool: runseal_exec. Tool calls may set command, cwd, and timeout_ms.
+MCP exposes exactly one tool: runseal_exec. Tool calls may set command, cwd, timeout_ms, and env.
 ";
 
 const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
@@ -199,6 +200,11 @@ fn tools_list_result() -> Value {
                             "type": "integer",
                             "minimum": 1,
                             "description": "Optional timeout for this execution in milliseconds."
+                        },
+                        "env": {
+                            "type": "object",
+                            "additionalProperties": {"type": "string"},
+                            "description": "Optional environment overrides subject to the fixed RunSeal policy scrub rules."
                         }
                     },
                     "required": ["command"]
@@ -257,12 +263,16 @@ fn tools_call_result(config: &McpConfig, params: &Value) -> Result<Value, RunSea
         Ok(policy) => policy,
         Err(err) => return Ok(tool_error(cli_error_payload(err.into()))),
     };
+    let env = match env_from_params(arguments, &policy) {
+        Ok(env) => env,
+        Err(err) => return Ok(tool_error(cli_error_payload(err))),
+    };
     match execute_command(
         &request.command,
         &cwd,
         &policy,
         ExecutionStdin::Empty,
-        ExecutionEnv::default(),
+        env,
         None,
         request.timeout,
     ) {
@@ -278,7 +288,11 @@ fn exec_request_from_arguments(
     config: &McpConfig,
     arguments: &Map<String, Value>,
 ) -> Result<McpExecRequest, RunSealError> {
-    validate_keys(arguments, "runseal_exec", &["command", "cwd", "timeout_ms"])?;
+    validate_keys(
+        arguments,
+        "runseal_exec",
+        &["command", "cwd", "timeout_ms", "env"],
+    )?;
     let command = arguments
         .get("command")
         .and_then(Value::as_array)
