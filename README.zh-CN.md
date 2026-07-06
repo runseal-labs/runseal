@@ -103,6 +103,7 @@ runseal exec --policy workspace-write --network disabled --cwd /workspace --time
 runseal explain-policy --policy workspace-write --network proxy
 runseal capabilities
 runseal setup windows-sandbox --cwd C:\path\to\workspace --elevate
+runseal mcp --stdio --policy workspace-write --cwd /workspace
 runseal rpc --stdio
 runseal service --stdio
 runseal version
@@ -195,15 +196,43 @@ Windows sandbox 支持要求 Windows 10 1809 / build 17763 或更新版本。
 从以下入口之一开始：
 
 - CLI：调用 `runseal exec --json` 或 `runseal exec --events`，处理结构化错误。
+- MCP stdio：当需要把执行能力直接暴露给 AI agent 时，启动 `runseal mcp --stdio --policy <policy> [--network <mode>] [--cwd <path>]`。
 - JSON-RPC stdio：启动 `runseal rpc --stdio`，依次调用 `getVersion`、`getCapabilities`、`execute`。
 - Service stdio：当一个本地进程需要跨 JSON-RPC 请求持有已完成 execution 状态时，启动 `runseal service --stdio`。
 - Conformance：设置 `RUNSEAL_BIN=/path/to/runseal`，运行 `tests/` 下的黑盒测试。
 
 可运行的 stdio JSON-RPC client 示例见 [`examples/stdio-json-rpc`](examples/stdio-json-rpc)。
 
+MCP server 只暴露一个 model-controlled tool：`runseal_exec`。服务启动者在启动时固定 `policy` 和 `network`；agent 不能通过 MCP 调用 `capabilities`、解释 policy、切换 network mode、切换 sandbox level、传入自定义环境变量或提供 stdin。tool call 只接受 `command`、可选 `cwd` 和可选 `timeout_ms`。这样 MCP 面保留 coding agent 所需的执行能力，但不会让模型给自己放宽权限。
+
+最小 MCP host 配置：
+
+```json
+{
+  "mcpServers": {
+    "runseal": {
+      "command": "runseal",
+      "args": ["mcp", "--stdio", "--policy", "workspace-write", "--cwd", "/workspace"]
+    }
+  }
+}
+```
+
+如果 MCP host 不继承你的 shell `PATH`，把 `command` 改成 `runseal` 二进制的绝对路径。修改 MCP 配置后重启 host，然后调用它发现到的 `runseal_exec` tool：
+
+```json
+{
+  "command": ["/usr/bin/python3", "-c", "print('hello from runseal')"],
+  "cwd": "/workspace",
+  "timeout_ms": 30000
+}
+```
+
+不传 `--network` 时默认是 unmanaged 直通网络；只有需要拒绝网络出口时才传 `--network disabled`。
+
 基于 `getCapabilities` 做沙箱执行的门控，在请求的能力不支持或 setup 不可用时 fail closed。`getSetupStatus` 查询 setup readiness 但不改变状态。`getServiceStatus` 判断当前 stdio control plane 是 direct 模式还是 stateful service 模式。stdio service 记录已完成 execution 用于 `getExecution`、事件回放、通过 `listExecutions` 做摘要列表、通过 `disposeSession` 释放 session，以及为已完成的 execution 提供稳定的不可取消响应。正在运行的 execution 可通过 `cancelExecution` 取消。事件和审计追踪可通过 `subscribeEvents`、`getAuditEvents` 和 `tailAudit` 获取。
 
-每个沙箱 execution 都绑定到由 canonical policy 和 workspace path 派生的 policy epoch。相同 epoch 的 execution 可以并发运行。stateful client、未来 daemon transport 和 MCP 风格集成在存在运行中沙箱 execution 时，不得切换 active workspace 或全局 policy。并发请求如果落到不同 policy epoch，必须显式失败并返回 `POLICY_TRANSITION_BUSY`；不能静默接受、降级，也不能影响已经运行的 execution。filesystem policy、network mode、workspace、identity、setup state 等会改变边界的字段都属于 epoch input；运行中的 execution 只能接受 cancellation、event/audit read 这类不改变边界的操作。未来如果要支持不同 workspace 并发，必须为每个 epoch 使用隔离的 sandbox worker、identity 和 setup state，而不是原地修改共享 sandbox。
+每个沙箱 execution 都绑定到由 canonical policy 和 workspace path 派生的 policy epoch。相同 epoch 的 execution 可以并发运行。stateful client 和未来 daemon transport 在存在运行中沙箱 execution 时，不得切换 active workspace 或全局 policy。并发请求如果落到不同 policy epoch，必须显式失败并返回 `POLICY_TRANSITION_BUSY`；不能静默接受、降级，也不能影响已经运行的 execution。filesystem policy、network mode、workspace、identity、setup state 等会改变边界的字段都属于 epoch input；运行中的 execution 只能接受 cancellation、event/audit read 这类不改变边界的操作。未来如果要支持不同 workspace 并发，必须为每个 epoch 使用隔离的 sandbox worker、identity 和 setup state，而不是原地修改共享 sandbox。
 
 ## 运行测试
 

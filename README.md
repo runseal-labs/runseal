@@ -101,6 +101,7 @@ runseal exec --policy workspace-write --network disabled --cwd /workspace --time
 runseal explain-policy --policy workspace-write --network proxy
 runseal capabilities
 runseal setup windows-sandbox --cwd C:\path\to\workspace --elevate
+runseal mcp --stdio --policy workspace-write --cwd /workspace
 runseal rpc --stdio
 runseal service --stdio
 runseal version
@@ -213,15 +214,43 @@ Supported `execute` params: `command` (string array; the program name must be pa
 Start with one of these surfaces:
 
 - CLI: call `runseal exec --json` or `runseal exec --events` and handle structured errors.
+- MCP stdio: launch `runseal mcp --stdio --policy <policy> [--network <mode>] [--cwd <path>]` when exposing execution directly to an AI agent.
 - JSON-RPC stdio: launch `runseal rpc --stdio`, call `getVersion`, then `getCapabilities`, then `execute`.
 - Service stdio: launch `runseal service --stdio` when one local process should own completed execution state across JSON-RPC requests.
 - Conformance: set `RUNSEAL_BIN=/path/to/runseal` and run the black-box tests in `tests/`.
 
 A runnable stdio JSON-RPC client is available in [`examples/stdio-json-rpc`](examples/stdio-json-rpc).
 
+The MCP server exposes exactly one model-controlled tool, `runseal_exec`. The server owner fixes `policy` and `network` at startup; the agent cannot call `capabilities`, explain policy, change network mode, change sandbox level, pass custom environment variables, or provide stdin through MCP. Tool calls accept only `command`, optional `cwd`, and optional `timeout_ms`. This keeps the MCP surface useful for coding agents while preventing the model from granting itself broader execution permissions.
+
+Minimal MCP host config:
+
+```json
+{
+  "mcpServers": {
+    "runseal": {
+      "command": "runseal",
+      "args": ["mcp", "--stdio", "--policy", "workspace-write", "--cwd", "/workspace"]
+    }
+  }
+}
+```
+
+Use the absolute `runseal` binary path when the MCP host does not inherit your shell `PATH`. Restart the host after editing its MCP config, then call the advertised `runseal_exec` tool with:
+
+```json
+{
+  "command": ["/usr/bin/python3", "-c", "print('hello from runseal')"],
+  "cwd": "/workspace",
+  "timeout_ms": 30000
+}
+```
+
+Omit `--network` for unmanaged direct networking; pass `--network disabled` only when the MCP host should deny network egress.
+
 Gate sandboxed execution on `getCapabilities` and fail closed when a requested feature is unsupported or setup is unavailable. `getSetupStatus` reports setup readiness without changing state. `getServiceStatus` reports whether the current stdio control plane is direct or stateful service mode. The stdio service records completed executions for `getExecution`, event replay, summary listing through `listExecutions`, session disposal via `disposeSession`, and stable non-cancellable responses for already-finished executions. Running executions can be cancelled through `cancelExecution`. Events and audit trails are available through `subscribeEvents`, `getAuditEvents`, and `tailAudit`.
 
-Every sandboxed execution is bound to a policy epoch derived from the canonical policy and workspace path. Concurrent executions with the same epoch may run together. Stateful clients, future daemon transports, and MCP-style integrations must not change the active workspace or global policy while sandboxed executions are running. A concurrent request with a different policy epoch must fail explicitly with `POLICY_TRANSITION_BUSY`; it must not be silently accepted, downgraded, or applied to already-running executions. Boundary-changing fields such as filesystem policy, network mode, workspace, identity, and setup state are epoch inputs; only non-boundary operations such as cancellation and event or audit reads may target running executions. Future different-workspace concurrency must use isolated sandbox workers, identities, and setup state per epoch rather than mutating a shared sandbox in place.
+Every sandboxed execution is bound to a policy epoch derived from the canonical policy and workspace path. Concurrent executions with the same epoch may run together. Stateful clients and future daemon transports must not change the active workspace or global policy while sandboxed executions are running. A concurrent request with a different policy epoch must fail explicitly with `POLICY_TRANSITION_BUSY`; it must not be silently accepted, downgraded, or applied to already-running executions. Boundary-changing fields such as filesystem policy, network mode, workspace, identity, and setup state are epoch inputs; only non-boundary operations such as cancellation and event or audit reads may target running executions. Future different-workspace concurrency must use isolated sandbox workers, identities, and setup state per epoch rather than mutating a shared sandbox in place.
 
 ## Running tests
 

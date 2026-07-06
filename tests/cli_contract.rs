@@ -423,6 +423,7 @@ fn help_lists_core_commands() -> Result<()> {
     let stdout = String::from_utf8(output.stdout)?;
     assert!(stdout.contains("Usage: runseal <command> [options]"));
     assert!(stdout.contains("exec --policy <policy>"));
+    assert!(stdout.contains("mcp --stdio"));
     assert!(stdout.contains("setup windows-sandbox [--cwd <path>]"));
     assert!(stdout.contains("capabilities"));
     assert_no_private_windows_setup_terms(&stdout);
@@ -602,6 +603,10 @@ fn command_help_describes_policy_entrypoints() -> Result<()> {
             &["explain-policy", "--help"][..],
             "Usage: runseal explain-policy [--policy <policy>]",
         ),
+        (
+            &["mcp", "--help"][..],
+            "Usage: runseal mcp --stdio [--policy <policy>]",
+        ),
     ] {
         let output = run_cli(args)?;
 
@@ -614,7 +619,9 @@ fn command_help_describes_policy_entrypoints() -> Result<()> {
         let stdout = String::from_utf8(output.stdout)?;
         assert!(stdout.contains(usage));
         assert!(stdout.contains("--policy"));
-        assert!(stdout.contains("--network"));
+        if args[0] != "mcp" {
+            assert!(stdout.contains("--network"));
+        }
         assert!(stdout.contains("--cwd"));
         assert_no_private_windows_setup_terms(&stdout);
     }

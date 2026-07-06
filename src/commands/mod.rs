@@ -7,6 +7,7 @@ use setup::windows_sandbox_setup_status_for_cwd;
 pub(crate) mod capabilities;
 pub(crate) mod exec;
 pub(crate) mod explain_policy;
+pub(crate) mod mcp;
 pub(crate) mod setup;
 pub(crate) mod version;
 
@@ -17,6 +18,7 @@ Commands:
   exec --policy <policy> [--network <mode>] [--cwd <path>] -- <command> [args...]
   explain-policy --policy <policy> [--network <mode>] [--cwd <path>]
   capabilities
+  mcp --stdio [--policy <policy>] [--network <mode>] [--cwd <path>]
   setup windows-sandbox [--cwd <path>] [--status] [--json] [--elevate]
   rpc --stdio
   service --stdio

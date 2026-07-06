@@ -67,6 +67,7 @@ fn run() -> Result<(), String> {
         [command, flag] if command == "rpc" && flag == "--stdio" => {
             protocol::rpc_handler::run_rpc_stdio()
         }
+        [command, rest @ ..] if command == "mcp" => commands::mcp::run(rest),
         [command, flag] if command == "service" && flag == "--stdio" => {
             protocol::rpc_handler::run_service_stdio()
         }
