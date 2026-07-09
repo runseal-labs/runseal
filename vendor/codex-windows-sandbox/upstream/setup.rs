@@ -3,6 +3,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::ffi::OsStr;
 use std::ffi::c_void;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -37,12 +38,18 @@ use anyhow::anyhow;
 use codex_protocol::models::PermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
+use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::GetLastError;
+use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Security::AllocateAndInitializeSid;
 use windows_sys::Win32::Security::CheckTokenMembership;
 use windows_sys::Win32::Security::FreeSid;
 use windows_sys::Win32::Security::SECURITY_NT_AUTHORITY;
 use windows_sys::Win32::System::Diagnostics::Debug::SetErrorMode;
+use windows_sys::Win32::System::Threading::CreateMutexW;
+use windows_sys::Win32::System::Threading::INFINITE;
+use windows_sys::Win32::System::Threading::ReleaseMutex;
+use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
 pub const SETUP_VERSION: u32 = 6;
 pub const SANDBOX_USERNAME: &str = "RunSealSandbox";
@@ -191,6 +198,7 @@ fn run_setup_refresh_inner(
     if !request.permissions.is_enforceable_by_windows_sandbox() {
         anyhow::bail!("unsupported filesystem permissions for Windows sandbox setup");
     }
+    let _setup_refresh_guard = acquire_setup_refresh_mutex(request.codex_home)?;
     let (read_roots, write_roots) = build_payload_roots(&request, &overrides);
     let deny_read_paths = build_payload_deny_read_paths(overrides.deny_read_paths);
     let deny_write_paths =
@@ -277,6 +285,54 @@ fn run_setup_refresh_inner(
         );
     }
     Ok(())
+}
+
+struct SetupRefreshMutexGuard {
+    handle: HANDLE,
+}
+
+impl Drop for SetupRefreshMutexGuard {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = ReleaseMutex(self.handle);
+            CloseHandle(self.handle);
+        }
+    }
+}
+
+fn acquire_setup_refresh_mutex(codex_home: &Path) -> Result<SetupRefreshMutexGuard> {
+    const WAIT_OBJECT_0: u32 = 0;
+    const WAIT_ABANDONED: u32 = 0x80;
+
+    let name = setup_refresh_mutex_name(codex_home);
+    let name_wide = crate::to_wide(OsStr::new(&name));
+    let handle = unsafe { CreateMutexW(std::ptr::null_mut(), 0, name_wide.as_ptr()) };
+    if handle == 0 {
+        return Err(failure(
+            SetupErrorCode::OrchestratorHelperLaunchFailed,
+            format!("create setup refresh mutex {name} failed: {}", unsafe {
+                GetLastError()
+            }),
+        ));
+    }
+
+    let wait = unsafe { WaitForSingleObject(handle, INFINITE) };
+    if wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED {
+        return Ok(SetupRefreshMutexGuard { handle });
+    }
+
+    unsafe {
+        CloseHandle(handle);
+    }
+    Err(failure(
+        SetupErrorCode::OrchestratorHelperLaunchFailed,
+        format!("wait for setup refresh mutex {name} failed: {wait}"),
+    ))
+}
+
+fn setup_refresh_mutex_name(codex_home: &Path) -> String {
+    let digest = Sha256::digest(codex_home.to_string_lossy().as_bytes());
+    format!("Local\\RunSealSetupRefresh-{digest:x}")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1594,6 +1650,18 @@ mod tests {
         remove_setup_payload_file(&path).expect("remove payload file");
         assert!(!path.exists());
         remove_setup_payload_file(&path).expect("remove missing payload file");
+    }
+
+    #[test]
+    fn setup_refresh_mutex_name_is_scoped_by_codex_home() {
+        let one = Path::new(r"C:\workspace\.runseal\sandbox");
+        let two = Path::new(r"C:\other\.runseal\sandbox");
+
+        let one_name = setup_refresh_mutex_name(one);
+
+        assert_eq!(one_name, setup_refresh_mutex_name(one));
+        assert_ne!(one_name, setup_refresh_mutex_name(two));
+        assert!(one_name.starts_with(r"Local\RunSealSetupRefresh-"));
     }
 
     #[test]

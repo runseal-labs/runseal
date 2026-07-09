@@ -103,7 +103,7 @@ runseal exec --policy workspace-write --network disabled --cwd /workspace --time
 runseal explain-policy --policy workspace-write --network proxy
 runseal capabilities
 runseal setup windows-sandbox --cwd C:\path\to\workspace --elevate
-runseal mcp --stdio --policy workspace-write --cwd /workspace
+runseal mcp --stdio --policy workspace-write
 runseal rpc --stdio
 runseal service --stdio
 runseal version
@@ -196,14 +196,14 @@ Windows sandbox 支持要求 Windows 10 1809 / build 17763 或更新版本。
 从以下入口之一开始：
 
 - CLI：调用 `runseal exec --json` 或 `runseal exec --events`，处理结构化错误。
-- MCP stdio：当需要把执行能力直接暴露给 AI agent 时，启动 `runseal mcp --stdio --policy <policy> [--network <mode>] [--cwd <path>]`。
+- MCP stdio：当需要把执行能力直接暴露给 AI agent 时，启动 `runseal mcp --stdio --policy <policy> [--network <mode>]`。
 - JSON-RPC stdio：启动 `runseal rpc --stdio`，依次调用 `getVersion`、`getCapabilities`、`execute`。
 - Service stdio：当一个本地进程需要跨 JSON-RPC 请求持有已完成 execution 状态时，启动 `runseal service --stdio`。
 - Conformance：设置 `RUNSEAL_BIN=/path/to/runseal`，运行 `tests/` 下的黑盒测试。
 
 可运行的 stdio JSON-RPC client 示例见 [`examples/stdio-json-rpc`](examples/stdio-json-rpc)。
 
-MCP server 只暴露一个 model-controlled tool：`runseal_exec`。服务启动者在启动时固定 `policy` 和 `network`；agent 不能通过 MCP 调用 `capabilities`、解释 policy、切换 network mode、切换 sandbox level 或提供 stdin。tool call 只接受 `command`、可选 `cwd`、可选 `timeout_ms` 和可选字符串 `env` 覆盖。`env` 仍受固定 RunSeal policy 的 scrub 规则约束。这样 MCP 面保留 coding agent 所需的执行能力，但不会让模型给自己放宽权限。
+MCP server 只暴露一个 model-controlled tool：`exec`。服务启动者在启动时固定 `policy` 和 `network`；agent 不能通过 MCP 调用 `capabilities`、解释 policy、切换 network mode、切换 sandbox level 或提供 stdin。tool call 只接受 `command`、必填 `cwd`、可选 `timeout_ms` 和可选字符串 `env` 覆盖。`env` 仍受固定 RunSeal policy 的 scrub 规则约束。这样 MCP 面保留 coding agent 所需的执行能力，但不会让模型给自己放宽权限。
 
 最小 MCP host 配置：
 
@@ -212,13 +212,13 @@ MCP server 只暴露一个 model-controlled tool：`runseal_exec`。服务启动
   "mcpServers": {
     "runseal": {
       "command": "runseal",
-      "args": ["mcp", "--stdio", "--policy", "workspace-write", "--cwd", "/workspace"]
+      "args": ["mcp", "--stdio", "--policy", "workspace-write"]
     }
   }
 }
 ```
 
-如果 MCP host 不继承你的 shell `PATH`，把 `command` 改成 `runseal` 二进制的绝对路径。修改 MCP 配置后重启 host，然后调用它发现到的 `runseal_exec` tool：
+如果 MCP host 不继承你的 shell `PATH`，把 `command` 改成 `runseal` 二进制的绝对路径。修改 MCP 配置后重启 host，然后调用它发现到的 `exec` tool：
 
 ```json
 {
@@ -229,7 +229,7 @@ MCP server 只暴露一个 model-controlled tool：`runseal_exec`。服务启动
 }
 ```
 
-不传 `--network` 时默认是 unmanaged 直通网络；只有需要拒绝网络出口时才传 `--network disabled`。
+不传 `--network` 时默认是 unmanaged 直通网络；只有需要拒绝网络出口时才传 `--network disabled`。使用 `--network proxy` 时，命令应在当前 execution 内读取 RunSeal 注入的 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、`GIT_HTTP_PROXY`、`GIT_HTTPS_PROXY` 等代理环境变量；不要硬编码代理主机、端口或凭据，因为 RunSeal 可能把 execution 挂到共享的本机 managed proxy broker。`RUNSEAL_NETWORK_PROXY_AUTHORIZATION` 是每次 execution 独立生成的凭据，仅供必须显式传 `Proxy-Authorization` header 的工具使用。
 
 基于 `getCapabilities` 做沙箱执行的门控，在请求的能力不支持或 setup 不可用时 fail closed。`getSetupStatus` 查询 setup readiness 但不改变状态。`getServiceStatus` 判断当前 stdio control plane 是 direct 模式还是 stateful service 模式。stdio service 记录已完成 execution 用于 `getExecution`、事件回放、通过 `listExecutions` 做摘要列表、通过 `disposeSession` 释放 session，以及为已完成的 execution 提供稳定的不可取消响应。正在运行的 execution 可通过 `cancelExecution` 取消。事件和审计追踪可通过 `subscribeEvents`、`getAuditEvents` 和 `tailAudit` 获取。
 

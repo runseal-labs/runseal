@@ -77,9 +77,11 @@ fn windows_sandbox_execution_gate_allows_same_policy_and_rejects_mixed_policy() 
     let _test_lock = windows_sandbox_gate_test_lock();
     let policy_a = WindowsSandboxPolicyCohortKey {
         policy_hash: "hash-a".to_string(),
+        workspace_key: "workspace".to_string(),
     };
     let policy_b = WindowsSandboxPolicyCohortKey {
         policy_hash: "hash-b".to_string(),
+        workspace_key: "workspace".to_string(),
     };
 
     let guard = windows_sandbox_execution_gate_for_key(policy_a.clone())?;

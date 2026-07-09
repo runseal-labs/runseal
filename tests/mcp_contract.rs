@@ -145,10 +145,18 @@ fn mcp_tools_list_exposes_only_exec() -> Result<()> {
         .context("tools/list must return tools")?;
     assert_eq!(tools.len(), 1);
     let tool = &tools[0];
-    assert_eq!(tool["name"], "runseal_exec");
+    assert_eq!(tool["name"], "exec");
+    assert_eq!(tool["title"], "Exec");
+    assert!(
+        tool["description"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("fixed sandbox policy"),
+        "{tool}"
+    );
     assert_eq!(
         tool["inputSchema"]["required"],
-        json!(["command"]),
+        json!(["command", "cwd"]),
         "{tool}"
     );
     assert!(tool["inputSchema"]["properties"].get("command").is_some());
@@ -170,22 +178,44 @@ fn mcp_tools_list_exposes_only_exec() -> Result<()> {
 }
 
 #[test]
+fn mcp_tools_list_mentions_fixed_proxy_network_access() -> Result<()> {
+    let output = run_mcp(
+        &["--network", "proxy"],
+        &mcp_request(1, "tools/list", json!({})),
+    )?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let tool = &messages[0]["result"]["tools"][0];
+    let description = tool["description"].as_str().unwrap_or_default();
+    assert!(description.contains("fixed to proxy"), "{description}");
+    assert!(description.contains("managed proxy"), "{description}");
+    assert!(description.contains("HTTP_PROXY"), "{description}");
+    assert!(description.contains("do not hardcode"), "{description}");
+    assert!(description.contains("per-execution"), "{description}");
+    assert!(
+        description.contains("RUNSEAL_NETWORK_PROXY_AUTHORIZATION"),
+        "{description}"
+    );
+    assert!(tool["inputSchema"]["properties"].get("network").is_none());
+    Ok(())
+}
+
+#[test]
 fn mcp_exec_runs_with_per_call_cwd() -> Result<()> {
-    let default_cwd = TempDir::new()?;
     let call_cwd = TempDir::new()?;
     let cwd = call_cwd.path().to_string_lossy().to_string();
     let output = run_mcp(
-        &[
-            "--policy",
-            "danger-full-access",
-            "--cwd",
-            &default_cwd.path().to_string_lossy(),
-        ],
+        &["--policy", "danger-full-access"],
         &mcp_request(
             1,
             "tools/call",
             json!({
-                "name": "runseal_exec",
+                "name": "exec",
                 "arguments": {
                     "command": [python_bin(), "-c", "import os; print(os.getcwd())"],
                     "cwd": cwd
@@ -210,31 +240,113 @@ fn mcp_exec_runs_with_per_call_cwd() -> Result<()> {
             .contains(call_cwd.path().to_string_lossy().as_ref()),
         "{result}"
     );
-    assert_eq!(
-        result["structuredContent"]["platform_plan"]["enforcement"],
-        "local-execution"
+    assert!(
+        result["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default()
+            .contains(call_cwd.path().to_string_lossy().as_ref()),
+        "{result}"
     );
+    assert!(result["structuredContent"].get("platform_plan").is_none());
     assert_eq!(result["structuredContent"]["network"]["mode"], "unmanaged");
+    Ok(())
+}
+
+#[test]
+fn mcp_exec_accepts_client_meta() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let cwd = tmp.path().to_string_lossy().to_string();
+    let output = run_mcp(
+        &["--policy", "danger-full-access"],
+        &mcp_request(
+            1,
+            "tools/call",
+            json!({
+                "name": "exec",
+                "arguments": {
+                    "command": [python_bin(), "-c", "print('meta-ok')"],
+                    "cwd": cwd
+                },
+                "_meta": {"progressToken": "client-token"}
+            }),
+        ),
+    )?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let result = &messages[0]["result"];
+    assert_eq!(result["isError"], false, "{result}");
+    assert!(
+        result["structuredContent"]["stdout"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("meta-ok"),
+        "{result}"
+    );
+    Ok(())
+}
+
+#[test]
+fn mcp_stdio_handles_ping_while_exec_is_running() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let cwd = tmp.path().to_string_lossy().to_string();
+    let message = mcp_request(
+        1,
+        "tools/call",
+        json!({
+            "name": "exec",
+            "arguments": {
+                "command": [
+                    python_bin(),
+                    "-c",
+                    "import time; time.sleep(1); print('done')"
+                ],
+                "cwd": cwd,
+                "timeout_ms": 5000
+            }
+        }),
+    ) + &mcp_request(2, "ping", json!({}));
+
+    let output = run_mcp(&["--policy", "danger-full-access"], &message)?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0]["id"], 2);
+    assert_eq!(messages[0]["result"], json!({}));
+    assert_eq!(messages[1]["id"], 1);
+    assert!(
+        messages[1]["result"]["structuredContent"]["stdout"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("done"),
+        "{messages:?}"
+    );
     Ok(())
 }
 
 #[test]
 fn mcp_exec_reports_command_failures_as_tool_errors() -> Result<()> {
     let tmp = TempDir::new()?;
+    let cwd = tmp.path().to_string_lossy().to_string();
     let output = run_mcp(
-        &[
-            "--policy",
-            "danger-full-access",
-            "--cwd",
-            &tmp.path().to_string_lossy(),
-        ],
+        &["--policy", "danger-full-access"],
         &mcp_request(
             1,
             "tools/call",
             json!({
-                "name": "runseal_exec",
+                "name": "exec",
                 "arguments": {
-                    "command": [python_bin(), "-c", "import sys; sys.exit(7)"]
+                    "command": [python_bin(), "-c", "import sys; sys.exit(7)"],
+                    "cwd": cwd
                 }
             }),
         ),
@@ -256,24 +368,21 @@ fn mcp_exec_reports_command_failures_as_tool_errors() -> Result<()> {
 #[test]
 fn mcp_exec_accepts_non_secret_environment_overrides() -> Result<()> {
     let tmp = TempDir::new()?;
+    let cwd = tmp.path().to_string_lossy().to_string();
     let output = run_mcp(
-        &[
-            "--policy",
-            "danger-full-access",
-            "--cwd",
-            &tmp.path().to_string_lossy(),
-        ],
+        &["--policy", "danger-full-access"],
         &mcp_request(
             1,
             "tools/call",
             json!({
-                "name": "runseal_exec",
+                "name": "exec",
                 "arguments": {
                     "command": [
                         python_bin(),
                         "-c",
                         "import os; print(os.environ.get('RUNSEAL_TEST_VALUE', 'missing'))"
                     ],
+                    "cwd": cwd,
                     "env": {"RUNSEAL_TEST_VALUE": "from-mcp"}
                 }
             }),
@@ -301,20 +410,17 @@ fn mcp_exec_accepts_non_secret_environment_overrides() -> Result<()> {
 #[test]
 fn mcp_exec_rejects_secret_environment_overrides_as_tool_errors() -> Result<()> {
     let tmp = TempDir::new()?;
+    let cwd = tmp.path().to_string_lossy().to_string();
     let output = run_mcp(
-        &[
-            "--policy",
-            "danger-full-access",
-            "--cwd",
-            &tmp.path().to_string_lossy(),
-        ],
+        &["--policy", "danger-full-access"],
         &mcp_request(
             1,
             "tools/call",
             json!({
-                "name": "runseal_exec",
+                "name": "exec",
                 "arguments": {
                     "command": [python_bin(), "-c", "print('must not run')"],
+                    "cwd": cwd,
                     "env": {"OPENAI_API_KEY": "blocked"}
                 }
             }),
@@ -346,21 +452,18 @@ fn mcp_exec_rejects_secret_environment_overrides_as_tool_errors() -> Result<()> 
 #[test]
 fn mcp_exec_rejects_policy_and_network_overrides_as_tool_errors() -> Result<()> {
     let tmp = TempDir::new()?;
+    let cwd = tmp.path().to_string_lossy().to_string();
     for forbidden in ["policy", "network", "stdin"] {
         let output = run_mcp(
-            &[
-                "--policy",
-                "danger-full-access",
-                "--cwd",
-                &tmp.path().to_string_lossy(),
-            ],
+            &["--policy", "danger-full-access"],
             &mcp_request(
                 1,
                 "tools/call",
                 json!({
-                    "name": "runseal_exec",
+                    "name": "exec",
                     "arguments": {
                         "command": [python_bin(), "-c", "print('must not run')"],
+                        "cwd": cwd,
                         forbidden: "blocked"
                     }
                 }),
@@ -393,20 +496,17 @@ fn mcp_exec_rejects_policy_and_network_overrides_as_tool_errors() -> Result<()> 
 #[test]
 fn mcp_exec_rejects_unqualified_program_as_tool_error() -> Result<()> {
     let tmp = TempDir::new()?;
+    let cwd = tmp.path().to_string_lossy().to_string();
     let output = run_mcp(
-        &[
-            "--policy",
-            "danger-full-access",
-            "--cwd",
-            &tmp.path().to_string_lossy(),
-        ],
+        &["--policy", "danger-full-access"],
         &mcp_request(
             1,
             "tools/call",
             json!({
-                "name": "runseal_exec",
+                "name": "exec",
                 "arguments": {
-                    "command": ["python", "-c", "print('must not run')"]
+                    "command": ["python", "-c", "print('must not run')"],
+                    "cwd": cwd
                 }
             }),
         ),
@@ -431,22 +531,53 @@ fn mcp_exec_rejects_unqualified_program_as_tool_error() -> Result<()> {
 }
 
 #[test]
-fn mcp_exec_rejects_zero_timeout_as_tool_error() -> Result<()> {
-    let tmp = TempDir::new()?;
+fn mcp_exec_requires_per_call_cwd() -> Result<()> {
     let output = run_mcp(
-        &[
-            "--policy",
-            "danger-full-access",
-            "--cwd",
-            &tmp.path().to_string_lossy(),
-        ],
+        &["--policy", "danger-full-access"],
         &mcp_request(
             1,
             "tools/call",
             json!({
-                "name": "runseal_exec",
+                "name": "exec",
+                "arguments": {
+                    "command": [python_bin(), "-c", "print('must not run')"]
+                }
+            }),
+        ),
+    )?;
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let result = &messages[0]["result"];
+    assert_eq!(result["isError"], true, "{result}");
+    assert!(
+        result["structuredContent"]["error"]["data"]["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("arguments.cwd is required"),
+        "{result}"
+    );
+    Ok(())
+}
+
+#[test]
+fn mcp_exec_rejects_zero_timeout_as_tool_error() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let cwd = tmp.path().to_string_lossy().to_string();
+    let output = run_mcp(
+        &["--policy", "danger-full-access"],
+        &mcp_request(
+            1,
+            "tools/call",
+            json!({
+                "name": "exec",
                 "arguments": {
                     "command": [python_bin(), "-c", "print('must not run')"],
+                    "cwd": cwd,
                     "timeout_ms": 0
                 }
             }),

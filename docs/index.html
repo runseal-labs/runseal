@@ -139,7 +139,7 @@ runseal exec --policy workspace-write --network disabled --cwd /workspace --time
 runseal explain-policy --policy workspace-write --network proxy
 runseal capabilities
 runseal setup windows-sandbox --cwd C:\path\to\workspace --elevate
-runseal mcp --stdio --policy workspace-write --cwd /workspace
+runseal mcp --stdio --policy workspace-write
 runseal rpc --stdio
 runseal service --stdio
 runseal version</code></pre>
@@ -198,7 +198,7 @@ runseal version</code></pre>
               <li>Call <code>getVersion</code> and <code>getCapabilities</code> before sandboxed execution.</li>
               <li>Gate requested sandbox levels and network modes on capability statuses.</li>
               <li>Fail closed when a capability is unsupported or setup is unavailable.</li>
-              <li>Use <code>runseal mcp --stdio --policy &lt;policy&gt; [--network &lt;mode&gt;] [--cwd &lt;path&gt;]</code> when exposing execution directly to an AI agent. The MCP server exposes only <code>runseal_exec</code>; model calls may set <code>command</code>, <code>cwd</code>, <code>timeout_ms</code>, and string <code>env</code> overrides subject to policy scrub rules, but not policy, network, or stdin.</li>
+              <li>Use <code>runseal mcp --stdio --policy &lt;policy&gt; [--network &lt;mode&gt;]</code> when exposing execution directly to an AI agent. The MCP server exposes only <code>exec</code>; model calls must set <code>command</code> and <code>cwd</code>, and may set <code>timeout_ms</code> and string <code>env</code> overrides subject to policy scrub rules, but not policy, network, or stdin.</li>
               <li>Treat the canonical policy plus workspace path as the policy epoch. Same-epoch executions may run concurrently; boundary-changing different-epoch requests must return <code>POLICY_TRANSITION_BUSY</code> unless they use isolated sandbox workers, identities, and setup state.</li>
               <li>Use <code>runseal service --stdio</code> when one process should own completed execution state.</li>
               <li>Use conformance tests with <code>RUNSEAL_BIN=/path/to/runseal</code> for candidate implementations.</li>
@@ -207,12 +207,12 @@ runseal version</code></pre>
   "mcpServers": {
     "runseal": {
       "command": "runseal",
-      "args": ["mcp", "--stdio", "--policy", "workspace-write", "--cwd", "/workspace"]
+      "args": ["mcp", "--stdio", "--policy", "workspace-write"]
     }
   }
 }</code></pre>
-            <p>Use the absolute <code>runseal</code> binary path when the MCP host does not inherit your shell <code>PATH</code>. Restart the host after editing its MCP config, then call the discovered <code>runseal_exec</code> tool with <code>command</code>, <code>cwd</code>, optional <code>timeout_ms</code>, and optional string <code>env</code> overrides.</p>
-            <p>Omit <code>--network</code> for unmanaged direct networking; pass <code>--network disabled</code> only when the MCP host should deny network egress.</p>
+            <p>Use the absolute <code>runseal</code> binary path when the MCP host does not inherit your shell <code>PATH</code>. Restart the host after editing its MCP config, then call the discovered <code>exec</code> tool with <code>command</code>, <code>cwd</code>, optional <code>timeout_ms</code>, and optional string <code>env</code> overrides.</p>
+            <p>Omit <code>--network</code> for unmanaged direct networking; pass <code>--network disabled</code> only when the MCP host should deny network egress. With <code>--network proxy</code>, commands should use injected proxy environment variables such as <code>HTTP_PROXY</code>, <code>HTTPS_PROXY</code>, <code>ALL_PROXY</code>, <code>GIT_HTTP_PROXY</code>, and <code>GIT_HTTPS_PROXY</code> inside the current execution; do not hardcode a proxy host, port, or credential because RunSeal may attach the execution to a shared local managed proxy broker. <code>RUNSEAL_NETWORK_PROXY_AUTHORIZATION</code> is a per-execution credential for tools that require an explicit <code>Proxy-Authorization</code> header.</p>
           </section>
 
           <section id="testing">

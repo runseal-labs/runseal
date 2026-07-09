@@ -621,8 +621,8 @@ fn command_help_describes_policy_entrypoints() -> Result<()> {
         assert!(stdout.contains("--policy"));
         if args[0] != "mcp" {
             assert!(stdout.contains("--network"));
+            assert!(stdout.contains("--cwd"));
         }
-        assert!(stdout.contains("--cwd"));
         assert_no_private_windows_setup_terms(&stdout);
     }
     Ok(())

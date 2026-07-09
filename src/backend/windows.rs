@@ -256,13 +256,13 @@ pub(super) fn execute_windows_sandbox_plan(
         }));
     }
 
-    let _execution_guard = windows_sandbox_execution_gate(plan)?;
     let _runtime_root = required_plan_path(plan.runtime_root.as_deref(), "runtime_root")?;
+    let vendor_sandbox_home = vendor_sandbox_home(cwd);
+    let _execution_guard = windows_sandbox_execution_gate(plan, &vendor_sandbox_home)?;
     let stdin_bytes = match stdin {
         ExecutionStdin::Empty => None,
         ExecutionStdin::Bytes(bytes) | ExecutionStdin::File(bytes) => Some(bytes),
     };
-    let vendor_sandbox_home = vendor_sandbox_home(cwd);
     let workspace_roots = windows_sandbox_workspace_roots_for_plan(cwd, plan)?;
     let write_roots_override = windows_sandbox_write_roots_for_plan(plan);
     let permission_profile = plan.vendor_permission_profile()?;

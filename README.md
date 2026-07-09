@@ -101,7 +101,7 @@ runseal exec --policy workspace-write --network disabled --cwd /workspace --time
 runseal explain-policy --policy workspace-write --network proxy
 runseal capabilities
 runseal setup windows-sandbox --cwd C:\path\to\workspace --elevate
-runseal mcp --stdio --policy workspace-write --cwd /workspace
+runseal mcp --stdio --policy workspace-write
 runseal rpc --stdio
 runseal service --stdio
 runseal version
@@ -214,14 +214,14 @@ Supported `execute` params: `command` (string array; the program name must be pa
 Start with one of these surfaces:
 
 - CLI: call `runseal exec --json` or `runseal exec --events` and handle structured errors.
-- MCP stdio: launch `runseal mcp --stdio --policy <policy> [--network <mode>] [--cwd <path>]` when exposing execution directly to an AI agent.
+- MCP stdio: launch `runseal mcp --stdio --policy <policy> [--network <mode>]` when exposing execution directly to an AI agent.
 - JSON-RPC stdio: launch `runseal rpc --stdio`, call `getVersion`, then `getCapabilities`, then `execute`.
 - Service stdio: launch `runseal service --stdio` when one local process should own completed execution state across JSON-RPC requests.
 - Conformance: set `RUNSEAL_BIN=/path/to/runseal` and run the black-box tests in `tests/`.
 
 A runnable stdio JSON-RPC client is available in [`examples/stdio-json-rpc`](examples/stdio-json-rpc).
 
-The MCP server exposes exactly one model-controlled tool, `runseal_exec`. The server owner fixes `policy` and `network` at startup; the agent cannot call `capabilities`, explain policy, change network mode, change sandbox level, or provide stdin through MCP. Tool calls accept only `command`, optional `cwd`, optional `timeout_ms`, and optional `env` string overrides. `env` is still subject to the fixed RunSeal policy scrub rules. This keeps the MCP surface useful for coding agents while preventing the model from granting itself broader execution permissions.
+The MCP server exposes exactly one model-controlled tool, `exec`. The server owner fixes `policy` and `network` at startup; the agent cannot call `capabilities`, explain policy, change network mode, change sandbox level, or provide stdin through MCP. Tool calls accept only `command`, required `cwd`, optional `timeout_ms`, and optional `env` string overrides. `env` is still subject to the fixed RunSeal policy scrub rules. This keeps the MCP surface useful for coding agents while preventing the model from granting itself broader execution permissions.
 
 Minimal MCP host config:
 
@@ -230,13 +230,13 @@ Minimal MCP host config:
   "mcpServers": {
     "runseal": {
       "command": "runseal",
-      "args": ["mcp", "--stdio", "--policy", "workspace-write", "--cwd", "/workspace"]
+      "args": ["mcp", "--stdio", "--policy", "workspace-write"]
     }
   }
 }
 ```
 
-Use the absolute `runseal` binary path when the MCP host does not inherit your shell `PATH`. Restart the host after editing its MCP config, then call the advertised `runseal_exec` tool with:
+Use the absolute `runseal` binary path when the MCP host does not inherit your shell `PATH`. Restart the host after editing its MCP config, then call the advertised `exec` tool with:
 
 ```json
 {
@@ -247,7 +247,7 @@ Use the absolute `runseal` binary path when the MCP host does not inherit your s
 }
 ```
 
-Omit `--network` for unmanaged direct networking; pass `--network disabled` only when the MCP host should deny network egress.
+Omit `--network` for unmanaged direct networking; pass `--network disabled` only when the MCP host should deny network egress. With `--network proxy`, commands should use the injected proxy environment variables such as `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `GIT_HTTP_PROXY`, and `GIT_HTTPS_PROXY` inside the current execution; do not hardcode a proxy host, port, or credential because RunSeal may attach the execution to a shared local managed proxy broker. `RUNSEAL_NETWORK_PROXY_AUTHORIZATION` is a per-execution credential for tools that require an explicit `Proxy-Authorization` header.
 
 Gate sandboxed execution on `getCapabilities` and fail closed when a requested feature is unsupported or setup is unavailable. `getSetupStatus` reports setup readiness without changing state. `getServiceStatus` reports whether the current stdio control plane is direct or stateful service mode. The stdio service records completed executions for `getExecution`, event replay, summary listing through `listExecutions`, session disposal via `disposeSession`, and stable non-cancellable responses for already-finished executions. Running executions can be cancelled through `cancelExecution`. Events and audit trails are available through `subscribeEvents`, `getAuditEvents`, and `tailAudit`.
 

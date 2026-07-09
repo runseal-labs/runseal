@@ -5,6 +5,13 @@ use crate::execution::validate_execution_cwd;
 use crate::policy::NetworkMode;
 #[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;
+#[cfg(windows)]
+use std::time::{Duration, Instant};
+
+#[cfg(windows)]
+const SETUP_READY_WAIT: Duration = Duration::from_secs(15);
+#[cfg(windows)]
+const SETUP_READY_POLL: Duration = Duration::from_millis(250);
 
 const SETUP_HELP_TEXT: &str = "\
 Usage: runseal setup windows-sandbox [--cwd <path>] [--status] [--json] [--elevate]
@@ -174,8 +181,33 @@ fn run_windows_sandbox_setup_inner(
         }
         return Err(format!("{WINDOWS_SANDBOX_SETUP_FAILED}: {err}"));
     }
+    if let Err(err) = wait_for_windows_sandbox_setup_ready(cwd) {
+        if json_output {
+            println!(
+                "{}",
+                cli_error_payload(windows_sandbox_setup_failed_error_with_detail(cwd, &err))
+            );
+            return Err(String::new());
+        }
+        return Err(format!("{WINDOWS_SANDBOX_SETUP_FAILED}: {err}"));
+    }
     println!("{}", windows_sandbox_setup_success_payload(cwd));
     Ok(())
+}
+
+#[cfg(windows)]
+fn wait_for_windows_sandbox_setup_ready(cwd: &Path) -> Result<(), String> {
+    let deadline = Instant::now() + SETUP_READY_WAIT;
+    loop {
+        let status = windows_sandbox_setup_status_for_cwd(cwd)?;
+        if !windows_sandbox_setup_requires_setup(&status) {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err("setup helper exited successfully before setup completed".to_string());
+        }
+        std::thread::sleep(SETUP_READY_POLL);
+    }
 }
 
 #[cfg(windows)]

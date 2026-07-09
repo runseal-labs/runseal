@@ -5,23 +5,29 @@ use base64::{
 };
 use serde_json::{Value, json};
 use std::collections::HashMap;
+use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
+use std::path::{Path, PathBuf};
 use std::sync::{
     Arc, Mutex, OnceLock,
     atomic::{AtomicBool, Ordering},
 };
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
+use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Security::Cryptography::{
     BCRYPT_USE_SYSTEM_PREFERRED_RNG, BCryptGenRandom,
 };
+use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject};
 
 const MAX_HEADER_BYTES: usize = 64 * 1024;
 const NO_PROXY: &str = "";
 const MANAGED_PROXY_PORT: u16 = 43129;
 const MANAGED_PROXY_BIND_RETRY_TIMEOUT: Duration = Duration::from_secs(30);
 const MANAGED_PROXY_BIND_RETRY_INTERVAL: Duration = Duration::from_millis(50);
+const MANAGED_PROXY_HEALTH_HOST: &str = "runseal.local";
+const MANAGED_PROXY_HEALTH_PATH: &str = "/.runseal/managed-proxy/health";
 const PROXY_KEYS: &[&str] = &[
     "HTTP_PROXY",
     "HTTPS_PROXY",
@@ -34,13 +40,13 @@ const PROXY_KEYS: &[&str] = &[
 ];
 const NO_PROXY_KEYS: &[&str] = &["NO_PROXY", "no_proxy"];
 const PROXY_AUTHORIZATION_KEY: &str = "RUNSEAL_NETWORK_PROXY_AUTHORIZATION";
-type ProxyEventBuffer = Arc<Mutex<Vec<Value>>>;
-type ProxyTokenMap = Arc<Mutex<HashMap<String, ProxyEventBuffer>>>;
+type ProxyTokenMap = Arc<Mutex<HashMap<String, PathBuf>>>;
 
 pub(super) struct ManagedSandboxProxy {
-    inner: Arc<ManagedSandboxProxyState>,
+    inner: Option<Arc<ManagedSandboxProxyState>>,
+    addr: SocketAddr,
     token: String,
-    events: Arc<Mutex<Vec<Value>>>,
+    event_path: PathBuf,
 }
 
 struct ManagedSandboxProxyState {
@@ -54,6 +60,7 @@ impl ManagedSandboxProxy {
     pub(super) fn start() -> io::Result<Self> {
         static SHARED_PROXY: OnceLock<Mutex<Option<Arc<ManagedSandboxProxyState>>>> =
             OnceLock::new();
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), MANAGED_PROXY_PORT);
         let mut shared = SHARED_PROXY
             .get_or_init(|| Mutex::new(None))
             .lock()
@@ -66,23 +73,53 @@ impl ManagedSandboxProxy {
             {
                 *shared = None;
             } else {
-                let token = new_proxy_token()?;
-                let events = Arc::new(Mutex::new(Vec::new()));
-                inner.add_token(token.clone(), Arc::clone(&events))?;
-                return Ok(Self {
-                    inner: Arc::clone(inner),
-                    token,
-                    events,
-                });
+                return Self::register_owned(Arc::clone(inner));
             }
         }
 
-        let proxy = Self::start_dedicated_on_with_token(
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), MANAGED_PROXY_PORT),
-            new_proxy_token()?,
-        )?;
-        *shared = Some(Arc::clone(&proxy.inner));
-        Ok(proxy)
+        if managed_proxy_health_check(addr) {
+            return Self::register_external(addr);
+        }
+
+        match Self::start_dedicated_on_with_token(addr, new_proxy_token()?) {
+            Ok(proxy) => {
+                if let Some(inner) = &proxy.inner {
+                    *shared = Some(Arc::clone(inner));
+                }
+                Ok(proxy)
+            }
+            Err(err)
+                if err.kind() == io::ErrorKind::AddrInUse && managed_proxy_health_check(addr) =>
+            {
+                Self::register_external(addr)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    fn register_owned(inner: Arc<ManagedSandboxProxyState>) -> io::Result<Self> {
+        let token = new_proxy_token()?;
+        let event_path = managed_proxy_event_path(&token)?;
+        inner.add_token(token.clone(), event_path.clone())?;
+        register_managed_proxy_token(&token, &event_path)?;
+        Ok(Self {
+            addr: inner.addr,
+            inner: Some(inner),
+            token,
+            event_path,
+        })
+    }
+
+    fn register_external(addr: SocketAddr) -> io::Result<Self> {
+        let token = new_proxy_token()?;
+        let event_path = managed_proxy_event_path(&token)?;
+        register_managed_proxy_token(&token, &event_path)?;
+        Ok(Self {
+            addr,
+            inner: None,
+            token,
+            event_path,
+        })
     }
 
     fn start_dedicated_on_with_token(addr: SocketAddr, token: String) -> io::Result<Self> {
@@ -91,10 +128,10 @@ impl ManagedSandboxProxy {
         let addr = listener.local_addr()?;
         let shutdown = Arc::new(AtomicBool::new(false));
         let thread_shutdown = Arc::clone(&shutdown);
-        let events = Arc::new(Mutex::new(Vec::new()));
+        let event_path = managed_proxy_event_path(&token)?;
         let tokens = Arc::new(Mutex::new(HashMap::from([(
             token.clone(),
-            Arc::clone(&events),
+            event_path.clone(),
         )])));
         let thread_tokens = Arc::clone(&tokens);
         let thread = thread::spawn(move || accept_loop(listener, thread_shutdown, thread_tokens));
@@ -104,10 +141,12 @@ impl ManagedSandboxProxy {
             tokens,
             thread: Some(thread),
         });
+        register_managed_proxy_token(&token, &event_path)?;
         Ok(Self {
-            inner,
+            addr,
+            inner: Some(inner),
             token,
-            events,
+            event_path,
         })
     }
 
@@ -120,7 +159,7 @@ impl ManagedSandboxProxy {
     }
 
     pub(super) fn environment(&self) -> Vec<(String, String)> {
-        let proxy_url = format!("http://runseal:{}@{}", self.token, self.inner.addr);
+        let proxy_url = format!("http://runseal:{}@{}", self.token, self.addr);
         let mut env = vec![
             ("RUNSEAL_NETWORK_PROXY_ACTIVE".to_string(), "1".to_string()),
             (
@@ -148,25 +187,26 @@ impl ManagedSandboxProxy {
     }
 
     pub(super) fn drain_events(&self) -> Vec<Value> {
-        self.events
-            .lock()
-            .map(|mut events| events.drain(..).collect())
-            .unwrap_or_default()
+        drain_proxy_events(&self.event_path).unwrap_or_default()
     }
 }
 
 impl Drop for ManagedSandboxProxy {
     fn drop(&mut self) {
-        self.inner.remove_token(&self.token);
+        if let Some(inner) = &self.inner {
+            inner.remove_token(&self.token);
+        }
+        let _ = unregister_managed_proxy_token(&self.token);
+        let _ = fs::remove_file(&self.event_path);
     }
 }
 
 impl ManagedSandboxProxyState {
-    fn add_token(&self, token: String, events: Arc<Mutex<Vec<Value>>>) -> io::Result<()> {
+    fn add_token(&self, token: String, event_path: PathBuf) -> io::Result<()> {
         self.tokens
             .lock()
             .map_err(|_| io::Error::other("managed proxy token lock poisoned"))?
-            .insert(token, events);
+            .insert(token, event_path);
         Ok(())
     }
 
@@ -198,6 +238,23 @@ fn bind_proxy_listener(addr: SocketAddr) -> io::Result<TcpListener> {
             Err(err) => return Err(err),
         }
     }
+}
+
+fn managed_proxy_health_check(addr: SocketAddr) -> bool {
+    let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(200)) else {
+        return false;
+    };
+    let request = format!(
+        "GET http://{MANAGED_PROXY_HEALTH_HOST}{MANAGED_PROXY_HEALTH_PATH} HTTP/1.1\r\nHost: {MANAGED_PROXY_HEALTH_HOST}\r\nConnection: close\r\n\r\n"
+    );
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+    let mut response = [0_u8; 128];
+    let Ok(read) = stream.read(&mut response) else {
+        return false;
+    };
+    String::from_utf8_lossy(&response[..read]).starts_with("HTTP/1.1 204 RunSeal Managed Proxy")
 }
 
 impl Drop for ManagedSandboxProxyState {
@@ -241,6 +298,10 @@ fn handle_client(mut client: TcpStream, tokens: ProxyTokenMap) -> io::Result<()>
         if let Some(header_end) = find_header_end(&buffer) {
             let body_prefix = buffer[header_end..].to_vec();
             let header = String::from_utf8_lossy(&buffer[..header_end]).into_owned();
+            if is_managed_proxy_health_request(&header) {
+                client.write_all(b"HTTP/1.1 204 RunSeal Managed Proxy\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")?;
+                return Ok(());
+            }
             let Some(events) = authorized_proxy_request(&header, &tokens)? else {
                 client.write_all(
                     b"HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"runseal\"\r\nContent-Length: 0\r\n\r\n",
@@ -257,17 +318,37 @@ fn handle_client(mut client: TcpStream, tokens: ProxyTokenMap) -> io::Result<()>
 
 fn authorized_proxy_request(
     header: &str,
-    tokens: &Mutex<HashMap<String, ProxyEventBuffer>>,
-) -> io::Result<Option<ProxyEventBuffer>> {
+    tokens: &Mutex<HashMap<String, PathBuf>>,
+) -> io::Result<Option<PathBuf>> {
     let Some(actual) = header_value(header, "Proxy-Authorization") else {
         return Ok(None);
     };
     let tokens = tokens
         .lock()
         .map_err(|_| io::Error::other("managed proxy token lock poisoned"))?;
-    Ok(tokens.iter().find_map(|(token, events)| {
-        (actual == proxy_basic_auth_value(token)).then(|| Arc::clone(events))
-    }))
+    Ok(tokens
+        .iter()
+        .find_map(|(token, event_path)| {
+            (actual == proxy_basic_auth_value(token)).then(|| event_path.clone())
+        })
+        .or_else(|| {
+            actual
+                .strip_prefix("Basic ")
+                .and_then(|encoded| STANDARD.decode(encoded).ok())
+                .and_then(|decoded| String::from_utf8(decoded).ok())
+                .and_then(|decoded| decoded.strip_prefix("runseal:").map(str::to_string))
+                .and_then(|token| managed_proxy_registered_event_path(&token).ok().flatten())
+        }))
+}
+
+fn is_managed_proxy_health_request(header: &str) -> bool {
+    let request_line = header.split("\r\n").next().unwrap_or_default();
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().unwrap_or_default();
+    let target = parts.next().unwrap_or_default();
+    method.eq_ignore_ascii_case("GET")
+        && (target == MANAGED_PROXY_HEALTH_PATH
+            || target == format!("http://{MANAGED_PROXY_HEALTH_HOST}{MANAGED_PROXY_HEALTH_PATH}"))
 }
 
 fn proxy_basic_auth_value(token: &str) -> String {
@@ -275,14 +356,11 @@ fn proxy_basic_auth_value(token: &str) -> String {
 }
 
 fn record_proxy_request_event(
-    events: &Mutex<Vec<Value>>,
+    event_path: &Path,
     header: &str,
     duration: Duration,
     result: Result<&(), &io::Error>,
 ) {
-    let Ok(mut events) = events.lock() else {
-        return;
-    };
     let request = proxy_request_metadata(header);
     let (event_type, decision) = if result.is_ok() {
         ("execution.network.request", "allowed")
@@ -302,7 +380,112 @@ fn record_proxy_request_event(
     if let (Some(object), Err(err)) = (event.as_object_mut(), result) {
         object.insert("reason".to_string(), json!(err.to_string()));
     }
-    events.push(event);
+    let _ = append_proxy_event(event_path, &event);
+}
+
+fn managed_proxy_event_path(token: &str) -> io::Result<PathBuf> {
+    let dir = managed_proxy_state_dir().join("events");
+    fs::create_dir_all(&dir)?;
+    Ok(dir.join(format!("{token}.jsonl")))
+}
+
+fn managed_proxy_token_path(token: &str) -> io::Result<PathBuf> {
+    let dir = managed_proxy_state_dir().join("tokens");
+    fs::create_dir_all(&dir)?;
+    Ok(dir.join(format!("{token}.json")))
+}
+
+fn managed_proxy_state_dir() -> PathBuf {
+    if let Some(appdata) = std::env::var_os("APPDATA") {
+        return PathBuf::from(appdata).join("RunSeal").join("managed-proxy");
+    }
+    std::env::temp_dir().join("RunSeal").join("managed-proxy")
+}
+
+fn register_managed_proxy_token(token: &str, event_path: &Path) -> io::Result<()> {
+    let path = managed_proxy_token_path(token)?;
+    fs::write(
+        path,
+        json!({
+            "pid": std::process::id(),
+            "event_path": event_path.to_string_lossy(),
+        })
+        .to_string(),
+    )
+}
+
+fn unregister_managed_proxy_token(token: &str) -> io::Result<()> {
+    match fs::remove_file(managed_proxy_token_path(token)?) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
+fn managed_proxy_registered_event_path(token: &str) -> io::Result<Option<PathBuf>> {
+    let path = managed_proxy_token_path(token)?;
+    let contents = match fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err),
+    };
+    let value: Value = serde_json::from_str(&contents).map_err(io::Error::other)?;
+    let Some(pid) = value
+        .get("pid")
+        .and_then(Value::as_u64)
+        .and_then(|pid| u32::try_from(pid).ok())
+    else {
+        return Ok(None);
+    };
+    if !process_is_running(pid) {
+        let _ = unregister_managed_proxy_token(token);
+        return Ok(None);
+    }
+    Ok(value
+        .get("event_path")
+        .and_then(Value::as_str)
+        .map(PathBuf::from))
+}
+
+fn process_is_running(pid: u32) -> bool {
+    if pid == std::process::id() {
+        return true;
+    }
+    const SYNCHRONIZE: u32 = 0x0010_0000;
+    const WAIT_TIMEOUT: u32 = 0x102;
+    let handle = unsafe { OpenProcess(SYNCHRONIZE, 0, pid) };
+    if handle.is_null() {
+        return false;
+    }
+    let wait = unsafe { WaitForSingleObject(handle, 0) };
+    unsafe {
+        CloseHandle(handle);
+    }
+    wait == WAIT_TIMEOUT
+}
+
+fn append_proxy_event(path: &Path, event: &Value) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+    writeln!(file, "{event}")
+}
+
+fn drain_proxy_events(path: &Path) -> io::Result<Vec<Value>> {
+    let contents = match fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err),
+    };
+    if contents.is_empty() {
+        return Ok(Vec::new());
+    }
+    let _ = fs::write(path, "");
+    Ok(contents
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .collect())
 }
 
 struct ProxyRequestMetadata {
@@ -604,14 +787,14 @@ mod tests {
             .find_map(|(key, value)| (key == "HTTP_PROXY").then_some(value))
             .expect("second HTTP_PROXY");
 
-        assert_eq!(first.inner.addr, second.inner.addr);
+        assert_eq!(first.addr, second.addr);
         assert_ne!(first_url, second_url);
     }
 
     #[test]
     fn shared_proxy_listener_survives_handle_drop() {
         let first = ManagedSandboxProxy::start().expect("start first proxy");
-        let addr = first.inner.addr;
+        let addr = first.addr;
         drop(first);
 
         let stream = TcpStream::connect_timeout(&addr, Duration::from_secs(1))
@@ -619,13 +802,13 @@ mod tests {
         drop(stream);
 
         let second = ManagedSandboxProxy::start().expect("start second proxy");
-        assert_eq!(second.inner.addr, addr);
+        assert_eq!(second.addr, addr);
     }
 
     #[test]
     fn drops_listener_when_last_proxy_handle_drops() {
         let proxy = ManagedSandboxProxy::start_dedicated_ephemeral().expect("start proxy");
-        let addr = proxy.inner.addr;
+        let addr = proxy.addr;
         let stream = TcpStream::connect_timeout(&addr, Duration::from_secs(1))
             .expect("proxy listener should accept while proxy is alive");
         drop(stream);
@@ -702,7 +885,7 @@ mod tests {
         });
 
         let proxy = ManagedSandboxProxy::start().expect("start proxy");
-        let mut client = TcpStream::connect(proxy.inner.addr).expect("connect proxy");
+        let mut client = TcpStream::connect(proxy.addr).expect("connect proxy");
         let auth = proxy_basic_auth_value(&proxy.token);
         client
             .write_all(
@@ -736,7 +919,7 @@ mod tests {
     #[test]
     fn rejects_proxy_requests_without_token() {
         let proxy = ManagedSandboxProxy::start().expect("start proxy");
-        let mut client = TcpStream::connect(proxy.inner.addr).expect("connect proxy");
+        let mut client = TcpStream::connect(proxy.addr).expect("connect proxy");
         client
             .write_all(b"GET http://example.test/ HTTP/1.1\r\nHost: example.test\r\n\r\n")
             .expect("write proxy request");
@@ -750,13 +933,65 @@ mod tests {
     }
 
     #[test]
+    fn accepts_registered_cross_process_token() {
+        let upstream = TcpListener::bind("127.0.0.1:0").expect("bind upstream");
+        let upstream_addr = upstream.local_addr().expect("upstream addr");
+        let upstream_thread = thread::spawn(move || {
+            let (mut stream, _) = upstream.accept().expect("accept upstream");
+            let mut request = [0_u8; 256];
+            let read = stream.read(&mut request).expect("read upstream request");
+            let request = String::from_utf8_lossy(&request[..read]);
+            assert!(request.starts_with("GET /external HTTP/1.1\r\n"));
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+                .expect("write upstream response");
+        });
+
+        let proxy = ManagedSandboxProxy::start_dedicated_ephemeral().expect("start proxy");
+        let token = new_proxy_token().expect("token");
+        let event_path = managed_proxy_event_path(&token).expect("event path");
+        register_managed_proxy_token(&token, &event_path).expect("register token");
+
+        let mut client = TcpStream::connect(proxy.addr).expect("connect proxy");
+        let auth = proxy_basic_auth_value(&token);
+        client
+            .write_all(
+                format!(
+                    "GET http://{upstream_addr}/external HTTP/1.1\r\nHost: {upstream_addr}\r\nProxy-Authorization: {auth}\r\n\r\n"
+                )
+                .as_bytes(),
+            )
+            .expect("write proxy request");
+        client
+            .shutdown(Shutdown::Write)
+            .expect("close request side");
+        let mut response = String::new();
+        client
+            .read_to_string(&mut response)
+            .expect("read proxy response");
+        assert!(response.ends_with("\r\n\r\nok"));
+        upstream_thread.join().expect("upstream thread");
+
+        let events = wait_for_proxy_events_at(&event_path);
+        assert!(
+            events
+                .iter()
+                .any(|event| event["type"] == "execution.network.request"
+                    && event["path"] == "/external")
+        );
+
+        unregister_managed_proxy_token(&token).expect("unregister token");
+        let _ = fs::remove_file(event_path);
+    }
+
+    #[test]
     fn records_proxy_error_events_without_query_or_credentials() {
         let proxy = ManagedSandboxProxy::start_dedicated_ephemeral().expect("start proxy");
         let unused_listener = TcpListener::bind("127.0.0.1:0").expect("bind unused port");
         let unused_addr = unused_listener.local_addr().expect("unused addr");
         drop(unused_listener);
 
-        let mut client = TcpStream::connect(proxy.inner.addr).expect("connect proxy");
+        let mut client = TcpStream::connect(proxy.addr).expect("connect proxy");
         let auth = proxy_basic_auth_value(&proxy.token);
         client
             .write_all(
@@ -784,9 +1019,13 @@ mod tests {
     }
 
     fn wait_for_proxy_events(proxy: &ManagedSandboxProxy) -> Vec<Value> {
+        wait_for_proxy_events_at(&proxy.event_path)
+    }
+
+    fn wait_for_proxy_events_at(path: &Path) -> Vec<Value> {
         let deadline = Instant::now() + Duration::from_secs(1);
         loop {
-            let events = proxy.drain_events();
+            let events = drain_proxy_events(path).expect("drain events");
             if !events.is_empty() || Instant::now() >= deadline {
                 return events;
             }
