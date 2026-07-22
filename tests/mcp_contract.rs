@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use std::env;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::OnceLock;
 use tempfile::TempDir;
@@ -92,6 +92,18 @@ fn stdout_json_lines(output: &Output) -> Result<Vec<Value>> {
         .filter(|line| !line.trim().is_empty())
         .map(|line| serde_json::from_str(line).context("stdout line was not valid JSON"))
         .collect()
+}
+
+fn output_reports_cwd(output: &str, expected: &Path) -> bool {
+    let Ok(expected) = expected.canonicalize() else {
+        return false;
+    };
+
+    output.lines().any(|line| {
+        PathBuf::from(line)
+            .canonicalize()
+            .is_ok_and(|actual| actual == expected)
+    })
 }
 
 #[test]
@@ -234,17 +246,19 @@ fn mcp_exec_runs_with_per_call_cwd() -> Result<()> {
     assert_eq!(result["isError"], false, "{result}");
     assert_eq!(result["structuredContent"]["exit_code"], 0);
     assert!(
-        result["structuredContent"]["stdout"]
-            .as_str()
-            .unwrap_or_default()
-            .contains(call_cwd.path().to_string_lossy().as_ref()),
+        output_reports_cwd(
+            result["structuredContent"]["stdout"]
+                .as_str()
+                .unwrap_or_default(),
+            call_cwd.path(),
+        ),
         "{result}"
     );
     assert!(
-        result["content"][0]["text"]
-            .as_str()
-            .unwrap_or_default()
-            .contains(call_cwd.path().to_string_lossy().as_ref()),
+        output_reports_cwd(
+            result["content"][0]["text"].as_str().unwrap_or_default(),
+            call_cwd.path(),
+        ),
         "{result}"
     );
     assert!(result["structuredContent"].get("platform_plan").is_none());
