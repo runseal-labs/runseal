@@ -69,8 +69,10 @@ use windows_sys::Win32::Storage::FileSystem::FILE_DELETE_CHILD;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_EXECUTE;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
+use windows_sys::Win32::System::Diagnostics::Debug::SetErrorMode;
 
 const DENY_ACCESS: i32 = 3;
+const SETUP_HELPER_NONINTERACTIVE_ERROR_MODE: u32 = 0x0001 | 0x0002 | 0x8000;
 
 mod sandbox_users;
 mod setup_runtime_bin;
@@ -566,6 +568,9 @@ fn lock_sandbox_dir(
 }
 
 pub fn main() -> Result<()> {
+    // Return setup failures to the caller instead of allowing OS error dialogs.
+    unsafe { SetErrorMode(SETUP_HELPER_NONINTERACTIVE_ERROR_MODE) };
+
     let ret = real_main();
     if let Err(e) = &ret {
         // Best-effort: log unexpected top-level errors.

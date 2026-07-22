@@ -236,7 +236,14 @@ fn release_windows_archives_include_runner_helpers() {
 fn vendored_windows_setup_launches_suppress_system_error_dialogs() {
     for (name, source) in VENDOR_SETUP_SOURCES {
         if *name == "setup.rs" || *name == "setup_main/win.rs" {
-            assert!(source.contains("RunSeal"));
+            assert!(
+                source.contains("SetErrorMode"),
+                "{name} must suppress system error dialogs"
+            );
+            assert!(
+                source.contains("0x0001 | 0x0002 | 0x8000"),
+                "{name} must set the noninteractive error mode"
+            );
         }
     }
 }

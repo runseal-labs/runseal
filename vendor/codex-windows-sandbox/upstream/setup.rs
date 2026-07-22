@@ -1171,12 +1171,32 @@ fn run_setup_exe(
     needs_elevation: bool,
     codex_home: &Path,
 ) -> Result<()> {
+    use windows_sys::Win32::System::Diagnostics::Debug::SetErrorMode;
     use windows_sys::Win32::System::Threading::GetExitCodeProcess;
     use windows_sys::Win32::System::Threading::INFINITE;
     use windows_sys::Win32::System::Threading::WaitForSingleObject;
     use windows_sys::Win32::UI::Shell::SEE_MASK_NOCLOSEPROCESS;
     use windows_sys::Win32::UI::Shell::SHELLEXECUTEINFOW;
     use windows_sys::Win32::UI::Shell::ShellExecuteExW;
+
+    const SETUP_NONINTERACTIVE_ERROR_MODE: u32 = 0x0001 | 0x0002 | 0x8000;
+
+    struct ErrorModeGuard(u32);
+
+    impl ErrorModeGuard {
+        fn suppress_system_error_dialogs() -> Self {
+            // The setup helper inherits this mode. Restore the caller's
+            // process-wide setting once it has been launched.
+            Self(unsafe { SetErrorMode(SETUP_NONINTERACTIVE_ERROR_MODE) })
+        }
+    }
+
+    impl Drop for ErrorModeGuard {
+        fn drop(&mut self) {
+            unsafe { SetErrorMode(self.0) };
+        }
+    }
+
     let exe = find_setup_exe();
     let payload_json = serde_json::to_string(payload).map_err(|err| {
         failure(
@@ -1199,6 +1219,7 @@ fn run_setup_exe(
 
     if !needs_elevation {
         let payload_path = write_setup_payload_file(codex_home, payload_json.as_bytes())?;
+        let _error_mode = ErrorModeGuard::suppress_system_error_dialogs();
         let status = Command::new(&exe)
             .arg("--payload-file")
             .arg(&payload_path)
@@ -1270,6 +1291,7 @@ fn run_setup_exe(
     sei.lpParameters = params_w.as_ptr();
     // Hide the window for the elevated helper.
     sei.nShow = 0; // SW_HIDE
+    let _error_mode = ErrorModeGuard::suppress_system_error_dialogs();
     let ok = unsafe { ShellExecuteExW(&mut sei) };
     if ok == 0 || sei.hProcess == 0 {
         let _ = remove_setup_payload_file(&payload_path);
