@@ -186,6 +186,10 @@ impl ManagedSandboxProxy {
         env
     }
 
+    pub(super) fn addr(&self) -> SocketAddr {
+        self.addr
+    }
+
     pub(super) fn drain_events(&self) -> Vec<Value> {
         drain_proxy_events(&self.event_path).unwrap_or_default()
     }

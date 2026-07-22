@@ -322,7 +322,7 @@ pub(super) fn execute_windows_sandbox_plan(
                     use_private_desktop: false,
                     proxy_enforced: plan.network_managed_proxy == "required",
                     allow_network_proxy: plan.network_managed_proxy == "required",
-                    sandbox_proxy_settings: None,
+                    sandbox_proxy_settings: managed_proxy_settings(managed_proxy.as_ref()),
                     read_cap_sid,
                     read_roots_override: None,
                     read_roots_include_platform_defaults: workspace_contained,
@@ -567,6 +567,30 @@ fn sandbox_environment(
 }
 
 #[cfg(windows)]
+fn managed_proxy_settings(
+    managed_proxy: Option<&ManagedSandboxProxy>,
+) -> Option<codex_windows_sandbox::SandboxProxySettings> {
+    managed_proxy.map(|proxy| {
+        codex_windows_sandbox::SandboxProxySettings::loopback_proxy(proxy.addr().port())
+    })
+}
+
+#[cfg(windows)]
 fn duration_millis_u64(duration: Duration) -> u64 {
     duration.as_millis().min(u128::from(u64::MAX)) as u64
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn managed_proxy_settings_use_the_active_loopback_port() {
+        let proxy = ManagedSandboxProxy::start().expect("start managed proxy");
+        let settings = managed_proxy_settings(Some(&proxy)).expect("proxy settings");
+
+        assert_eq!(settings.proxy_ports, vec![proxy.addr().port()]);
+        assert!(!settings.allow_local_binding);
+        assert!(managed_proxy_settings(None).is_none());
+    }
 }
