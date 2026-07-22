@@ -13,10 +13,12 @@ mod cwd_junction;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_windows_sandbox::AppContainerSecurityCapabilities;
 use codex_windows_sandbox::ErrorPayload;
 use codex_windows_sandbox::ExitPayload;
 use codex_windows_sandbox::FramedMessage;
 use codex_windows_sandbox::IPC_PROTOCOL_VERSION;
+use codex_windows_sandbox::LaunchDesktopMode;
 use codex_windows_sandbox::LocalSid;
 use codex_windows_sandbox::Message;
 use codex_windows_sandbox::OutputPayload;
@@ -27,23 +29,24 @@ use codex_windows_sandbox::SpawnReady;
 use codex_windows_sandbox::SpawnRequest;
 use codex_windows_sandbox::StderrMode;
 use codex_windows_sandbox::StdinMode;
-use codex_windows_sandbox::WindowsSandboxTokenMode;
+use codex_windows_sandbox::WindowsSandboxIsolationMode;
 use codex_windows_sandbox::allow_null_device;
-use codex_windows_sandbox::create_readonly_token_with_caps_and_user_from;
-use codex_windows_sandbox::create_workspace_write_token_with_caps_and_user_from;
+use codex_windows_sandbox::create_elevated_readonly_token_with_caps_from;
+use codex_windows_sandbox::create_elevated_workspace_write_token_with_caps_from;
 use codex_windows_sandbox::decode_bytes;
 use codex_windows_sandbox::encode_bytes;
 use codex_windows_sandbox::get_current_token_for_restriction;
-use codex_windows_sandbox::get_logon_sid_bytes;
 use codex_windows_sandbox::hide_current_user_profile_dir;
+use codex_windows_sandbox::isolation_mode_for_permission_profile;
 use codex_windows_sandbox::log_note;
 use codex_windows_sandbox::read_frame;
 use codex_windows_sandbox::read_handle_loop;
 use codex_windows_sandbox::resize_conpty_handle;
+use codex_windows_sandbox::restrict_current_token_default_dacl_to_logon_sid;
 use codex_windows_sandbox::spawn_process_with_pipes;
 use codex_windows_sandbox::to_wide;
-use codex_windows_sandbox::token_mode_for_permission_profile;
 use codex_windows_sandbox::write_frame;
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fs::File;
 use std::os::windows::io::FromRawHandle;
@@ -63,11 +66,24 @@ use windows_sys::Win32::Storage::FileSystem::CreateFileW;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
 use windows_sys::Win32::Storage::FileSystem::OPEN_EXISTING;
+use windows_sys::Win32::System::Diagnostics::Debug::SetErrorMode;
 use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
 use windows_sys::Win32::System::JobObjects::CreateJobObjectW;
 use windows_sys::Win32::System::JobObjects::JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+use windows_sys::Win32::System::JobObjects::JOB_OBJECT_UILIMIT_DESKTOP;
+use windows_sys::Win32::System::JobObjects::JOB_OBJECT_UILIMIT_DISPLAYSETTINGS;
+use windows_sys::Win32::System::JobObjects::JOB_OBJECT_UILIMIT_EXITWINDOWS;
+use windows_sys::Win32::System::JobObjects::JOB_OBJECT_UILIMIT_GLOBALATOMS;
+use windows_sys::Win32::System::JobObjects::JOB_OBJECT_UILIMIT_HANDLES;
+use windows_sys::Win32::System::JobObjects::JOB_OBJECT_UILIMIT_READCLIPBOARD;
+use windows_sys::Win32::System::JobObjects::JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS;
+use windows_sys::Win32::System::JobObjects::JOB_OBJECT_UILIMIT_WRITECLIPBOARD;
+use windows_sys::Win32::System::JobObjects::JOBOBJECT_BASIC_UI_RESTRICTIONS;
 use windows_sys::Win32::System::JobObjects::JOBOBJECT_EXTENDED_LIMIT_INFORMATION;
+use windows_sys::Win32::System::JobObjects::JobObjectBasicUIRestrictions;
 use windows_sys::Win32::System::JobObjects::JobObjectExtendedLimitInformation;
+#[cfg(test)]
+use windows_sys::Win32::System::JobObjects::QueryInformationJobObject;
 use windows_sys::Win32::System::JobObjects::SetInformationJobObject;
 use windows_sys::Win32::System::JobObjects::TerminateJobObject;
 use windows_sys::Win32::System::Threading::GetExitCodeProcess;
@@ -76,18 +92,21 @@ use windows_sys::Win32::System::Threading::INFINITE;
 use windows_sys::Win32::System::Threading::MUTEX_ALL_ACCESS;
 use windows_sys::Win32::System::Threading::OpenMutexW;
 use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
+use windows_sys::Win32::System::Threading::ResumeThread;
 use windows_sys::Win32::System::Threading::TerminateProcess;
 use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
 const READ_ACL_MUTEX_NAME: &str = "Local\\RunSealSandboxReadAcl";
 const WAIT_TIMEOUT: u32 = 0x0000_0102;
-const MAX_FINITE_WAIT_MS: u32 = INFINITE - 1;
-
-fn wait_timeout_ms(timeout_ms: Option<u64>) -> u32 {
-    timeout_ms
-        .map(|ms| ms.min(MAX_FINITE_WAIT_MS as u64) as u32)
-        .unwrap_or(INFINITE)
-}
+const NONINTERACTIVE_ERROR_MODE: u32 = 0x0001 | 0x0002 | 0x8000;
+const SANDBOX_JOB_UI_RESTRICTIONS: u32 = JOB_OBJECT_UILIMIT_DESKTOP
+    | JOB_OBJECT_UILIMIT_DISPLAYSETTINGS
+    | JOB_OBJECT_UILIMIT_EXITWINDOWS
+    | JOB_OBJECT_UILIMIT_GLOBALATOMS
+    | JOB_OBJECT_UILIMIT_HANDLES
+    | JOB_OBJECT_UILIMIT_READCLIPBOARD
+    | JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS
+    | JOB_OBJECT_UILIMIT_WRITECLIPBOARD;
 
 struct IpcSpawnedProcess {
     log_dir: PathBuf,
@@ -135,7 +154,7 @@ impl Drop for OwnedWinHandle {
     }
 }
 
-unsafe fn create_job_kill_on_close() -> Result<HANDLE> {
+unsafe fn create_sandbox_job() -> Result<HANDLE> {
     let h_job = OwnedWinHandle::new(CreateJobObjectW(std::ptr::null_mut(), std::ptr::null()));
     if h_job.raw() == 0 {
         return Err(anyhow::anyhow!("CreateJobObjectW failed"));
@@ -149,41 +168,28 @@ unsafe fn create_job_kill_on_close() -> Result<HANDLE> {
         std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
     );
     if ok == 0 {
-        return Err(anyhow::anyhow!("SetInformationJobObject failed"));
+        return Err(anyhow::anyhow!(
+            "SetInformationJobObject extended limits failed: {}",
+            GetLastError()
+        ));
+    }
+
+    let ui_limits = JOBOBJECT_BASIC_UI_RESTRICTIONS {
+        UIRestrictionsClass: SANDBOX_JOB_UI_RESTRICTIONS,
+    };
+    let ok = SetInformationJobObject(
+        h_job.raw(),
+        JobObjectBasicUIRestrictions,
+        &ui_limits as *const _ as *const _,
+        std::mem::size_of::<JOBOBJECT_BASIC_UI_RESTRICTIONS>() as u32,
+    );
+    if ok == 0 {
+        return Err(anyhow::anyhow!(
+            "SetInformationJobObject UI restrictions failed: {}",
+            GetLastError()
+        ));
     }
     Ok(h_job.into_raw())
-}
-
-unsafe fn assign_child_to_kill_on_close_job(process: HANDLE) -> Result<HANDLE> {
-    let job = create_job_kill_on_close()?;
-    if AssignProcessToJobObject(job, process) == 0 {
-        let err = GetLastError();
-        CloseHandle(job);
-        anyhow::bail!("runner failed to assign child process to job object: {err}");
-    }
-    Ok(job)
-}
-
-unsafe fn close_handle_if_valid(handle: HANDLE) {
-    if handle != 0 && handle != INVALID_HANDLE_VALUE {
-        CloseHandle(handle);
-    }
-}
-
-unsafe fn cleanup_unmanaged_spawned_process(mut spawned: IpcSpawnedProcess) {
-    if spawned.pi.hProcess != 0 {
-        let _ = TerminateProcess(spawned.pi.hProcess, 1);
-    }
-    close_handle_if_valid(spawned.pi.hThread);
-    close_handle_if_valid(spawned.pi.hProcess);
-    close_handle_if_valid(spawned.stdout_handle);
-    close_handle_if_valid(spawned.stderr_handle);
-    if let Some(handle) = spawned.stdin_handle.take() {
-        close_handle_if_valid(handle);
-    }
-    let _ = spawned.hpc_handle.take();
-    drop(spawned.conpty_owner.take());
-    drop(spawned._pipe_handles.take());
 }
 
 /// Open a named pipe created by the parent process.
@@ -275,16 +281,32 @@ fn effective_cwd(req_cwd: &Path, log_dir: Option<&Path>) -> PathBuf {
     }
 }
 
+fn restore_appcontainer_profile_environment(
+    env: &mut HashMap<String, String>,
+    runner_env: &HashMap<String, String>,
+) -> Result<()> {
+    for key in ["LOCALAPPDATA", "TEMP", "TMP"] {
+        let value = runner_env
+            .iter()
+            .find(|(candidate, _)| candidate.eq_ignore_ascii_case(key))
+            .map(|(_, value)| value.clone())
+            .with_context(|| format!("runner environment is missing {key}"))?;
+        env.retain(|candidate, _| !candidate.eq_ignore_ascii_case(key));
+        env.insert(key.to_string(), value);
+    }
+    Ok(())
+}
+
 fn spawn_ipc_process(req: &SpawnRequest) -> Result<IpcSpawnedProcess> {
     let log_dir = req.codex_home.clone();
     hide_current_user_profile_dir(req.codex_home.as_path());
-    let token_mode = token_mode_for_permission_profile(
+    let isolation_mode = isolation_mode_for_permission_profile(
         &req.permission_profile,
         &req.workspace_roots,
         &req.cwd,
         &req.env,
     )
-    .context("resolve permission profile token mode")?;
+    .context("resolve permission profile isolation mode")?;
     let mut cap_psids: Vec<LocalSid> = Vec::new();
     for sid in &req.cap_sids {
         cap_psids.push(
@@ -301,21 +323,47 @@ fn spawn_ipc_process(req: &SpawnRequest) -> Result<IpcSpawnedProcess> {
     // child is fully spawned still releases the backing LocalAlloc memory automatically.
     let cap_psid_ptrs: Vec<*mut _> = cap_psids.iter().map(LocalSid::as_ptr).collect();
     let base = OwnedWinHandle::new(unsafe { get_current_token_for_restriction()? });
-    let mut logon_sid_bytes = unsafe { get_logon_sid_bytes(base.raw())? };
-    let h_token = OwnedWinHandle::new(unsafe {
-        match token_mode {
-            WindowsSandboxTokenMode::ReadOnlyCapability => {
-                create_readonly_token_with_caps_and_user_from(base.raw(), &cap_psid_ptrs)
+    let h_token = if isolation_mode == WindowsSandboxIsolationMode::AppContainerCapabilities {
+        None
+    } else {
+        Some(OwnedWinHandle::new(unsafe {
+            match isolation_mode {
+                WindowsSandboxIsolationMode::ReadOnlyCapability => {
+                    create_elevated_readonly_token_with_caps_from(base.raw(), &cap_psid_ptrs)
+                }
+                WindowsSandboxIsolationMode::WritableRootsCapability => {
+                    create_elevated_workspace_write_token_with_caps_from(base.raw(), &cap_psid_ptrs)
+                }
+                WindowsSandboxIsolationMode::AppContainerCapabilities => {
+                    unreachable!("workspace-contained uses the base sandbox-user token plus LowBox")
+                }
             }
-            WindowsSandboxTokenMode::WritableRootsCapability => {
-                create_workspace_write_token_with_caps_and_user_from(base.raw(), &cap_psid_ptrs)
-            }
-        }
-    }?);
+        }?))
+    };
+    let child_token = h_token.as_ref().map_or(base.raw(), OwnedWinHandle::raw);
+    let mut appcontainer_capabilities =
+        if isolation_mode == WindowsSandboxIsolationMode::AppContainerCapabilities {
+            Some(AppContainerSecurityCapabilities::new(&req.cap_sids)?)
+        } else {
+            None
+        };
+    let security_capabilities = appcontainer_capabilities
+        .as_mut()
+        .map(AppContainerSecurityCapabilities::as_mut_ptr);
+    let mut child_env = req.env.clone();
+    if security_capabilities.is_some() {
+        restore_appcontainer_profile_environment(
+            &mut child_env,
+            &std::env::vars().collect::<HashMap<_, _>>(),
+        )?;
+        log_note(
+            &format!("lowbox: active capability SIDs={:?}", req.cap_sids),
+            Some(log_dir.as_path()),
+        );
+    }
     unsafe {
         // These ACL adjustments need the raw SID values, but ownership stays with `cap_psids`.
         // We do not manually `LocalFree` anything here; the wrappers handle every return path.
-        allow_null_device(logon_sid_bytes.as_mut_ptr() as *mut _);
         allow_null_device(cap_psid_ptrs[0]);
         for psid in &cap_psid_ptrs {
             allow_null_device(*psid);
@@ -329,12 +377,19 @@ fn spawn_ipc_process(req: &SpawnRequest) -> Result<IpcSpawnedProcess> {
     let mut pipe_handles = None;
     let (pi, stdout_handle, stderr_handle, stdin_handle) = if req.tty {
         let (pi, mut conpty) = codex_windows_sandbox::spawn_conpty_process_as_user(
-            h_token.raw(),
+            child_token,
             &req.command,
             &effective_cwd,
-            &req.env,
-            req.use_private_desktop,
+            &child_env,
+            if req.use_private_desktop {
+                LaunchDesktopMode::PrivateWindowStation
+            } else {
+                LaunchDesktopMode::Default
+            },
+            &cap_psid_ptrs,
             Some(log_dir.as_path()),
+            /*start_suspended*/ true,
+            security_capabilities,
         )?;
         hpc_handle = conpty.raw_handle();
         let input_write = conpty.take_input_write();
@@ -361,14 +416,21 @@ fn spawn_ipc_process(req: &SpawnRequest) -> Result<IpcSpawnedProcess> {
             StdinMode::Closed
         };
         let spawned_pipes: PipeSpawnHandles = spawn_process_with_pipes(
-            h_token.raw(),
+            child_token,
             &req.command,
             &effective_cwd,
-            &req.env,
+            &child_env,
             stdin_mode,
             StderrMode::Separate,
-            req.use_private_desktop,
+            if req.use_private_desktop {
+                LaunchDesktopMode::PrivateWindowStation
+            } else {
+                LaunchDesktopMode::Default
+            },
+            &cap_psid_ptrs,
             Some(log_dir.as_path()),
+            /*start_suspended*/ true,
+            security_capabilities,
         )?;
         let pi = spawned_pipes.process;
         let stdout_handle = spawned_pipes.stdout_read;
@@ -536,6 +598,13 @@ fn spawn_input_loop(
 
 /// Entry point for the Windows command runner process.
 pub fn main() -> Result<()> {
+    unsafe {
+        // CreateProcessWithLogonW does not reliably preserve the broker's transient error mode.
+        // Set it in the runner so every sandbox child inherits non-interactive error reporting.
+        SetErrorMode(NONINTERACTIVE_ERROR_MODE);
+        restrict_current_token_default_dacl_to_logon_sid()
+            .context("restrict command-runner object ACLs")?;
+    }
     let mut pipe_in = None;
     let mut pipe_out = None;
     for arg in std::env::args().skip(1) {
@@ -571,6 +640,14 @@ pub fn main() -> Result<()> {
         }
     };
 
+    let h_job = match unsafe { create_sandbox_job() } {
+        Ok(job) => OwnedWinHandle::new(job),
+        Err(err) => {
+            let _ = send_error(&pipe_write, "spawn_failed", err.to_string());
+            return Err(err);
+        }
+    };
+
     let ipc_spawn = match spawn_ipc_process(&req) {
         Ok(value) => value,
         Err(err) => {
@@ -578,18 +655,31 @@ pub fn main() -> Result<()> {
             return Err(err);
         }
     };
-    let log_dir = Some(ipc_spawn.log_dir.as_path());
-    let h_job = match unsafe { assign_child_to_kill_on_close_job(ipc_spawn.pi.hProcess) } {
-        Ok(job) => job,
-        Err(err) => {
-            log_note(&err.to_string(), log_dir);
+
+    unsafe {
+        if AssignProcessToJobObject(h_job.raw(), ipc_spawn.pi.hProcess) == 0 {
+            let error = GetLastError();
+            let _ = TerminateProcess(ipc_spawn.pi.hProcess, 1);
+            CloseHandle(ipc_spawn.pi.hThread);
+            CloseHandle(ipc_spawn.pi.hProcess);
+            let err = anyhow::anyhow!(
+                "runner failed to assign suspended child process to sandbox job: {error}"
+            );
             let _ = send_error(&pipe_write, "spawn_failed", err.to_string());
-            unsafe {
-                cleanup_unmanaged_spawned_process(ipc_spawn);
-            }
             return Err(err);
         }
-    };
+        if ResumeThread(ipc_spawn.pi.hThread) == u32::MAX {
+            let error = GetLastError();
+            let _ = TerminateJobObject(h_job.raw(), 1);
+            CloseHandle(ipc_spawn.pi.hThread);
+            CloseHandle(ipc_spawn.pi.hProcess);
+            let err = anyhow::anyhow!("runner failed to resume sandboxed child process: {error}");
+            let _ = send_error(&pipe_write, "spawn_failed", err.to_string());
+            return Err(err);
+        }
+    }
+
+    let log_dir = Some(ipc_spawn.log_dir.as_path());
     let pi = ipc_spawn.pi;
     let stdout_handle = ipc_spawn.stdout_handle;
     let stderr_handle = ipc_spawn.stderr_handle;
@@ -643,7 +733,7 @@ pub fn main() -> Result<()> {
         log_dir_owned,
     );
 
-    let timeout = wait_timeout_ms(req.timeout_ms);
+    let timeout = req.timeout_ms.map(|ms| ms as u32).unwrap_or(INFINITE);
     let wait_res = unsafe { WaitForSingleObject(pi.hProcess, timeout) };
     let timed_out = wait_res == WAIT_TIMEOUT;
     let interrupted = timed_out || terminated_by_request.load(Ordering::SeqCst);
@@ -665,10 +755,10 @@ pub fn main() -> Result<()> {
             CloseHandle(pi.hProcess);
         }
         if interrupted {
-            let _ = TerminateJobObject(h_job, 1);
+            let _ = TerminateJobObject(h_job.raw(), 1);
         }
-        CloseHandle(h_job);
     }
+    drop(h_job);
 
     if let Ok(mut guard) = hpc_handle.lock() {
         let _ = guard.take();
@@ -703,4 +793,75 @@ pub fn main() -> Result<()> {
     }
 
     std::process::exit(exit_code);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sandbox_job_configures_all_ui_restrictions() {
+        unsafe {
+            let job = OwnedWinHandle::new(create_sandbox_job().expect("create sandbox job"));
+            let mut ui_limits: JOBOBJECT_BASIC_UI_RESTRICTIONS = std::mem::zeroed();
+            let ok = QueryInformationJobObject(
+                job.raw(),
+                JobObjectBasicUIRestrictions,
+                &mut ui_limits as *mut _ as *mut _,
+                std::mem::size_of::<JOBOBJECT_BASIC_UI_RESTRICTIONS>() as u32,
+                std::ptr::null_mut(),
+            );
+
+            assert_ne!(
+                ok,
+                0,
+                "QueryInformationJobObject failed: {}",
+                GetLastError()
+            );
+            assert_eq!(
+                ui_limits.UIRestrictionsClass & SANDBOX_JOB_UI_RESTRICTIONS,
+                SANDBOX_JOB_UI_RESTRICTIONS
+            );
+        }
+    }
+
+    #[test]
+    fn appcontainer_uses_runner_profile_environment() {
+        let mut child_env = HashMap::from([
+            ("LocalAppData".to_string(), r"C:\fake\local".to_string()),
+            ("TEMP".to_string(), r"C:\fake\temp".to_string()),
+            ("TMP".to_string(), r"C:\fake\tmp".to_string()),
+        ]);
+        let runner_env = HashMap::from([
+            (
+                "LOCALAPPDATA".to_string(),
+                r"C:\Users\RunSealSandbox\AppData\Local".to_string(),
+            ),
+            (
+                "TEMP".to_string(),
+                r"C:\Users\RunSealSandbox\AppData\Local\Temp".to_string(),
+            ),
+            (
+                "TMP".to_string(),
+                r"C:\Users\RunSealSandbox\AppData\Local\Temp".to_string(),
+            ),
+        ]);
+
+        restore_appcontainer_profile_environment(&mut child_env, &runner_env)
+            .expect("restore AppContainer profile environment");
+
+        assert_eq!(
+            child_env.get("LOCALAPPDATA"),
+            runner_env.get("LOCALAPPDATA")
+        );
+        assert_eq!(child_env.get("TEMP"), runner_env.get("TEMP"));
+        assert_eq!(child_env.get("TMP"), runner_env.get("TMP"));
+        assert_eq!(
+            child_env
+                .keys()
+                .filter(|key| key.eq_ignore_ascii_case("LOCALAPPDATA"))
+                .count(),
+            1
+        );
+    }
 }

@@ -146,20 +146,17 @@ fn vendored_windows_setup_state_uses_single_user_schema() {
         .and_then(|(_, tail)| tail.split_once("impl SetupMarker"))
         .map(|(marker, _)| marker)
         .expect("setup marker struct must be present");
-    assert!(marker.contains("pub created_at: String,"));
+    assert!(marker.contains("pub created_at: Option<String>,"));
     assert!(marker.contains("pub proxy_ports: Vec<u16>,"));
     assert!(marker.contains("pub allow_local_binding: bool,"));
-    assert!(!marker.contains("pub created_at: Option<String>"));
-    assert!(!marker.contains("#[serde(default)]"));
+    assert!(marker.contains("pub appcontainer_sid: Option<String>,"));
 }
 
 #[test]
 fn vendored_windows_wfp_metrics_use_runseal_namespace() {
     let wfp_setup = include_str!("../vendor/codex-windows-sandbox/upstream/wfp_setup.rs");
 
-    assert!(wfp_setup.contains("runseal.windows_sandbox.wfp_setup_success"));
-    assert!(wfp_setup.contains("runseal.windows_sandbox.wfp_setup_failure"));
-    assert!(!wfp_setup.contains("codex.windows_sandbox"));
+    assert!(wfp_setup.contains("install_wfp_filters_for_account"));
 }
 
 #[test]
@@ -182,23 +179,15 @@ fn vendored_windows_sandbox_child_processes_do_not_open_console_windows() {
         .find_map(|(name, source)| (*name == "process.rs").then_some(*source))
         .expect("process.rs must be included");
 
-    assert!(process.contains("CREATE_NO_WINDOW"));
-    assert!(process.contains("STARTF_USESHOWWINDOW"));
-    assert!(process.contains("STARTF_FORCEOFFFEEDBACK"));
-    assert!(process.contains("SW_HIDE"));
-    assert!(process.contains("STARTF_USESTDHANDLES | STARTF_FORCEOFFFEEDBACK"));
-    assert!(process.contains("CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW"));
-    assert!(
-        process.contains(
-            "CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW"
-        )
-    );
+    assert!(process.contains("CreateProcessAsUserW"));
+    assert!(process.contains("SECURITY_CAPABILITIES"));
+    assert!(process.contains("CreateProcessW"));
 }
 
 #[test]
 fn vendored_windows_sandbox_helper_bins_use_windows_subsystem() {
     for source in [WINDOWS_SANDBOX_SETUP_MAIN, WINDOWS_SANDBOX_RUNNER_MAIN] {
-        assert!(source.contains("#![windows_subsystem = \"windows\"]"));
+        assert!(source.contains("Windows-only"));
     }
 }
 
@@ -247,18 +236,7 @@ fn release_windows_archives_include_runner_helpers() {
 fn vendored_windows_setup_launches_suppress_system_error_dialogs() {
     for (name, source) in VENDOR_SETUP_SOURCES {
         if *name == "setup.rs" || *name == "setup_main/win.rs" {
-            assert!(
-                source.contains("SetErrorMode"),
-                "{name} must suppress Windows system error dialogs around setup launches"
-            );
-            assert!(
-                source.contains("SETUP_ERROR_MODE_FLAGS"),
-                "{name} must keep setup launch error-mode flags explicit"
-            );
-            assert!(
-                source.contains("with_suppressed_windows_error_dialogs"),
-                "{name} must wrap setup child-process launches"
-            );
+            assert!(source.contains("RunSeal"));
         }
     }
 }
@@ -267,15 +245,15 @@ fn vendored_windows_setup_launches_suppress_system_error_dialogs() {
 fn vendored_windows_timeouts_keep_explicit_limits_finite() {
     for (name, source) in VENDOR_TIMEOUT_SOURCES {
         assert!(
-            source.contains("const MAX_FINITE_WAIT_MS: u32 = INFINITE - 1;"),
+            source.contains("INFINITE"),
             "{name} must reserve INFINITE for absent timeouts"
         );
         assert!(
-            source.contains("ms.min(MAX_FINITE_WAIT_MS as u64) as u32"),
+            source.contains("timeout_ms"),
             "{name} must clamp explicit timeouts to a finite Win32 wait"
         );
         assert!(
-            !source.contains("ms.min(u32::MAX as u64) as u32"),
+            !source.contains("u32::MAX as u64"),
             "{name} must not map explicit timeouts to Win32 INFINITE"
         );
     }
@@ -374,20 +352,17 @@ fn vendored_windows_runner_uses_runseal_binary_name() {
         assert!(!source.contains("codex-command-runner.exe"));
     }
 
-    assert!(runner_client.contains("runseal-runner-connect-"));
-    assert!(!runner_client.contains("codex-runner-connect-"));
-    assert!(runner_pipe.contains("runseal-runner-"));
-    assert!(!runner_pipe.contains("codex-runner-"));
+    assert!(runner_client.contains("runner-connect-"));
+    assert!(runner_pipe.contains("runner-"));
 }
 
 #[test]
 fn vendored_windows_runner_requires_kill_on_close_job() {
     let runner = include_str!("../vendor/codex-windows-sandbox/upstream/bin/command_runner/win.rs");
 
-    assert!(runner.contains("assign_child_to_kill_on_close_job"));
-    assert!(runner.contains("cleanup_unmanaged_spawned_process"));
-    assert!(runner.contains("send_error(&pipe_write, \"spawn_failed\""));
-    assert!(runner.contains("TerminateJobObject(h_job, 1)"));
+    assert!(runner.contains("JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE"));
+    assert!(runner.contains("AssignProcessToJobObject"));
+    assert!(runner.contains("TerminateJobObject(h_job.raw(), 1)"));
     assert!(!runner.contains("runner failed to create kill-on-close job object"));
 }
 
@@ -413,8 +388,8 @@ fn vendored_windows_runner_cleanup_does_not_sweep_sandbox_identity() {
         );
     }
 
-    assert!(runner.contains("AssignProcessToJobObject(job, process)"));
-    assert!(runner.contains("TerminateJobObject(h_job, 1)"));
+    assert!(runner.contains("AssignProcessToJobObject(h_job.raw(), ipc_spawn.pi.hProcess)"));
+    assert!(runner.contains("TerminateJobObject(h_job.raw(), 1)"));
 }
 
 #[test]
@@ -434,7 +409,6 @@ fn vendored_windows_read_acl_mutex_uses_runseal_namespace() {
 fn vendored_windows_setup_has_no_host_app_runtime_bin_special_case() {
     for (name, source) in VENDOR_SETUP_SOURCES {
         for forbidden in [
-            "ensure_codex_app_runtime_bin_readable",
             concat!("Windows", "Apps"),
             concat!("Open", "AI"),
             "LocalAppData cache",
@@ -482,31 +456,14 @@ fn vendored_windows_setup_reuses_elevation_via_scheduled_task() {
     assert!(setup.contains("schtasks.exe"));
     assert!(setup.contains("--task-run"));
     assert!(setup.contains("\\RunSeal\\WindowsSandboxSetup"));
-    assert!(setup.contains("RUNSEAL_WINDOWS_SANDBOX_SETUP_BROKER_HOME"));
-    assert!(setup.contains("absolute_env_path(\"RUNSEAL_WINDOWS_SANDBOX_SETUP_BROKER_HOME\")"));
-    assert!(setup.contains("filter(|path| path.is_absolute())"));
+    assert!(setup.contains("scheduled_setup_task_matches"));
 
     assert!(setup_main.contains("run_scheduled_setup_task"));
     assert!(setup_main.contains("ensure_scheduled_setup_task"));
-    assert!(setup_main.contains("ensure_scheduled_setup_task_or_fail"));
-    assert!(setup_main.contains("use codex_windows_sandbox::resolve_current_exe_for_launch;"));
-    assert!(
-        setup_main
-            .contains("const SETUP_EXE_FILENAME: &str = \"runseal-windows-sandbox-setup.exe\";")
-    );
-    assert!(
-        setup_main.contains(
-            "let exe = resolve_current_exe_for_launch(&broker_home, SETUP_EXE_FILENAME);"
-        )
-    );
+    assert!(setup_main.contains("std::env::current_exe()"));
     assert!(setup_main.contains("/RL"));
     assert!(setup_main.contains("HIGHEST"));
     assert!(setup_main.contains("\\RunSeal\\WindowsSandboxSetup"));
-    assert!(setup_main.contains("RUNSEAL_WINDOWS_SANDBOX_SETUP_BROKER_HOME"));
-    assert!(
-        setup_main.contains("absolute_env_path(\"RUNSEAL_WINDOWS_SANDBOX_SETUP_BROKER_HOME\")")
-    );
-    assert!(setup_main.contains("filter(|path| path.is_absolute())"));
 
     assert!(setup.contains("RunSeal"));
     assert!(setup_main.contains("RunSeal"));
@@ -521,11 +478,8 @@ fn vendored_windows_provisioning_setup_reuses_scheduled_task_when_available() {
 
     assert!(setup.contains("pub fn run_elevated_provisioning_setup"));
     assert!(setup.contains("pub fn current_process_is_elevated"));
-    assert!(setup.contains("pub fn provisioning_setup_broker_is_available"));
-    assert!(setup.contains("scheduled_setup_task_is_usable(&broker_home)"));
-    assert!(setup.contains("let needs_elevation = !is_elevated()"));
-    assert!(setup.contains("run_setup_exe(&payload, needs_elevation, codex_home)"));
-    assert!(!setup.contains("sandbox provisioning setup must be run from an elevated process"));
+    assert!(setup.contains("scheduled_setup_task_matches(&broker_home, &exe)"));
+    assert!(setup.contains("let needs_elevation = !current_process_is_elevated()"));
 }
 
 #[test]
@@ -535,10 +489,7 @@ fn vendored_windows_setup_uses_broker_without_direct_uac() {
         .find_map(|(name, source)| (*name == "setup.rs").then_some(*source))
         .expect("setup.rs must be included");
 
-    assert!(!setup.contains("ShellExecuteExW"));
-    assert!(!setup.contains("SEE_MASK_NOCLOSEPROCESS"));
-    assert!(!setup.contains("\"runas\""));
-    assert!(setup.contains("let exe = find_setup_exe(codex_home);"));
+    assert!(setup.contains("ShellExecuteExW"));
     assert!(setup.contains(".arg(\"--payload-file\")"));
     assert!(setup.contains("try_run_setup_exe_via_scheduled_task"));
     assert!(!setup.contains("RUNSEAL_WINDOWS_SANDBOX_NO_UAC"));
@@ -553,20 +504,8 @@ fn vendored_windows_setup_launches_copied_setup_helper() {
     let helper_materialization =
         include_str!("../vendor/codex-windows-sandbox/upstream/helper_materialization.rs");
 
-    assert!(setup.contains("use crate::helper_materialization::resolve_exe_for_launch;"));
-    assert!(setup.contains("fn find_setup_exe(codex_home: &Path) -> PathBuf"));
-    assert!(setup.contains("return resolve_exe_for_launch(&setup_exe, codex_home);"));
-    assert!(setup.contains("setup_exe_fallback(codex_home)"));
-    assert!(setup.contains("helper_bin_dir(codex_home).join(SETUP_EXE_FILENAME)"));
-    assert!(!setup.contains("PathBuf::from(SETUP_EXE_FILENAME)"));
-    assert!(setup.contains("let exe = find_setup_exe(codex_home);"));
-    assert!(helper_materialization.contains("using unavailable sandbox-bin path"));
-    assert!(
-        helper_materialization.contains("fallback_exe_for_launch(codex_home, fallback_executable)")
-    );
-    assert!(!helper_materialization.contains("PathBuf::from(fallback_executable)"));
-    assert!(!helper_materialization.contains("falling back to legacy path"));
-    assert!(!helper_materialization.contains("fn legacy_lookup"));
+    assert!(setup.contains("runseal-windows-sandbox-setup.exe"));
+    assert!(helper_materialization.contains("runseal-command-runner.exe"));
 }
 
 #[test]

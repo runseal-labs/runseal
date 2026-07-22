@@ -30,6 +30,12 @@ pub struct CapSids {
     /// later workspace sandboxes.
     #[serde(default)]
     pub writable_root_by_path: HashMap<String, String>,
+    /// Read capability SIDs keyed by canonical workspace root.
+    ///
+    /// Workspace-contained tokens include this SID; workspace-write tokens do
+    /// not, so both policies can execute concurrently in the same workspace.
+    #[serde(default)]
+    pub read_by_workspace: HashMap<String, String>,
 }
 
 pub fn cap_sid_file(codex_home: &Path) -> PathBuf {
@@ -70,6 +76,7 @@ pub fn load_or_create_cap_sids(codex_home: &Path) -> Result<CapSids> {
                 readonly: make_random_cap_sid_string(),
                 workspace_by_cwd: HashMap::new(),
                 writable_root_by_path: HashMap::new(),
+                read_by_workspace: HashMap::new(),
             };
             persist_caps(&path, &caps)?;
             return Ok(caps);
@@ -80,9 +87,27 @@ pub fn load_or_create_cap_sids(codex_home: &Path) -> Result<CapSids> {
         readonly: make_random_cap_sid_string(),
         workspace_by_cwd: HashMap::new(),
         writable_root_by_path: HashMap::new(),
+        read_by_workspace: HashMap::new(),
     };
     persist_caps(&path, &caps)?;
     Ok(caps)
+}
+
+/// Returns the read capability SID for a workspace-contained policy.
+pub fn workspace_read_cap_sid_for_workspace(
+    codex_home: &Path,
+    workspace_root: &Path,
+) -> Result<String> {
+    let path = cap_sid_file(codex_home);
+    let mut caps = load_or_create_cap_sids(codex_home)?;
+    let key = canonical_path_key(workspace_root);
+    if let Some(sid) = caps.read_by_workspace.get(&key) {
+        return Ok(sid.clone());
+    }
+    let sid = make_random_cap_sid_string();
+    caps.read_by_workspace.insert(key, sid.clone());
+    persist_caps(&path, &caps)?;
+    Ok(sid)
 }
 
 /// Returns the workspace-specific capability SID for `cwd`, creating and persisting it if missing.
@@ -141,6 +166,7 @@ pub fn workspace_write_root_specificity(root: &Path) -> usize {
 mod tests {
     use super::load_or_create_cap_sids;
     use super::workspace_cap_sid_for_cwd;
+    use super::workspace_read_cap_sid_for_workspace;
     use super::workspace_write_cap_sid_for_root;
     use super::writable_root_cap_sid_for_path;
     use pretty_assertions::assert_eq;
@@ -199,5 +225,25 @@ mod tests {
         let caps = load_or_create_cap_sids(&codex_home).expect("load caps");
         assert_eq!(caps.workspace_by_cwd.len(), 1);
         assert_eq!(caps.writable_root_by_path.len(), 1);
+    }
+
+    #[test]
+    fn read_capability_sid_is_workspace_scoped_and_distinct_from_write_sid() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let codex_home = temp.path().join("codex-home");
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("create workspace");
+
+        let read_sid = workspace_read_cap_sid_for_workspace(&codex_home, &workspace)
+            .expect("read capability sid");
+        let write_sid = workspace_write_cap_sid_for_root(&codex_home, &workspace, &workspace)
+            .expect("write sid");
+
+        assert_ne!(read_sid, write_sid);
+        assert_eq!(
+            read_sid,
+            workspace_read_cap_sid_for_workspace(&codex_home, &workspace)
+                .expect("read capability sid again")
+        );
     }
 }

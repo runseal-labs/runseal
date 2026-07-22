@@ -40,11 +40,11 @@ mod acl;
 #[cfg(target_os = "windows")]
 mod allow;
 #[cfg(target_os = "windows")]
+mod appcontainer;
+#[cfg(target_os = "windows")]
 mod audit;
 #[cfg(target_os = "windows")]
 mod cap;
-#[cfg(target_os = "windows")]
-mod deny_read_acl;
 #[cfg(target_os = "windows")]
 mod deny_read_state;
 #[cfg(target_os = "windows")]
@@ -78,8 +78,6 @@ mod winutil;
 #[cfg(target_os = "windows")]
 mod workspace_acl;
 
-mod deny_read_resolver;
-
 #[cfg(target_os = "windows")]
 mod conpty;
 
@@ -105,12 +103,7 @@ mod setup_error;
 mod spawn_prep;
 
 #[cfg(target_os = "windows")]
-mod stdio_bridge;
-
-#[cfg(target_os = "windows")]
 mod unified_exec;
-#[cfg(target_os = "windows")]
-mod wrapper;
 
 #[cfg(target_os = "windows")]
 pub(crate) use elevated::ipc_framed;
@@ -121,8 +114,6 @@ pub(crate) use elevated::runner_client;
 #[cfg(target_os = "windows")]
 pub(crate) use elevated::runner_pipe;
 
-#[cfg(target_os = "windows")]
-pub use acl::add_deny_read_ace;
 #[cfg(target_os = "windows")]
 pub use acl::add_deny_write_ace;
 
@@ -139,13 +130,37 @@ pub use acl::fetch_dacl_handle;
 #[cfg(target_os = "windows")]
 pub use acl::path_mask_allows;
 #[cfg(target_os = "windows")]
-pub use acl::remove_deny_write_aces;
+pub use acl::protect_dacl_from_inheritance;
+#[cfg(target_os = "windows")]
+pub use acl::revoke_allow_write_ace;
+#[cfg(target_os = "windows")]
+pub use acl::revoke_deny_read_ace;
+#[cfg(target_os = "windows")]
+pub use appcontainer::AppContainerSecurityCapabilities;
+#[cfg(target_os = "windows")]
+pub use appcontainer::WINDOWS_WORKSPACE_CONTAINED_APPCONTAINER_NAME;
+#[cfg(target_os = "windows")]
+pub use appcontainer::appcontainer_capability_sid;
+#[cfg(target_os = "windows")]
+pub use appcontainer::appcontainer_read_capability_sid;
+#[cfg(target_os = "windows")]
+pub use appcontainer::appcontainer_write_capability_sid;
+#[cfg(target_os = "windows")]
+pub use appcontainer::ensure_appcontainer_loopback_exemption;
+#[cfg(target_os = "windows")]
+pub use appcontainer::ensure_appcontainer_profile_sid;
+#[cfg(target_os = "windows")]
+pub use appcontainer::workspace_appcontainer_read_capability_sid;
+#[cfg(target_os = "windows")]
+pub use appcontainer::workspace_appcontainer_write_capability_sid;
 #[cfg(target_os = "windows")]
 pub use audit::apply_world_writable_scan_and_denies_for_permissions;
 #[cfg(target_os = "windows")]
 pub use cap::load_or_create_cap_sids;
 #[cfg(target_os = "windows")]
 pub use cap::workspace_cap_sid_for_cwd;
+#[cfg(target_os = "windows")]
+pub use cap::workspace_read_cap_sid_for_workspace;
 #[cfg(target_os = "windows")]
 pub use cap::workspace_write_cap_sid_for_root;
 #[cfg(target_os = "windows")]
@@ -159,14 +174,11 @@ pub use conpty::resize_conpty_handle;
 #[cfg(target_os = "windows")]
 pub use conpty::spawn_conpty_process_as_user;
 #[cfg(target_os = "windows")]
-pub use deny_read_acl::apply_deny_read_acls;
-#[cfg(target_os = "windows")]
-pub use deny_read_acl::plan_deny_read_acl_paths;
-pub use deny_read_resolver::resolve_windows_deny_read_paths;
-#[cfg(target_os = "windows")]
-pub use deny_read_state::sync_persistent_deny_read_acls;
+pub use deny_read_state::clear_legacy_persistent_deny_read_acls;
 #[cfg(target_os = "windows")]
 pub use desktop::LaunchDesktop;
+#[cfg(target_os = "windows")]
+pub use desktop::LaunchDesktopMode;
 #[cfg(target_os = "windows")]
 pub use dpapi::protect as dpapi_protect;
 #[cfg(target_os = "windows")]
@@ -177,8 +189,6 @@ pub use elevated_impl::ElevatedSandboxProfileCaptureRequest;
 pub use elevated_impl::run_windows_sandbox_capture_for_permission_profile as run_windows_sandbox_capture_for_permission_profile_elevated;
 #[cfg(target_os = "windows")]
 pub use helper_materialization::resolve_current_exe_for_launch;
-#[cfg(target_os = "windows")]
-pub use helper_materialization::resolve_exe_for_launch;
 #[cfg(target_os = "windows")]
 pub use hide_users::hide_current_user_profile_dir;
 #[cfg(target_os = "windows")]
@@ -226,6 +236,8 @@ pub use logging::log_note;
 #[cfg(target_os = "windows")]
 pub use logging::log_writer;
 #[cfg(target_os = "windows")]
+pub use path_normalization::canonical_path_key;
+#[cfg(target_os = "windows")]
 pub use path_normalization::canonicalize_path;
 #[cfg(target_os = "windows")]
 pub use process::PipeSpawnHandles;
@@ -242,19 +254,19 @@ pub use process::spawn_process_with_pipes;
 #[cfg(target_os = "windows")]
 pub use resolved_permissions::ResolvedWindowsSandboxPermissions;
 #[cfg(target_os = "windows")]
-pub use resolved_permissions::WindowsSandboxTokenMode;
+pub use resolved_permissions::WindowsSandboxIsolationMode;
 #[cfg(target_os = "windows")]
-pub use resolved_permissions::token_mode_for_permission_profile;
+pub use resolved_permissions::isolation_mode_for_permission_profile;
 #[cfg(target_os = "windows")]
 pub use setup::SETUP_VERSION;
+#[cfg(target_os = "windows")]
+pub use setup::SandboxProxySettings;
 #[cfg(target_os = "windows")]
 pub use setup::SandboxSetupRequest;
 #[cfg(target_os = "windows")]
 pub use setup::SetupRootOverrides;
 #[cfg(target_os = "windows")]
 pub use setup::current_process_is_elevated;
-#[cfg(target_os = "windows")]
-pub use setup::provisioning_setup_broker_is_available;
 #[cfg(target_os = "windows")]
 pub use setup::run_elevated_provisioning_setup;
 #[cfg(target_os = "windows")]
@@ -284,32 +296,27 @@ pub use setup_error::setup_error_path;
 #[cfg(target_os = "windows")]
 pub use setup_error::write_setup_error_report;
 #[cfg(target_os = "windows")]
-pub use stdio_bridge::forward_sandbox_session_stdio;
-#[cfg(target_os = "windows")]
 #[doc(hidden)]
 pub use token::LocalSid;
 #[cfg(target_os = "windows")]
 pub use token::convert_string_sid_to_sid;
 #[cfg(target_os = "windows")]
+pub use token::create_elevated_readonly_token_with_caps_from;
+#[cfg(target_os = "windows")]
+pub use token::create_elevated_workspace_write_token_with_caps_from;
+#[cfg(target_os = "windows")]
 pub use token::create_readonly_token_with_cap_from;
 #[cfg(target_os = "windows")]
-pub use token::create_readonly_token_with_caps_and_user_from;
-#[cfg(target_os = "windows")]
 pub use token::create_readonly_token_with_caps_from;
-#[cfg(target_os = "windows")]
-pub use token::create_workspace_write_token_with_caps_and_user_from;
 #[cfg(target_os = "windows")]
 pub use token::create_workspace_write_token_with_caps_from;
 #[cfg(target_os = "windows")]
 pub use token::get_current_token_for_restriction;
 #[cfg(target_os = "windows")]
-pub use token::get_logon_sid_bytes;
-#[cfg(target_os = "windows")]
-pub use unified_exec::WindowsSandboxSessionRequest;
+#[doc(hidden)]
+pub use token::restrict_current_token_default_dacl_to_logon_sid;
 #[cfg(target_os = "windows")]
 pub use unified_exec::spawn_windows_sandbox_session_elevated_for_permission_profile;
-#[cfg(target_os = "windows")]
-pub use unified_exec::spawn_windows_sandbox_session_for_level;
 #[cfg(target_os = "windows")]
 pub use unified_exec::spawn_windows_sandbox_session_legacy;
 #[cfg(target_os = "windows")]
@@ -327,17 +334,16 @@ pub use windows_impl::run_windows_sandbox_legacy_preflight;
 #[cfg(target_os = "windows")]
 pub use winutil::quote_windows_arg;
 #[cfg(target_os = "windows")]
+pub use winutil::resolve_sid;
+#[cfg(target_os = "windows")]
 pub use winutil::string_from_sid_bytes;
 #[cfg(target_os = "windows")]
 pub use winutil::to_wide;
+
+#[cfg(target_os = "windows")]
+pub const SANDBOX_USERS_GROUP: &str = "RunSealSandboxUsers";
 #[cfg(target_os = "windows")]
 pub use workspace_acl::is_command_cwd_root;
-#[cfg(target_os = "windows")]
-pub use wrapper::CODEX_WINDOWS_SANDBOX_ARG1;
-#[cfg(target_os = "windows")]
-pub use wrapper::create_windows_sandbox_command_args_for_permission_profile;
-#[cfg(target_os = "windows")]
-pub use wrapper::run_windows_sandbox_wrapper_main;
 
 #[cfg(not(target_os = "windows"))]
 pub use stub::CaptureResult;
@@ -349,6 +355,7 @@ pub use stub::run_windows_sandbox_legacy_preflight;
 #[cfg(target_os = "windows")]
 mod windows_impl {
     use super::WindowsSandboxCancellationToken;
+    use super::desktop::LaunchDesktopMode;
     use super::logging::log_failure;
     use super::logging::log_success;
     use super::process::create_process_as_user;
@@ -381,24 +388,11 @@ mod windows_impl {
     use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
     type PipeHandles = ((HANDLE, HANDLE), (HANDLE, HANDLE), (HANDLE, HANDLE));
-    const MAX_FINITE_WAIT_MS: u32 = INFINITE - 1;
 
     enum WaitOutcome {
         Exited,
         TimedOut,
         Cancelled,
-    }
-
-    fn wait_timeout_ms(timeout_ms: Option<u64>) -> u32 {
-        timeout_ms
-            .map(|ms| ms.min(MAX_FINITE_WAIT_MS as u64) as u32)
-            .unwrap_or(INFINITE)
-    }
-
-    fn wait_deadline(timeout_ms: Option<u64>) -> Option<Instant> {
-        timeout_ms.and_then(|ms| {
-            Instant::now().checked_add(Duration::from_millis(ms.min(MAX_FINITE_WAIT_MS as u64)))
-        })
     }
 
     fn wait_for_process(
@@ -407,7 +401,7 @@ mod windows_impl {
         cancellation: Option<&WindowsSandboxCancellationToken>,
     ) -> WaitOutcome {
         let Some(cancellation) = cancellation else {
-            let timeout = wait_timeout_ms(timeout_ms);
+            let timeout = timeout_ms.map(|ms| ms as u32).unwrap_or(INFINITE);
             let res = unsafe { WaitForSingleObject(process, timeout) };
             return if res == 0x0000_0102 {
                 WaitOutcome::TimedOut
@@ -416,7 +410,7 @@ mod windows_impl {
             };
         };
 
-        let deadline = wait_deadline(timeout_ms);
+        let deadline = timeout_ms.map(|ms| Instant::now() + Duration::from_millis(ms));
         loop {
             if cancellation.is_cancelled() {
                 return WaitOutcome::Cancelled;
@@ -496,7 +490,6 @@ mod windows_impl {
             timeout_ms,
             cancellation,
             &[],
-            &[],
             use_private_desktop,
         )
     }
@@ -511,14 +504,9 @@ mod windows_impl {
         mut env_map: HashMap<String, String>,
         timeout_ms: Option<u64>,
         cancellation: Option<WindowsSandboxCancellationToken>,
-        additional_deny_read_paths: &[AbsolutePathBuf],
         additional_deny_write_paths: &[AbsolutePathBuf],
         use_private_desktop: bool,
     ) -> Result<CaptureResult> {
-        let additional_deny_read_paths = additional_deny_read_paths
-            .iter()
-            .map(AbsolutePathBuf::to_path_buf)
-            .collect::<Vec<_>>();
         let additional_deny_write_paths = additional_deny_write_paths
             .iter()
             .map(AbsolutePathBuf::to_path_buf)
@@ -544,11 +532,6 @@ mod windows_impl {
                 "Restricted read-only access requires the elevated Windows sandbox backend"
             );
         }
-        // WRITE_RESTRICTED tokens consult restricting SIDs only for writes, so this
-        // backend cannot make capability-SID deny-read ACLs authoritative.
-        if !additional_deny_read_paths.is_empty() {
-            anyhow::bail!("deny-read overrides require the elevated Windows sandbox backend");
-        }
         let capability_roots =
             legacy_session_capability_roots(&permissions, &current_dir, &env_map, codex_home);
         let security = prepare_legacy_session_security(
@@ -560,14 +543,11 @@ mod windows_impl {
         allow_null_device_for_workspace_write(uses_write_capabilities);
         apply_legacy_session_acl_rules(
             &permissions,
-            codex_home,
             &current_dir,
             &env_map,
-            &additional_deny_read_paths,
             &additional_deny_write_paths,
             LegacyAclSids {
                 readonly_sid: security.readonly_sid.as_ref(),
-                readonly_sid_str: security.readonly_sid_str.as_deref(),
                 write_root_sids: &security.write_root_sids,
             },
         )?;
@@ -581,7 +561,10 @@ mod windows_impl {
                 &env_map,
                 logs_base_dir,
                 Some((in_r, out_w, err_w)),
-                use_private_desktop,
+                LaunchDesktopMode::from_private_desktop(use_private_desktop),
+                &[],
+                /*start_suspended*/ false,
+                None,
             )
         };
         let created = match spawn_res {
@@ -726,14 +709,11 @@ mod windows_impl {
         let write_root_sids = root_capability_sids(codex_home, cwd, capability_roots)?;
         apply_legacy_session_acl_rules(
             &permissions,
-            codex_home,
             &current_dir,
             env_map,
             &[],
-            &[],
             LegacyAclSids {
                 readonly_sid: None,
-                readonly_sid_str: None,
                 write_root_sids: &write_root_sids,
             },
         )?;
@@ -803,21 +783,6 @@ mod windows_impl {
                 )
                 .expect("unsupported profiles do not need ACL preflight");
             }
-        }
-
-        #[test]
-        fn explicit_cancellable_timeout_never_maps_to_infinite_wait() {
-            assert!(super::wait_deadline(None).is_none());
-            assert!(super::wait_deadline(Some(u64::MAX)).is_some());
-        }
-
-        #[test]
-        fn explicit_timeout_never_maps_to_infinite_wait() {
-            assert_eq!(super::wait_timeout_ms(None), super::INFINITE);
-            assert_eq!(
-                super::wait_timeout_ms(Some(u64::MAX)),
-                super::MAX_FINITE_WAIT_MS
-            );
         }
     }
 }

@@ -37,6 +37,7 @@ use windows_sys::Win32::Security::TOKEN_USER;
 use windows_sys::Win32::Security::TokenDefaultDacl;
 use windows_sys::Win32::Security::TokenGroups;
 use windows_sys::Win32::Security::TokenUser;
+use windows_sys::Win32::Security::WinLocalSystemSid;
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
 const DISABLE_MAX_PRIVILEGE: u32 = 0x01;
@@ -106,17 +107,12 @@ unsafe fn set_default_dacl(h_token: HANDLE, sids: &[*mut c_void]) -> Result<()> 
     Ok(())
 }
 
-pub unsafe fn world_sid() -> Result<Vec<u8>> {
+unsafe fn well_known_sid(kind: i32) -> Result<Vec<u8>> {
     let mut size: u32 = 0;
-    CreateWellKnownSid(
-        WIN_WORLD_SID,
-        std::ptr::null_mut(),
-        std::ptr::null_mut(),
-        &mut size,
-    );
+    CreateWellKnownSid(kind, std::ptr::null_mut(), std::ptr::null_mut(), &mut size);
     let mut buf: Vec<u8> = vec![0u8; size as usize];
     let ok = CreateWellKnownSid(
-        WIN_WORLD_SID,
+        kind,
         std::ptr::null_mut(),
         buf.as_mut_ptr() as *mut c_void,
         &mut size,
@@ -125,6 +121,32 @@ pub unsafe fn world_sid() -> Result<Vec<u8>> {
         return Err(anyhow!("CreateWellKnownSid failed: {}", GetLastError()));
     }
     Ok(buf)
+}
+
+pub unsafe fn world_sid() -> Result<Vec<u8>> {
+    well_known_sid(WIN_WORLD_SID)
+}
+
+/// Restrict default ACLs for objects created by the elevated command runner to SYSTEM and its
+/// logon session.
+///
+/// # Safety
+/// Must run before the command runner creates worker threads or other child-visible objects.
+pub unsafe fn restrict_current_token_default_dacl_to_logon_sid() -> Result<()> {
+    let token = get_current_token_for_restriction()?;
+    let result = (|| {
+        let mut logon_sid = get_logon_sid_bytes(token)?;
+        let mut system_sid = well_known_sid(WinLocalSystemSid)?;
+        set_default_dacl(
+            token,
+            &[
+                logon_sid.as_mut_ptr().cast(),
+                system_sid.as_mut_ptr().cast(),
+            ],
+        )
+    })();
+    CloseHandle(token);
+    result
 }
 
 /// # Safety
@@ -191,10 +213,6 @@ pub unsafe fn get_current_token_for_restriction() -> Result<HANDLE> {
     Ok(h)
 }
 
-/// Returns the logon SID bytes for a Windows access token.
-///
-/// # Safety
-/// `h_token` must be a valid token handle readable with `GetTokenInformation`.
 pub unsafe fn get_logon_sid_bytes(h_token: HANDLE) -> Result<Vec<u8>> {
     unsafe fn scan_token_groups_for_logon(h: HANDLE) -> Option<Vec<u8>> {
         let mut needed: u32 = 0;
@@ -280,7 +298,11 @@ pub unsafe fn get_logon_sid_bytes(h_token: HANDLE) -> Result<Vec<u8>> {
     Err(anyhow!("Logon SID not present on token"))
 }
 
-unsafe fn get_user_sid_bytes(h_token: HANDLE) -> Result<Vec<u8>> {
+/// Returns a copy of the user SID from a token.
+///
+/// # Safety
+/// `h_token` must be a valid token handle with `TOKEN_QUERY` access.
+pub(crate) unsafe fn get_user_sid_bytes(h_token: HANDLE) -> Result<Vec<u8>> {
     let mut needed: u32 = 0;
     GetTokenInformation(h_token, TokenUser, std::ptr::null_mut(), 0, &mut needed);
     if needed == 0 {
@@ -364,13 +386,16 @@ pub unsafe fn create_readonly_token_with_cap(
 
 /// # Safety
 /// Caller must close the returned token handle; base_token must be a valid primary token.
-/// # Safety
-/// Caller must close the returned token handle; base_token must be a valid primary token.
 pub unsafe fn create_readonly_token_with_cap_from(
     base_token: HANDLE,
     psid_capability: *mut c_void,
 ) -> Result<(HANDLE, *mut c_void)> {
-    let new_token = create_token_with_caps_from(base_token, &[psid_capability], &[])?;
+    let new_token = create_token_with_caps_from(
+        base_token,
+        &[psid_capability],
+        /*disable_logon_sid*/ false,
+        /*restrict_reads*/ false,
+    )?;
     Ok((new_token, psid_capability))
 }
 
@@ -382,23 +407,32 @@ pub unsafe fn create_workspace_write_token_with_caps_from(
     base_token: HANDLE,
     psid_capabilities: &[*mut c_void],
 ) -> Result<HANDLE> {
-    create_token_with_caps_from(base_token, psid_capabilities, &[])
+    create_token_with_caps_from(
+        base_token,
+        psid_capabilities,
+        /*disable_logon_sid*/ false,
+        /*restrict_reads*/ false,
+    )
 }
 
-/// Create a restricted token that includes all provided capability SIDs plus the token user SID.
+/// Create a write-restricted token for the elevated sandbox backend.
 ///
-/// This is intended for the elevated sandbox backend, where the token user is the dedicated
-/// sandbox account rather than the real signed-in user.
+/// The dedicated sandbox account remains the token user for account-scoped network policy, but it
+/// must not participate in the restricting access check. Otherwise a stale account ACE can bypass
+/// the active-root capability boundary.
 ///
 /// # Safety
 /// Caller must close the returned token handle; base_token must be a valid primary token.
-pub unsafe fn create_workspace_write_token_with_caps_and_user_from(
+pub unsafe fn create_elevated_workspace_write_token_with_caps_from(
     base_token: HANDLE,
     psid_capabilities: &[*mut c_void],
 ) -> Result<HANDLE> {
-    let mut user_sid_bytes = get_user_sid_bytes(base_token)?;
-    let psid_user = user_sid_bytes.as_mut_ptr() as *mut c_void;
-    create_token_with_caps_from(base_token, psid_capabilities, &[psid_user])
+    create_token_with_caps_from(
+        base_token,
+        psid_capabilities,
+        /*disable_logon_sid*/ true,
+        /*restrict_reads*/ false,
+    )
 }
 
 /// Create a restricted token that includes all provided capability SIDs.
@@ -409,29 +443,38 @@ pub unsafe fn create_readonly_token_with_caps_from(
     base_token: HANDLE,
     psid_capabilities: &[*mut c_void],
 ) -> Result<HANDLE> {
-    create_token_with_caps_from(base_token, psid_capabilities, &[])
+    create_token_with_caps_from(
+        base_token,
+        psid_capabilities,
+        /*disable_logon_sid*/ false,
+        /*restrict_reads*/ false,
+    )
 }
 
-/// Create a restricted token that includes all provided capability SIDs plus the token user SID.
+/// Create a read-only token for the elevated sandbox backend.
 ///
-/// This is intended for the elevated sandbox backend, where the token user is the dedicated
-/// sandbox account rather than the real signed-in user.
+/// The sandbox account remains the token user for account-scoped network policy, but only active
+/// capability SIDs may satisfy the restricting access check.
 ///
 /// # Safety
 /// Caller must close the returned token handle; base_token must be a valid primary token.
-pub unsafe fn create_readonly_token_with_caps_and_user_from(
+pub unsafe fn create_elevated_readonly_token_with_caps_from(
     base_token: HANDLE,
     psid_capabilities: &[*mut c_void],
 ) -> Result<HANDLE> {
-    let mut user_sid_bytes = get_user_sid_bytes(base_token)?;
-    let psid_user = user_sid_bytes.as_mut_ptr() as *mut c_void;
-    create_token_with_caps_from(base_token, psid_capabilities, &[psid_user])
+    create_token_with_caps_from(
+        base_token,
+        psid_capabilities,
+        /*disable_logon_sid*/ true,
+        /*restrict_reads*/ false,
+    )
 }
 
 unsafe fn create_token_with_caps_from(
     base_token: HANDLE,
     psid_capabilities: &[*mut c_void],
-    extra_restricting_sids: &[*mut c_void],
+    disable_logon_sid: bool,
+    restrict_reads: bool,
 ) -> Result<HANDLE> {
     if psid_capabilities.is_empty() {
         return Err(anyhow!("no capability SIDs provided"));
@@ -440,32 +483,38 @@ unsafe fn create_token_with_caps_from(
     let psid_logon = logon_sid_bytes.as_mut_ptr() as *mut c_void;
     let mut everyone = world_sid()?;
     let psid_everyone = everyone.as_mut_ptr() as *mut c_void;
-
-    // Exact order: Capabilities..., ExtraRestricting..., Logon, Everyone
     let mut entries: Vec<SID_AND_ATTRIBUTES> =
-        vec![std::mem::zeroed(); psid_capabilities.len() + extra_restricting_sids.len() + 2];
+        vec![std::mem::zeroed(); psid_capabilities.len() + 2];
     for (i, psid) in psid_capabilities.iter().enumerate() {
         entries[i].Sid = *psid;
         entries[i].Attributes = 0;
     }
-    let extras_idx = psid_capabilities.len();
-    for (i, psid) in extra_restricting_sids.iter().enumerate() {
-        entries[extras_idx + i].Sid = *psid;
-        entries[extras_idx + i].Attributes = 0;
-    }
-    let logon_idx = extras_idx + extra_restricting_sids.len();
+    let logon_idx = psid_capabilities.len();
     entries[logon_idx].Sid = psid_logon;
     entries[logon_idx].Attributes = 0;
     entries[logon_idx + 1].Sid = psid_everyone;
     entries[logon_idx + 1].Attributes = 0;
+    let mut disabled_sids = if disable_logon_sid {
+        vec![SID_AND_ATTRIBUTES {
+            Sid: psid_logon,
+            Attributes: 0,
+        }]
+    } else {
+        Vec::new()
+    };
 
     let mut new_token: HANDLE = 0;
-    let flags = DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED;
+    let flags =
+        DISABLE_MAX_PRIVILEGE | LUA_TOKEN | if restrict_reads { 0 } else { WRITE_RESTRICTED };
     let ok = CreateRestrictedToken(
         base_token,
         flags,
-        0,
-        std::ptr::null(),
+        disabled_sids.len() as u32,
+        if disabled_sids.is_empty() {
+            std::ptr::null()
+        } else {
+            disabled_sids.as_mut_ptr()
+        },
         0,
         std::ptr::null(),
         entries.len() as u32,
@@ -484,4 +533,84 @@ unsafe fn create_token_with_caps_from(
 
     enable_single_privilege(new_token, "SeChangeNotifyPrivilege")?;
     Ok(new_token)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows_sys::Win32::Security::EqualSid;
+    use windows_sys::Win32::Security::TOKEN_GROUPS;
+    use windows_sys::Win32::Security::TokenRestrictedSids;
+
+    type ElevatedTokenFactory = unsafe fn(HANDLE, &[*mut c_void]) -> Result<HANDLE>;
+
+    unsafe fn token_has_restricting_sid(token: HANDLE, sid: *mut c_void) -> Result<bool> {
+        let mut needed = 0;
+        GetTokenInformation(
+            token,
+            TokenRestrictedSids,
+            std::ptr::null_mut(),
+            0,
+            &mut needed,
+        );
+        if needed == 0 {
+            return Err(anyhow!("TokenRestrictedSids size query returned 0"));
+        }
+
+        let mut buffer = vec![0u8; needed as usize];
+        if GetTokenInformation(
+            token,
+            TokenRestrictedSids,
+            buffer.as_mut_ptr() as *mut c_void,
+            needed,
+            &mut needed,
+        ) == 0
+        {
+            return Err(anyhow!(
+                "GetTokenInformation(TokenRestrictedSids) failed: {}",
+                GetLastError()
+            ));
+        }
+
+        let groups = buffer.as_ptr() as *const TOKEN_GROUPS;
+        let entries = std::ptr::addr_of!((*groups).Groups) as *const SID_AND_ATTRIBUTES;
+        for index in 0..(*groups).GroupCount as usize {
+            if EqualSid((*entries.add(index)).Sid, sid) != 0 {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    unsafe fn assert_capability_is_restricting_but_user_is_not(factory: ElevatedTokenFactory) {
+        let cap = LocalSid::from_string("S-1-5-21-1-2-3-1001").expect("synthetic capability SID");
+        let base = get_current_token_for_restriction().expect("open base token");
+        let user_sid_bytes = get_user_sid_bytes(base).expect("read base token user SID");
+        let user_sid = user_sid_bytes.as_ptr() as *mut c_void;
+        let token = factory(base, &[cap.as_ptr()]);
+        CloseHandle(base);
+        let token = token.expect("create elevated restricted token");
+
+        assert!(
+            token_has_restricting_sid(token, cap.as_ptr()).expect("inspect capability SID"),
+            "active capability SID must participate in the restricting access check"
+        );
+        assert!(
+            !token_has_restricting_sid(token, user_sid).expect("inspect sandbox user SID"),
+            "sandbox user SID must not bypass the active capability boundary"
+        );
+        CloseHandle(token);
+    }
+
+    #[test]
+    fn elevated_tokens_do_not_restrict_with_sandbox_user_sid() {
+        unsafe {
+            assert_capability_is_restricting_but_user_is_not(
+                create_elevated_readonly_token_with_caps_from,
+            );
+            assert_capability_is_restricting_but_user_is_not(
+                create_elevated_workspace_write_token_with_caps_from,
+            );
+        }
+    }
 }

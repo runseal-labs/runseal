@@ -1,4 +1,8 @@
+use crate::permissions::FileSystemAccessMode;
+use crate::permissions::FileSystemPath;
+use crate::permissions::FileSystemSandboxEntry;
 use crate::permissions::FileSystemSandboxPolicy;
+use crate::permissions::FileSystemSpecialPath;
 use crate::permissions::NetworkSandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
@@ -85,6 +89,50 @@ impl PermissionProfile {
             exclude_tmpdir_env_var,
             exclude_slash_tmp,
         );
+        Self::Managed {
+            file_system: ManagedFileSystemPermissions::from_sandbox_policy(&file_system),
+            network,
+        }
+    }
+
+    pub fn workspace_contained_with(
+        readable_roots: &[AbsolutePathBuf],
+        writable_roots: &[AbsolutePathBuf],
+        network: NetworkSandboxPolicy,
+    ) -> Self {
+        let mut entries = vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::project_roots(None),
+            },
+            access: FileSystemAccessMode::Write,
+        }];
+        for protected in [".git", ".agents", ".codex"] {
+            entries.push(FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::project_roots(Some(protected.into())),
+                },
+                access: FileSystemAccessMode::Read,
+            });
+        }
+        entries.extend(
+            readable_roots
+                .iter()
+                .cloned()
+                .map(|path| FileSystemSandboxEntry {
+                    path: FileSystemPath::Path { path },
+                    access: FileSystemAccessMode::Read,
+                }),
+        );
+        entries.extend(
+            writable_roots
+                .iter()
+                .cloned()
+                .map(|path| FileSystemSandboxEntry {
+                    path: FileSystemPath::Path { path },
+                    access: FileSystemAccessMode::Write,
+                }),
+        );
+        let file_system = FileSystemSandboxPolicy::restricted(entries);
         Self::Managed {
             file_system: ManagedFileSystemPermissions::from_sandbox_policy(&file_system),
             network,

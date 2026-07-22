@@ -19,11 +19,15 @@ pub enum SetupErrorCode {
     OrchestratorSandboxDirCreateFailed,
     /// Failed to determine whether the current process is elevated.
     OrchestratorElevationCheckFailed,
+    /// The setup command requires an already elevated process.
+    OrchestratorElevationRequired,
     /// Failed to serialize the elevation payload before launching the helper.
     OrchestratorPayloadSerializeFailed,
-    /// Failed to launch the setup helper process or scheduled task broker.
+    /// Failed to launch the setup helper process (spawn or ShellExecuteExW).
     OrchestratorHelperLaunchFailed,
-    /// Reserved for explicit interactive setup launch cancellation.
+    /// Proxy-enforced network access was requested without a loopback proxy port.
+    OrchestratorProxyPortMissing,
+    /// User canceled the UAC prompt while launching the helper.
     OrchestratorHelperLaunchCanceled,
     /// Helper exited non-zero and no structured report was available.
     OrchestratorHelperExitNonzero,
@@ -31,8 +35,6 @@ pub enum SetupErrorCode {
     OrchestratorHelperReportReadFailed,
     /// Helper exited successfully before setup completed.
     OrchestratorHelperIncomplete,
-    /// Existing setup state is from an incompatible pre-MVP schema.
-    OrchestratorSetupStateIncompatible,
     // Helper (elevated process) failures.
     /// Helper failed while validating or decoding the request payload.
     HelperRequestArgsFailed,
@@ -46,6 +48,8 @@ pub enum SetupErrorCode {
     HelperUsersGroupCreateFailed,
     /// Helper failed to create or update a sandbox user account.
     HelperUserCreateOrUpdateFailed,
+    /// Helper failed to remove legacy sandbox user state.
+    HelperLegacyUserCleanupFailed,
     /// Helper failed to protect user passwords with DPAPI.
     HelperDpapiProtectFailed,
     /// Helper failed to write the sandbox users secrets file.
@@ -81,19 +85,21 @@ impl SetupErrorCode {
         match self {
             Self::OrchestratorSandboxDirCreateFailed => "orchestrator_sandbox_dir_create_failed",
             Self::OrchestratorElevationCheckFailed => "orchestrator_elevation_check_failed",
+            Self::OrchestratorElevationRequired => "orchestrator_elevation_required",
             Self::OrchestratorPayloadSerializeFailed => "orchestrator_payload_serialize_failed",
             Self::OrchestratorHelperLaunchFailed => "orchestrator_helper_launch_failed",
+            Self::OrchestratorProxyPortMissing => "orchestrator_proxy_port_missing",
             Self::OrchestratorHelperLaunchCanceled => "orchestrator_helper_launch_canceled",
             Self::OrchestratorHelperExitNonzero => "orchestrator_helper_exit_nonzero",
             Self::OrchestratorHelperReportReadFailed => "orchestrator_helper_report_read_failed",
             Self::OrchestratorHelperIncomplete => "orchestrator_helper_incomplete",
-            Self::OrchestratorSetupStateIncompatible => "orchestrator_setup_state_incompatible",
             Self::HelperRequestArgsFailed => "helper_request_args_failed",
             Self::HelperSandboxDirCreateFailed => "helper_sandbox_dir_create_failed",
             Self::HelperLogFailed => "helper_log_failed",
             Self::HelperUserProvisionFailed => "helper_user_provision_failed",
             Self::HelperUsersGroupCreateFailed => "helper_users_group_create_failed",
             Self::HelperUserCreateOrUpdateFailed => "helper_user_create_or_update_failed",
+            Self::HelperLegacyUserCleanupFailed => "helper_legacy_user_cleanup_failed",
             Self::HelperDpapiProtectFailed => "helper_dpapi_protect_failed",
             Self::HelperUsersFileWriteFailed => "helper_users_file_write_failed",
             Self::HelperSetupMarkerWriteFailed => "helper_setup_marker_write_failed",

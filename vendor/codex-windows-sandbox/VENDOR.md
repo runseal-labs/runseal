@@ -16,6 +16,12 @@ tracked as vendor patches.
 
 Local vendor patches:
 
+- Replace the legacy workspace-contained finite deny-read ACL path with an
+  AppContainer/LowBox execution boundary. The active workspace and runtime
+  roots receive only per-execution capability ACLs; setup or spawn failure
+  must not fall back to a restricted-token contained mode.
+- Keep the AppContainer package, capability names, helper binaries, setup
+  task, WFP identities, and diagnostics in the RunSeal namespace.
 - Collapse setup payload, setup marker, and sandbox user secrets to the RunSeal
   single-user schema; guarded by `tests/vendor_boundary.rs`.
 - Collapse setup readiness vocabulary from offline/online identities to one

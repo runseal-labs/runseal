@@ -3,12 +3,12 @@ use crate::acl::add_deny_write_ace;
 use crate::acl::allow_null_device;
 use crate::allow::AllowDenyPaths;
 use crate::allow::compute_allow_paths_for_permissions;
+use crate::appcontainer::workspace_appcontainer_write_capability_sid;
 use crate::cap::load_or_create_cap_sids;
 use crate::cap::workspace_write_cap_sid_for_root;
 use crate::cap::workspace_write_root_contains_path;
 use crate::cap::workspace_write_root_overlaps_path;
 use crate::cap::workspace_write_root_specificity;
-use crate::deny_read_state::sync_persistent_deny_read_acls;
 use crate::env::apply_no_network_to_env;
 use crate::env::ensure_non_interactive_pager;
 use crate::env::inherit_path_env;
@@ -63,7 +63,6 @@ pub(crate) struct SpawnPrepOptions {
 pub(crate) struct LegacySessionSecurity {
     pub(crate) h_token: HANDLE,
     pub(crate) readonly_sid: Option<LocalSid>,
-    pub(crate) readonly_sid_str: Option<String>,
     pub(crate) write_root_sids: Vec<RootCapabilitySid>,
 }
 
@@ -75,7 +74,6 @@ pub(crate) struct RootCapabilitySid {
 
 pub(crate) struct LegacyAclSids<'a> {
     pub(crate) readonly_sid: Option<&'a LocalSid>,
-    pub(crate) readonly_sid_str: Option<&'a str>,
     pub(crate) write_root_sids: &'a [RootCapabilitySid],
 }
 
@@ -150,7 +148,7 @@ pub(crate) fn prepare_legacy_session_security(
     capability_roots: impl IntoIterator<Item = PathBuf>,
 ) -> Result<LegacySessionSecurity> {
     let caps = load_or_create_cap_sids(codex_home)?;
-    let (h_token, readonly_sid, readonly_sid_str, write_root_sids) = unsafe {
+    let (h_token, readonly_sid, write_root_sids) = unsafe {
         if uses_write_capabilities {
             let write_root_sids = root_capability_sids(codex_home, cwd, capability_roots)?;
             if write_root_sids.is_empty() {
@@ -164,18 +162,17 @@ pub(crate) fn prepare_legacy_session_security(
             let h_token = create_workspace_write_token_with_caps_from(base, cap_ptrs.as_slice());
             CloseHandle(base);
             let h_token = h_token?;
-            (h_token, None, None, write_root_sids)
+            (h_token, None, write_root_sids)
         } else {
             let psid = LocalSid::from_string(&caps.readonly)?;
             let (h_token, _psid) = create_readonly_token_with_cap(psid.as_ptr())?;
-            (h_token, Some(psid), Some(caps.readonly), Vec::new())
+            (h_token, Some(psid), Vec::new())
         }
     };
 
     Ok(LegacySessionSecurity {
         h_token,
         readonly_sid,
-        readonly_sid_str,
         write_root_sids,
     })
 }
@@ -266,10 +263,8 @@ pub(crate) fn allow_null_device_for_workspace_write(is_workspace_write: bool) {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_legacy_session_acl_rules(
     permissions: &ResolvedWindowsSandboxPermissions,
-    codex_home: &Path,
     current_dir: &Path,
     env_map: &HashMap<String, String>,
-    additional_deny_read_paths: &[PathBuf],
     additional_deny_write_paths: &[PathBuf],
     acl_sids: LegacyAclSids<'_>,
 ) -> Result<()> {
@@ -302,28 +297,6 @@ pub(crate) fn apply_legacy_session_acl_rules(
                 let _ = add_deny_write_ace(p, root_sid.sid.as_ptr());
             }
         }
-        if !additional_deny_read_paths.is_empty() {
-            if let Some(readonly_sid) = acl_sids.readonly_sid {
-                let Some(readonly_sid_str) = acl_sids.readonly_sid_str else {
-                    anyhow::bail!("readonly capability SID string missing");
-                };
-                sync_persistent_deny_read_acls(
-                    codex_home,
-                    readonly_sid_str,
-                    additional_deny_read_paths,
-                    readonly_sid.as_ptr(),
-                )?;
-            } else {
-                for root_sid in acl_sids.write_root_sids {
-                    sync_persistent_deny_read_acls(
-                        codex_home,
-                        &root_sid.sid_str,
-                        additional_deny_read_paths,
-                        root_sid.sid.as_ptr(),
-                    )?;
-                }
-            }
-        }
         for root_sid in acl_sids.write_root_sids {
             allow_null_device(root_sid.sid.as_ptr());
         }
@@ -354,9 +327,8 @@ pub(crate) fn prepare_elevated_spawn_context_for_permissions(
     read_roots_override: Option<&[PathBuf]>,
     read_roots_include_platform_defaults: bool,
     write_roots_override: Option<&[PathBuf]>,
-    deny_read_paths_override: &[PathBuf],
     deny_write_paths_override: &[PathBuf],
-    proxy_enforced: bool,
+    read_cap_sid: Option<String>,
 ) -> Result<ElevatedSpawnContext> {
     normalize_null_device_env(env_map);
     ensure_non_interactive_pager(env_map);
@@ -405,24 +377,36 @@ pub(crate) fn prepare_elevated_spawn_context_for_permissions(
         read_roots_override,
         read_roots_include_platform_defaults,
         setup_write_roots_override,
-        deny_read_paths_override,
         if deny_write_paths_override.is_empty() {
             &deny_write_paths
         } else {
             deny_write_paths_override
         },
-        proxy_enforced,
+        /*proxy_enforced*/ false,
+        None,
+        read_cap_sid.as_deref(),
     )?;
     let caps = load_or_create_cap_sids(codex_home)?;
     let (psid_to_use, cap_sids) = if uses_write_capabilities {
-        let cap_sids = root_capability_sids(codex_home, cwd, effective_write_roots)?
-            .into_iter()
-            .map(|root_sid| root_sid.sid_str)
-            .collect::<Vec<_>>();
+        let mut cap_sids = if read_cap_sid.is_some() {
+            effective_write_roots
+                .iter()
+                .map(|root| workspace_appcontainer_write_capability_sid(codex_home, cwd, root))
+                .collect::<Result<Vec<_>>>()?
+        } else {
+            root_capability_sids(codex_home, cwd, effective_write_roots)?
+                .into_iter()
+                .map(|root_sid| root_sid.sid_str)
+                .collect::<Vec<_>>()
+        };
         if cap_sids.is_empty() {
             anyhow::bail!("workspace-write sandbox has no writable root capability SIDs");
         }
-        (LocalSid::from_string(&cap_sids[0])?, cap_sids)
+        let psid_to_use = LocalSid::from_string(&cap_sids[0])?;
+        if let Some(read_cap_sid) = read_cap_sid {
+            cap_sids.push(read_cap_sid);
+        }
+        (psid_to_use, cap_sids)
     } else {
         (
             LocalSid::from_string(&caps.readonly)?,

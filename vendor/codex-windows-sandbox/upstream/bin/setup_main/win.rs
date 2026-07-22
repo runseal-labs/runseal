@@ -4,16 +4,19 @@ mod read_acl_mutex;
 use anyhow::Context;
 use anyhow::Result;
 use codex_otel::StatsigMetricsSettings;
+use codex_windows_sandbox::LocalSid;
 use codex_windows_sandbox::SETUP_VERSION;
 use codex_windows_sandbox::SetupErrorCode;
 use codex_windows_sandbox::SetupErrorReport;
 use codex_windows_sandbox::SetupFailure;
 use codex_windows_sandbox::add_deny_write_ace;
-use codex_windows_sandbox::allow_null_device;
+use codex_windows_sandbox::appcontainer_write_capability_sid;
 use codex_windows_sandbox::canonicalize_path;
+use codex_windows_sandbox::clear_legacy_persistent_deny_read_acls;
 use codex_windows_sandbox::convert_string_sid_to_sid;
 use codex_windows_sandbox::ensure_allow_mask_aces_with_inheritance;
 use codex_windows_sandbox::ensure_allow_write_aces;
+use codex_windows_sandbox::ensure_appcontainer_loopback_exemption;
 use codex_windows_sandbox::extract_setup_failure;
 use codex_windows_sandbox::hide_newly_created_users;
 use codex_windows_sandbox::install_wfp_filters;
@@ -21,20 +24,20 @@ use codex_windows_sandbox::is_command_cwd_root;
 use codex_windows_sandbox::log_note;
 use codex_windows_sandbox::log_writer;
 use codex_windows_sandbox::path_mask_allows;
-use codex_windows_sandbox::remove_deny_write_aces;
-use codex_windows_sandbox::resolve_current_exe_for_launch;
+use codex_windows_sandbox::protect_dacl_from_inheritance;
+use codex_windows_sandbox::revoke_allow_write_ace;
+use codex_windows_sandbox::revoke_deny_read_ace;
 use codex_windows_sandbox::sandbox_bin_dir;
 use codex_windows_sandbox::sandbox_dir;
 use codex_windows_sandbox::sandbox_secrets_dir;
 use codex_windows_sandbox::string_from_sid_bytes;
-use codex_windows_sandbox::sync_persistent_deny_read_acls;
 use codex_windows_sandbox::to_wide;
+use codex_windows_sandbox::workspace_appcontainer_write_capability_sid;
 use codex_windows_sandbox::workspace_write_cap_sid_for_root;
 use codex_windows_sandbox::workspace_write_root_overlaps_path;
 use codex_windows_sandbox::write_setup_error_report;
 use serde::Deserialize;
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::ffi::c_void;
@@ -66,24 +69,16 @@ use windows_sys::Win32::Storage::FileSystem::FILE_DELETE_CHILD;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_EXECUTE;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
-use windows_sys::Win32::Storage::FileSystem::MOVEFILE_WRITE_THROUGH;
-use windows_sys::Win32::Storage::FileSystem::MoveFileExW;
-use windows_sys::Win32::System::Diagnostics::Debug::SetErrorMode;
 
 const DENY_ACCESS: i32 = 3;
-const SETUP_PAYLOAD_DIRNAME: &str = "payloads";
-const SETUP_PAYLOAD_FILE_PREFIX: &str = "setup-payload-";
-const SETUP_PAYLOAD_FILE_SUFFIX: &str = ".json";
-const SETUP_EXE_FILENAME: &str = "runseal-windows-sandbox-setup.exe";
-const SCHEDULED_SETUP_TASK_NAME: &str = r"\RunSeal\WindowsSandboxSetup";
-const SCHEDULED_SETUP_PAYLOAD_PREFIX: &str = "setup-task-payload-";
-const SCHEDULED_SETUP_RESULT_PREFIX: &str = "setup-task-result-";
-const SETUP_ERROR_MODE_FLAGS: u32 = 0x0001 | 0x0002;
 
 mod sandbox_users;
+mod setup_runtime_bin;
 use read_acl_mutex::acquire_read_acl_mutex;
 use read_acl_mutex::read_acl_mutex_exists;
+use sandbox_users::cleanup_legacy_sandbox_state;
 use sandbox_users::commit_setup_marker;
+use sandbox_users::legacy_sandbox_usernames;
 use sandbox_users::prepare_setup_marker;
 use sandbox_users::provision_sandbox_users;
 use sandbox_users::resolve_sandbox_users_group_sid;
@@ -99,9 +94,11 @@ struct Payload {
     read_roots: Vec<PathBuf>,
     write_roots: Vec<PathBuf>,
     #[serde(default)]
-    deny_read_paths: Vec<PathBuf>,
-    #[serde(default)]
     deny_write_paths: Vec<PathBuf>,
+    #[serde(default)]
+    read_cap_sid: Option<String>,
+    #[serde(default)]
+    appcontainer_sid: Option<String>,
     proxy_ports: Vec<u16>,
     #[serde(default)]
     allow_local_binding: bool,
@@ -124,18 +121,23 @@ enum SetupMode {
     ReadAclsOnly,
 }
 
+const SCHEDULED_SETUP_TASK_NAME: &str = r"\RunSeal\WindowsSandboxSetup";
+const SCHEDULED_SETUP_PAYLOAD_PREFIX: &str = "setup-task-payload-";
+const SCHEDULED_SETUP_RESULT_PREFIX: &str = "setup-task-result-";
+const SETUP_PAYLOAD_DIRNAME: &str = "payloads";
+const SETUP_PAYLOAD_FILE_PREFIX: &str = "setup-payload-";
+const SETUP_PAYLOAD_FILE_SUFFIX: &str = ".json";
+
+#[derive(Debug, Serialize)]
+struct ScheduledSetupTaskResult {
+    ok: bool,
+    message: Option<String>,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum SetupInvocation {
     TaskRun(PathBuf),
     PayloadFile(PathBuf),
-}
-
-#[derive(Debug, Serialize)]
-struct ScheduledSetupTaskResult {
-    request_id: String,
-    payload_sha256: String,
-    ok: bool,
-    message: Option<String>,
 }
 
 fn log_line(log: &mut dyn Write, msg: &str) -> Result<()> {
@@ -154,6 +156,7 @@ fn workspace_write_cap_sids_for_path(
     command_cwd: &Path,
     write_roots: &[PathBuf],
     path: &Path,
+    appcontainer: bool,
 ) -> Result<Vec<String>> {
     let mut sid_strs = Vec::new();
     for root in write_roots {
@@ -182,7 +185,14 @@ fn workspace_write_cap_sids_for_path(
             }
         }
     }
-    Ok(sid_strs)
+    if appcontainer {
+        sid_strs
+            .into_iter()
+            .map(|sid| appcontainer_write_capability_sid(&sid))
+            .collect()
+    } else {
+        Ok(sid_strs)
+    }
 }
 
 fn setup_payload_dir(codex_home: &Path) -> PathBuf {
@@ -239,217 +249,6 @@ fn remove_setup_payload_file(path: &Path) -> std::io::Result<()> {
     }
 }
 
-fn scheduled_setup_broker_home(fallback: &Path) -> PathBuf {
-    if let Some(path) = absolute_env_path("RUNSEAL_WINDOWS_SANDBOX_SETUP_BROKER_HOME") {
-        return path;
-    }
-    if let Some(user_data_dir) = absolute_env_path("RUNSEAL_USER_DATA_DIR") {
-        return user_data_dir.join("windows-sandbox");
-    }
-    if let Some(appdata) = absolute_env_path("APPDATA") {
-        return appdata.join("RunSeal").join("windows-sandbox");
-    }
-    fallback.to_path_buf()
-}
-
-fn absolute_env_path(key: &str) -> Option<PathBuf> {
-    absolute_path_from_env_value(std::env::var_os(key))
-}
-
-fn absolute_path_from_env_value(value: Option<std::ffi::OsString>) -> Option<PathBuf> {
-    value.map(PathBuf::from).filter(|path| path.is_absolute())
-}
-
-fn with_suppressed_windows_error_dialogs<T>(f: impl FnOnce() -> T) -> T {
-    let previous_error_mode = unsafe { SetErrorMode(SETUP_ERROR_MODE_FLAGS) };
-    let result = f();
-    unsafe {
-        SetErrorMode(previous_error_mode);
-    }
-    result
-}
-
-fn quote_task_arg(arg: &str) -> String {
-    let needs = arg.is_empty()
-        || arg
-            .chars()
-            .any(|c| matches!(c, ' ' | '\t' | '\n' | '\r' | '"'));
-    if !needs {
-        return arg.to_string();
-    }
-    let mut out = String::from("\"");
-    let mut bs = 0;
-    for ch in arg.chars() {
-        match ch {
-            '\\' => {
-                bs += 1;
-            }
-            '"' => {
-                out.push_str(&"\\".repeat(bs * 2 + 1));
-                out.push('"');
-                bs = 0;
-            }
-            _ => {
-                if bs > 0 {
-                    out.push_str(&"\\".repeat(bs));
-                    bs = 0;
-                }
-                out.push(ch);
-            }
-        }
-    }
-    if bs > 0 {
-        out.push_str(&"\\".repeat(bs * 2));
-    }
-    out.push('"');
-    out
-}
-
-fn scheduled_setup_result_path(codex_home: &Path, request_id: &str) -> PathBuf {
-    sandbox_dir(codex_home).join(format!("{SCHEDULED_SETUP_RESULT_PREFIX}{request_id}.json"))
-}
-
-fn scheduled_setup_payload_sha256(payload_json: &[u8]) -> String {
-    format!("sha256:{:x}", Sha256::digest(payload_json))
-}
-
-fn scheduled_setup_result_temp_path(codex_home: &Path, request_id: &str) -> PathBuf {
-    sandbox_dir(codex_home).join(format!(
-        "{SCHEDULED_SETUP_RESULT_PREFIX}{request_id}.json.tmp"
-    ))
-}
-
-fn write_scheduled_setup_result(
-    broker_home: &Path,
-    request_id: &str,
-    result: &ScheduledSetupTaskResult,
-) -> Result<()> {
-    let result_path = scheduled_setup_result_path(broker_home, request_id);
-    let temp_path = scheduled_setup_result_temp_path(broker_home, request_id);
-    let _ = remove_setup_payload_file(&temp_path);
-    if result_path.exists() {
-        anyhow::bail!(
-            "failed to publish scheduled setup result {}: result already exists",
-            result_path.display()
-        );
-    }
-    let result_json = serde_json::to_vec(result)?;
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temp_path)
-        .with_context(|| {
-            format!(
-                "failed to create scheduled setup result {}",
-                temp_path.display()
-            )
-        })?;
-    file.write_all(&result_json).with_context(|| {
-        format!(
-            "failed to write scheduled setup result {}",
-            temp_path.display()
-        )
-    })?;
-    file.flush().with_context(|| {
-        format!(
-            "failed to flush scheduled setup result {}",
-            temp_path.display()
-        )
-    })?;
-    drop(file);
-    if let Err(err) = publish_scheduled_setup_result(&temp_path, &result_path) {
-        let _ = remove_setup_payload_file(&temp_path);
-        return Err(err).with_context(|| {
-            format!(
-                "failed to publish scheduled setup result {}",
-                result_path.display()
-            )
-        });
-    }
-    Ok(())
-}
-
-fn publish_scheduled_setup_result(temp_path: &Path, result_path: &Path) -> std::io::Result<()> {
-    let temp_path_wide = to_wide(temp_path.as_os_str());
-    let result_path_wide = to_wide(result_path.as_os_str());
-    let ok = unsafe {
-        MoveFileExW(
-            temp_path_wide.as_ptr(),
-            result_path_wide.as_ptr(),
-            MOVEFILE_WRITE_THROUGH,
-        )
-    };
-    if ok == 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(())
-}
-
-fn setup_task_request_id(path: &Path) -> Option<String> {
-    let name = path.file_name()?.to_string_lossy();
-    let rest = name.strip_prefix(SCHEDULED_SETUP_PAYLOAD_PREFIX)?;
-    let request_id = rest.strip_suffix(".json")?;
-    (!request_id.is_empty()).then(|| request_id.to_string())
-}
-
-fn ensure_scheduled_setup_task(codex_home: &Path, log: &mut dyn Write) -> Result<()> {
-    let broker_home = scheduled_setup_broker_home(codex_home);
-    let exe = resolve_current_exe_for_launch(&broker_home, SETUP_EXE_FILENAME);
-    let task_command = format!(
-        "{} --task-run {}",
-        quote_task_arg(&exe.to_string_lossy()),
-        quote_task_arg(&broker_home.to_string_lossy())
-    );
-    let output = with_suppressed_windows_error_dialogs(|| {
-        Command::new("schtasks.exe")
-            .args([
-                "/Create",
-                "/TN",
-                SCHEDULED_SETUP_TASK_NAME,
-                "/TR",
-                &task_command,
-                "/SC",
-                "ONCE",
-                "/ST",
-                "00:00",
-                "/RL",
-                "HIGHEST",
-                "/F",
-            ])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .creation_flags(0x08000000) // CREATE_NO_WINDOW
-            .output()
-    })
-    .context("run schtasks /Create")?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!(
-            "schtasks /Create failed with status {:?}: {}",
-            output.status.code(),
-            stderr.trim()
-        );
-    }
-    log_line(
-        log,
-        &format!(
-            "scheduled setup task configured name={SCHEDULED_SETUP_TASK_NAME} broker_home={}",
-            broker_home.display()
-        ),
-    )?;
-    Ok(())
-}
-
-fn ensure_scheduled_setup_task_or_fail(codex_home: &Path, log: &mut dyn Write) -> Result<()> {
-    ensure_scheduled_setup_task(codex_home, log).map_err(|err| {
-        anyhow::Error::new(SetupFailure::new(
-            SetupErrorCode::HelperUnknownError,
-            format!("scheduled setup task configure failed: {err}"),
-        ))
-    })
-}
-
 fn spawn_read_acl_helper(payload: &Payload, _log: &mut dyn Write) -> Result<()> {
     let mut read_payload = payload.clone();
     read_payload.mode = SetupMode::ReadAclsOnly;
@@ -457,16 +256,14 @@ fn spawn_read_acl_helper(payload: &Payload, _log: &mut dyn Write) -> Result<()> 
     let payload_json = serde_json::to_vec(&read_payload)?;
     let payload_path = write_setup_payload_file(&payload.codex_home, payload_json.as_slice())?;
     let exe = std::env::current_exe().context("locate setup helper")?;
-    let spawn_result = with_suppressed_windows_error_dialogs(|| {
-        Command::new(&exe)
-            .arg("--payload-file")
-            .arg(&payload_path)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .creation_flags(0x08000000) // CREATE_NO_WINDOW
-            .spawn()
-    });
+    let spawn_result = Command::new(&exe)
+        .arg("--payload-file")
+        .arg(&payload_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(0x08000000) // CREATE_NO_WINDOW
+        .spawn();
     if let Err(err) = spawn_result {
         let _ = remove_setup_payload_file(&payload_path);
         return Err(err).with_context(|| {
@@ -482,6 +279,8 @@ fn spawn_read_acl_helper(payload: &Payload, _log: &mut dyn Write) -> Result<()> 
 struct ReadAclSubjects<'a> {
     sandbox_group_psid: *mut c_void,
     rx_psids: &'a [*mut c_void],
+    platform_read_psids: &'a [*mut c_void],
+    read_cap_psid: Option<*mut c_void>,
 }
 
 fn apply_read_acls(
@@ -510,51 +309,128 @@ fn apply_read_acls(
             refresh_errors,
             log,
         )?;
-        if builtin_has {
+        if !builtin_has {
+            let sandbox_has = read_mask_allows_or_log(
+                root,
+                &[subjects.sandbox_group_psid],
+                Some("sandbox_group"),
+                access_mask,
+                access_label,
+                refresh_errors,
+                log,
+            )?;
+            if !sandbox_has {
+                log_line(
+                    log,
+                    &format!(
+                        "granting {access_label} ACE to {} for sandbox users",
+                        root.display()
+                    ),
+                )?;
+                if let Err(err) = unsafe {
+                    ensure_allow_mask_aces_with_inheritance(
+                        root,
+                        &[subjects.sandbox_group_psid],
+                        access_mask,
+                        inheritance,
+                    )
+                } {
+                    refresh_errors.push(format!(
+                        "grant {access_label} ACE failed on {} for sandbox_group: {err}",
+                        root.display()
+                    ));
+                    log_line(
+                        log,
+                        &format!(
+                            "grant {access_label} ACE failed on {} for sandbox_group: {err}",
+                            root.display()
+                        ),
+                    )?;
+                }
+            }
+        }
+
+        let Some(read_cap_psid) = subjects.read_cap_psid else {
+            continue;
+        };
+        if is_native_appcontainer_platform_root(root) {
+            log_line(
+                log,
+                &format!(
+                    "using native AppContainer platform ACLs for {}",
+                    root.display()
+                ),
+            )?;
             continue;
         }
-        let sandbox_has = read_mask_allows_or_log(
+        let platform_has = read_mask_allows_or_log(
             root,
-            &[subjects.sandbox_group_psid],
-            Some("sandbox_group"),
+            subjects.platform_read_psids,
+            Some("platform_read"),
             access_mask,
             access_label,
             refresh_errors,
             log,
         )?;
-        if sandbox_has {
+        let read_cap_has = read_mask_allows_or_log(
+            root,
+            &[read_cap_psid],
+            Some("workspace_read_cap"),
+            access_mask,
+            access_label,
+            refresh_errors,
+            log,
+        )?;
+        if platform_has || read_cap_has {
             continue;
         }
         log_line(
             log,
             &format!(
-                "granting {access_label} ACE to {} for sandbox users",
+                "granting {access_label} ACE to {} for workspace read capability",
                 root.display()
             ),
         )?;
-        let result = unsafe {
+        if let Err(err) = unsafe {
             ensure_allow_mask_aces_with_inheritance(
                 root,
-                &[subjects.sandbox_group_psid],
+                &[read_cap_psid],
                 access_mask,
                 inheritance,
             )
-        };
-        if let Err(err) = result {
+        } {
             refresh_errors.push(format!(
-                "grant {access_label} ACE failed on {} for sandbox_group: {err}",
+                "grant {access_label} ACE failed on {} for workspace_read_cap: {err}",
                 root.display()
             ));
             log_line(
                 log,
                 &format!(
-                    "grant {access_label} ACE failed on {} for sandbox_group: {err}",
+                    "grant {access_label} ACE failed on {} for workspace_read_cap: {err}",
                     root.display()
                 ),
             )?;
         }
     }
     Ok(())
+}
+
+fn is_native_appcontainer_platform_root(path: &Path) -> bool {
+    let canonical = codex_windows_sandbox::canonical_path_key(path);
+    [
+        Some(PathBuf::from(r"C:\Windows")),
+        std::env::var_os("ProgramFiles").map(PathBuf::from),
+        std::env::var_os("ProgramFiles(x86)").map(PathBuf::from),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|root| {
+        let root = codex_windows_sandbox::canonical_path_key(&root);
+        canonical == root
+            || canonical
+                .strip_prefix(&root)
+                .is_some_and(|suffix| suffix.starts_with('/'))
+    })
 }
 
 fn read_mask_allows_or_log(
@@ -719,28 +595,15 @@ fn real_main() -> Result<()> {
 
 fn parse_setup_invocation(args: &[String]) -> Result<SetupInvocation> {
     match args {
-        [flag, path] if flag == "--task-run" => Ok(SetupInvocation::TaskRun(
-            parse_setup_invocation_path(flag, path)?,
-        )),
-        [flag, path] if flag == "--payload-file" => Ok(SetupInvocation::PayloadFile(
-            parse_setup_invocation_path(flag, path)?,
-        )),
+        [flag, path] if flag == "--task-run" => Ok(SetupInvocation::TaskRun(PathBuf::from(path))),
+        [flag, path] if flag == "--payload-file" => {
+            Ok(SetupInvocation::PayloadFile(PathBuf::from(path)))
+        }
         _ => Err(anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperRequestArgsFailed,
             "expected --payload-file <path> or --task-run <broker-home>",
         ))),
     }
-}
-
-fn parse_setup_invocation_path(flag: &str, path: &str) -> Result<PathBuf> {
-    let path = PathBuf::from(path);
-    if !path.is_absolute() {
-        return Err(anyhow::Error::new(SetupFailure::new(
-            SetupErrorCode::HelperRequestArgsFailed,
-            format!("{flag} requires an absolute path"),
-        )));
-    }
-    Ok(path)
 }
 
 fn run_scheduled_setup_task(broker_home: &Path) -> Result<()> {
@@ -773,43 +636,34 @@ fn run_scheduled_setup_task(broker_home: &Path) -> Result<()> {
         let payload_json = match std::fs::read(&path) {
             Ok(contents) => contents,
             Err(err) => {
+                let result_path = scheduled_setup_result_path(broker_home, &request_id);
                 let result = ScheduledSetupTaskResult {
-                    request_id: request_id.clone(),
-                    payload_sha256: String::new(),
                     ok: false,
                     message: Some(format!("failed to read scheduled setup payload: {err}")),
                 };
-                write_scheduled_setup_result(broker_home, &request_id, &result)?;
+                let _ = std::fs::write(&result_path, serde_json::to_vec(&result)?);
                 continue;
             }
         };
-        let payload_sha256 = scheduled_setup_payload_sha256(&payload_json);
-        if let Err(err) = remove_setup_payload_file(&path) {
-            let result = ScheduledSetupTaskResult {
-                request_id: request_id.clone(),
-                payload_sha256,
-                ok: false,
-                message: Some(format!("failed to remove scheduled setup payload: {err}")),
-            };
-            write_scheduled_setup_result(broker_home, &request_id, &result)?;
-            continue;
-        }
         let result = run_payload_json(payload_json.as_slice());
         let task_result = match result {
             Ok(()) => ScheduledSetupTaskResult {
-                request_id: request_id.clone(),
-                payload_sha256,
                 ok: true,
                 message: None,
             },
             Err(err) => ScheduledSetupTaskResult {
-                request_id: request_id.clone(),
-                payload_sha256,
                 ok: false,
                 message: Some(err.to_string()),
             },
         };
-        write_scheduled_setup_result(broker_home, &request_id, &task_result)?;
+        let result_path = scheduled_setup_result_path(broker_home, &request_id);
+        std::fs::write(&result_path, serde_json::to_vec(&task_result)?).with_context(|| {
+            format!(
+                "failed to write scheduled setup result {}",
+                result_path.display()
+            )
+        })?;
+        let _ = std::fs::remove_file(&path);
     }
     log_line(
         &mut log,
@@ -892,7 +746,16 @@ fn run_setup(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Result<(
     let writes_setup_marker = !payload.refresh_only && payload.mode != SetupMode::ReadAclsOnly;
     let provisions_identity =
         !payload.refresh_only && matches!(payload.mode, SetupMode::Full | SetupMode::ProvisionOnly);
+    log_line(
+        log,
+        &format!(
+            "Windows sandbox model: single low-privilege user {} with proxy-only egress",
+            payload.sandbox_username
+        ),
+    )?;
     if provisions_identity {
+        cleanup_legacy_sandbox_state(&payload.codex_home, log)?;
+        firewall::remove_legacy_sandbox_rules(log)?;
         prepare_setup_marker(&payload.codex_home, &payload.real_user)?;
     }
     match payload.mode {
@@ -907,20 +770,51 @@ fn run_setup(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Result<(
             &payload.sandbox_username,
             &payload.proxy_ports,
             payload.allow_local_binding,
+            payload.appcontainer_sid.as_deref(),
+        )?;
+        log_setup_diagnostics(payload, log)?;
+    }
+    Ok(())
+}
+
+fn log_setup_diagnostics(payload: &Payload, log: &mut dyn Write) -> Result<()> {
+    let sandbox_sid = resolve_sid(&payload.sandbox_username)
+        .and_then(|sid| string_from_sid_bytes(&sid).map_err(anyhow::Error::msg))
+        .unwrap_or_else(|err| format!("unresolved:{err}"));
+    let group_sid = resolve_sandbox_users_group_sid()
+        .and_then(|sid| string_from_sid_bytes(&sid).map_err(anyhow::Error::msg))
+        .unwrap_or_else(|err| format!("unresolved:{err}"));
+    let users_path = sandbox_secrets_dir(&payload.codex_home).join("sandbox_users.json");
+    let marker_path = sandbox_dir(&payload.codex_home).join("setup_marker.json");
+    log_line(
+        log,
+        &format!(
+            "diagnose sandbox_identity user={} sid={} group=RunSealSandboxUsers group_sid={} secrets_exists={} marker_exists={} marker_version={} proxy_ports={:?} allow_local_binding={}",
+            payload.sandbox_username,
+            sandbox_sid,
+            group_sid,
+            users_path.exists(),
+            marker_path.exists(),
+            SETUP_VERSION,
+            payload.proxy_ports,
+            payload.allow_local_binding
+        ),
+    )?;
+    for legacy_username in legacy_sandbox_usernames() {
+        let legacy_present = resolve_sid(legacy_username).is_ok();
+        log_line(
+            log,
+            &format!(
+                "diagnose legacy_sandbox_user user={legacy_username} present={legacy_present}"
+            ),
         )?;
     }
     Ok(())
 }
 
 fn run_read_acl_only(payload: &Payload, log: &mut dyn Write) -> Result<()> {
-    let _read_acl_guard = match acquire_read_acl_mutex()? {
-        Some(guard) => guard,
-        None => {
-            log_line(log, "read ACL helper already running; skipping")?;
-            return Ok(());
-        }
-    };
-    log_line(log, "read-acl-only mode: applying read ACLs")?;
+    let _read_acl_guard = acquire_read_acl_mutex()?;
+    log_line(log, "applying read ACLs")?;
     let sandbox_group_sid = resolve_sandbox_users_group_sid()?;
     let sandbox_group_psid = sid_bytes_to_psid(&sandbox_group_sid)?;
     let mut refresh_errors: Vec<String> = Vec::new();
@@ -932,9 +826,29 @@ fn run_read_acl_only(payload: &Payload, log: &mut dyn Write) -> Result<()> {
         let everyone_sid = resolve_sid("Everyone")?;
         let everyone_psid = sid_bytes_to_psid(&everyone_sid)?;
         let rx_psids = vec![users_psid, auth_psid, everyone_psid];
+        let read_cap_sid = payload
+            .read_cap_sid
+            .as_deref()
+            .map(LocalSid::from_string)
+            .transpose()?;
+        let all_application_packages = read_cap_sid
+            .as_ref()
+            .map(|_| LocalSid::from_string("S-1-15-2-1"))
+            .transpose()?;
+        let platform_read_psids = if read_cap_sid.is_some() {
+            let mut psids = vec![users_psid, everyone_psid];
+            if let Some(sid) = all_application_packages.as_ref() {
+                psids.push(sid.as_ptr());
+            }
+            psids
+        } else {
+            Vec::new()
+        };
         let subjects = ReadAclSubjects {
             sandbox_group_psid,
             rx_psids: &rx_psids,
+            platform_read_psids: &platform_read_psids,
+            read_cap_psid: read_cap_sid.as_ref().map(LocalSid::as_ptr),
         };
         apply_read_acls(
             &payload.read_roots,
@@ -967,7 +881,7 @@ fn run_read_acl_only(payload: &Payload, log: &mut dyn Write) -> Result<()> {
             log,
             &format!("read ACL run completed with errors: {refresh_errors:?}"),
         )?;
-        if payload.refresh_only {
+        if payload.refresh_only || payload.read_cap_sid.is_some() {
             anyhow::bail!("read ACL run had errors");
         }
     }
@@ -975,7 +889,7 @@ fn run_read_acl_only(payload: &Payload, log: &mut dyn Write) -> Result<()> {
     Ok(())
 }
 
-fn provision_and_hide_sandbox_users(
+fn provision_and_hide_sandbox_user(
     payload: &Payload,
     log: &mut dyn Write,
     sbx_dir: &Path,
@@ -996,11 +910,19 @@ fn provision_and_hide_sandbox_users(
     Ok(())
 }
 
-fn configure_sandbox_network_guard(
+fn configure_sandbox_network(
     payload: &Payload,
     sandbox_sid_str: &str,
     log: &mut dyn Write,
 ) -> Result<()> {
+    if let Some(appcontainer_sid) = payload.appcontainer_sid.as_deref() {
+        ensure_appcontainer_loopback_exemption(appcontainer_sid).map_err(|err| {
+            anyhow::Error::new(SetupFailure::new(
+                SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
+                format!("ensure AppContainer loopback exemption failed: {err}"),
+            ))
+        })?;
+    }
     let proxy_allowlist_result = firewall::ensure_sandbox_proxy_allowlist(
         sandbox_sid_str,
         &payload.proxy_ports,
@@ -1029,10 +951,106 @@ fn configure_sandbox_network_guard(
     install_wfp_filters(
         &payload.codex_home,
         &payload.sandbox_username,
+        payload.appcontainer_sid.as_deref(),
+        &payload.proxy_ports,
         payload.otel.as_ref(),
         |message| {
             let _ = log_line(log, message);
         },
+    )?;
+    Ok(())
+}
+
+fn quote_task_arg(arg: &str) -> String {
+    let needs = arg.is_empty()
+        || arg
+            .chars()
+            .any(|c| matches!(c, ' ' | '\t' | '\n' | '\r' | '"'));
+    if !needs {
+        return arg.to_string();
+    }
+    let mut out = String::from("\"");
+    let mut bs = 0;
+    for ch in arg.chars() {
+        match ch {
+            '\\' => {
+                bs += 1;
+            }
+            '"' => {
+                out.push_str(&"\\".repeat(bs * 2 + 1));
+                out.push('"');
+                bs = 0;
+            }
+            _ => {
+                if bs > 0 {
+                    out.push_str(&"\\".repeat(bs));
+                    bs = 0;
+                }
+                out.push(ch);
+            }
+        }
+    }
+    if bs > 0 {
+        out.push_str(&"\\".repeat(bs * 2));
+    }
+    out.push('"');
+    out
+}
+
+fn scheduled_setup_result_path(codex_home: &Path, request_id: &str) -> PathBuf {
+    sandbox_dir(codex_home).join(format!("{SCHEDULED_SETUP_RESULT_PREFIX}{request_id}.json"))
+}
+
+fn setup_task_request_id(path: &Path) -> Option<String> {
+    let name = path.file_name()?.to_string_lossy();
+    let rest = name.strip_prefix(SCHEDULED_SETUP_PAYLOAD_PREFIX)?;
+    let request_id = rest.strip_suffix(".json")?;
+    (!request_id.is_empty()).then(|| request_id.to_string())
+}
+
+fn ensure_scheduled_setup_task(codex_home: &Path, log: &mut dyn Write) -> Result<()> {
+    let exe = std::env::current_exe().context("locate setup helper for scheduled task")?;
+    let broker_home = codex_home.to_path_buf();
+    let task_command = format!(
+        "{} --task-run {}",
+        quote_task_arg(&exe.to_string_lossy()),
+        quote_task_arg(&broker_home.to_string_lossy())
+    );
+    let output = Command::new("schtasks.exe")
+        .args([
+            "/Create",
+            "/TN",
+            SCHEDULED_SETUP_TASK_NAME,
+            "/TR",
+            &task_command,
+            "/SC",
+            "ONCE",
+            "/ST",
+            "00:00",
+            "/RL",
+            "HIGHEST",
+            "/F",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .creation_flags(0x08000000) // CREATE_NO_WINDOW
+        .output()
+        .context("run schtasks /Create")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!(
+            "schtasks /Create failed with status {:?}: {}",
+            output.status.code(),
+            stderr.trim()
+        );
+    }
+    log_line(
+        log,
+        &format!(
+            "scheduled setup task configured name={SCHEDULED_SETUP_TASK_NAME} broker_home={}",
+            broker_home.display()
+        ),
     )?;
     Ok(())
 }
@@ -1090,41 +1108,28 @@ fn lock_sandbox_bin_dir(
     sandbox_group_sid: &[u8],
     log: &mut dyn Write,
 ) -> Result<()> {
-    for dir in sandbox_bin_dirs_to_lock(&payload.codex_home) {
-        lock_sandbox_dir(
-            &dir,
-            &payload.real_user,
-            sandbox_group_sid,
-            GRANT_ACCESS,
-            FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
-            FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
-            log,
-        )
-        .map_err(|err| {
-            anyhow::Error::new(SetupFailure::new(
-                SetupErrorCode::HelperSandboxLockFailed,
-                format!("lock sandbox bin dir {} failed: {err}", dir.display()),
-            ))
-        })?;
-    }
-    Ok(())
-}
-
-fn sandbox_bin_dirs_to_lock(codex_home: &Path) -> Vec<PathBuf> {
-    sandbox_bin_dirs_to_lock_for_broker(codex_home, &scheduled_setup_broker_home(codex_home))
-}
-
-fn sandbox_bin_dirs_to_lock_for_broker(codex_home: &Path, broker_home: &Path) -> Vec<PathBuf> {
-    let mut dirs = vec![sandbox_bin_dir(codex_home)];
-    let broker_bin = sandbox_bin_dir(broker_home);
-    if !dirs.iter().any(|dir| dir == &broker_bin) {
-        dirs.push(broker_bin);
-    }
-    dirs
+    lock_sandbox_dir(
+        &sandbox_bin_dir(&payload.codex_home),
+        &payload.real_user,
+        sandbox_group_sid,
+        GRANT_ACCESS,
+        FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+        FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
+        log,
+    )
+    .map_err(|err| {
+        anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperSandboxLockFailed,
+            format!(
+                "lock sandbox bin dir {} failed: {err}",
+                sandbox_bin_dir(&payload.codex_home).display()
+            ),
+        ))
+    })
 }
 
 fn run_provision_only(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Result<()> {
-    provision_and_hide_sandbox_users(payload, log, sbx_dir)?;
+    provision_and_hide_sandbox_user(payload, log, sbx_dir)?;
     let sandbox_sid = resolve_sid(&payload.sandbox_username).map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperSidResolveFailed,
@@ -1143,17 +1148,15 @@ fn run_provision_only(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) ->
         ))
     })?;
 
-    configure_sandbox_network_guard(payload, &sandbox_sid_str, log)?;
+    configure_sandbox_network(payload, &sandbox_sid_str, log)?;
 
     lock_sandbox_bin_dir(payload, &sandbox_group_sid, log)?;
     lock_persistent_sandbox_dirs(payload, &sandbox_group_sid, log)?;
-    ensure_scheduled_setup_task_or_fail(&payload.codex_home, log)?;
     log_note("setup provisioning binary completed", Some(sbx_dir));
     Ok(())
 }
 
 fn run_network_only(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Result<()> {
-    log_line(log, "network-only mode: refreshing sandbox network guard")?;
     let sandbox_sid = resolve_sid(&payload.sandbox_username).map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperSidResolveFailed,
@@ -1164,16 +1167,15 @@ fn run_network_only(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> R
         ))
     })?;
     let sandbox_sid_str = string_from_sid_bytes(&sandbox_sid).map_err(anyhow::Error::msg)?;
-
-    configure_sandbox_network_guard(payload, &sandbox_sid_str, log)?;
-    log_note("setup network refresh completed", Some(sbx_dir));
+    configure_sandbox_network(payload, &sandbox_sid_str, log)?;
+    log_note("setup network binary completed", Some(sbx_dir));
     Ok(())
 }
 
 fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Result<()> {
     let refresh_only = payload.refresh_only;
     if !refresh_only {
-        provision_and_hide_sandbox_users(payload, log, sbx_dir)?;
+        provision_and_hide_sandbox_user(payload, log, sbx_dir)?;
     }
     let sandbox_sid = resolve_sid(&payload.sandbox_username).map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
@@ -1200,36 +1202,51 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
     })?;
     let sandbox_group_sid_str =
         string_from_sid_bytes(&sandbox_group_sid).map_err(anyhow::Error::msg)?;
-    unsafe {
-        allow_null_device(sandbox_group_psid);
-    }
+    let sandbox_user_psid = sid_bytes_to_psid(&sandbox_sid).map_err(|err| {
+        anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperSidResolveFailed,
+            format!("convert sandbox user SID to PSID failed: {err}"),
+        ))
+    })?;
 
     let mut refresh_errors: Vec<String> = Vec::new();
     if !refresh_only {
-        configure_sandbox_network_guard(payload, &sandbox_sid_str, log)?;
+        configure_sandbox_network(payload, &sandbox_sid_str, log)?;
     }
 
-    // Deny-read ACEs must be present before the sandboxed command starts. Apply
-    // them synchronously here instead of delegating them to the background
-    // helper used for read grants.
-    let applied_deny_read_paths = unsafe {
-        sync_persistent_deny_read_acls(
-            &payload.codex_home,
-            &sandbox_group_sid_str,
-            &payload.deny_read_paths,
-            sandbox_group_psid,
-        )
+    if payload.appcontainer_sid.is_some() {
+        unsafe { protect_dacl_from_inheritance(&payload.codex_home) }.with_context(|| {
+            format!(
+                "protect workspace-contained runtime root {} from host-private deny inheritance",
+                payload.codex_home.display()
+            )
+        })?;
+        unsafe { revoke_deny_read_ace(&payload.codex_home, sandbox_group_psid) }.with_context(
+            || {
+                format!(
+                    "remove inherited sandbox deny-read ACE from workspace-contained runtime root {}",
+                    payload.codex_home.display()
+                )
+            },
+        )?;
     }
-    .context("apply deny-read ACLs")?;
-    if !applied_deny_read_paths.is_empty() {
+
+    let removed_deny_read_paths =
+        unsafe { clear_legacy_persistent_deny_read_acls(&payload.codex_home) }
+            .context("clear legacy deny-read ACLs")?;
+    if removed_deny_read_paths != 0 {
         log_line(
             log,
-            &format!("applied {} deny-read ACLs", applied_deny_read_paths.len()),
+            &format!("removed {removed_deny_read_paths} legacy deny-read ACLs"),
         )?;
     }
 
     if payload.read_roots.is_empty() {
         log_line(log, "no read roots to grant; skipping read ACL helper")?;
+    } else if payload.read_cap_sid.is_some() {
+        // Contained tokens enforce read restrictions before process creation,
+        // so their capability grants cannot be delegated to the background helper.
+        run_read_acl_only(payload, log)?;
     } else {
         match read_acl_mutex_exists() {
             Ok(true) => {
@@ -1260,9 +1277,23 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
         }
     }
 
+    setup_runtime_bin::ensure_runseal_packaged_resources_readable(
+        sandbox_group_psid,
+        &mut refresh_errors,
+        log,
+    )?;
+
+    if refresh_only {
+        setup_runtime_bin::ensure_codex_app_runtime_bin_readable(
+            sandbox_group_psid,
+            &mut refresh_errors,
+            log,
+        )?;
+    }
+
     let write_mask =
         FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE | FILE_DELETE_CHILD;
-    let mut grant_tasks: Vec<(PathBuf, String)> = Vec::new();
+    let mut grant_tasks: Vec<(PathBuf, Vec<String>)> = Vec::new();
 
     let mut seen_deny_paths: HashSet<PathBuf> = HashSet::new();
     let mut seen_write_roots: HashSet<PathBuf> = HashSet::new();
@@ -1279,6 +1310,56 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
             )?;
             continue;
         }
+        match unsafe { revoke_deny_read_ace(root, sandbox_group_psid) } {
+            Ok(true) => log_line(
+                log,
+                &format!(
+                    "removed stale deny-read ACE from write root {}",
+                    root.display()
+                ),
+            )?,
+            Ok(false) => {}
+            Err(err) => {
+                refresh_errors.push(format!(
+                    "deny-read cleanup failed on write root {}: {}",
+                    root.display(),
+                    err
+                ));
+                log_line(
+                    log,
+                    &format!(
+                        "deny-read cleanup failed on write root {}: {}; continuing",
+                        root.display(),
+                        err
+                    ),
+                )?;
+            }
+        }
+        match unsafe { revoke_allow_write_ace(root, sandbox_user_psid) } {
+            Ok(true) => log_line(
+                log,
+                &format!(
+                    "removed stale sandbox user write ACE from write root {}",
+                    root.display()
+                ),
+            )?,
+            Ok(false) => {}
+            Err(err) => {
+                refresh_errors.push(format!(
+                    "sandbox user write cleanup failed on write root {}: {}",
+                    root.display(),
+                    err
+                ));
+                log_line(
+                    log,
+                    &format!(
+                        "sandbox user write cleanup failed on write root {}: {}; continuing",
+                        root.display(),
+                        err
+                    ),
+                )?;
+            }
+        }
         let mut need_grant = false;
         let is_command_cwd = is_command_cwd_root(root, &canonical_command_cwd);
         let cap_label = if is_command_cwd {
@@ -1286,65 +1367,85 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
         } else {
             "root_cap"
         };
-        let root_cap_sid_str =
-            workspace_write_cap_sid_for_root(&payload.codex_home, &payload.command_cwd, root)?;
+        let root_cap_sid_str = if payload.read_cap_sid.is_some() {
+            workspace_appcontainer_write_capability_sid(
+                &payload.codex_home,
+                &payload.command_cwd,
+                root,
+            )?
+        } else {
+            workspace_write_cap_sid_for_root(&payload.codex_home, &payload.command_cwd, root)?
+        };
         let root_cap_psid = unsafe {
             convert_string_sid_to_sid(&root_cap_sid_str)
                 .ok_or_else(|| anyhow::anyhow!("convert write root capability SID failed"))?
         };
-        // A writable root must not keep stale deny ACEs for its own capability SID.
-        // Refresh can then repair polluted setup state without another UAC prompt.
-        unsafe {
-            remove_deny_write_aces(root, root_cap_psid)?;
-            allow_null_device(root_cap_psid);
-        }
-        for (label, psid) in [
-            ("sandbox_group", sandbox_group_psid),
-            (cap_label, root_cap_psid),
-        ] {
-            let has =
-                match path_mask_allows(root, &[psid], write_mask, /*require_all_bits*/ true) {
-                    Ok(h) => h,
-                    Err(e) => {
-                        refresh_errors.push(format!(
-                            "write mask check failed on {} for {label}: {}",
-                            root.display(),
-                            e
-                        ));
-                        log_line(
-                            log,
-                            &format!(
-                                "write mask check failed on {} for {label}: {}; continuing",
-                                root.display(),
-                                e
-                            ),
-                        )?;
-                        false
-                    }
-                };
-            if !has {
-                need_grant = true;
+        let cap_has = match path_mask_allows(
+            root,
+            &[root_cap_psid],
+            write_mask,
+            /*require_all_bits*/ true,
+        ) {
+            Ok(h) => h,
+            Err(e) => {
+                refresh_errors.push(format!(
+                    "write mask check failed on {} for {cap_label}: {}",
+                    root.display(),
+                    e
+                ));
+                log_line(
+                    log,
+                    &format!(
+                        "write mask check failed on {} for {cap_label}: {}; continuing",
+                        root.display(),
+                        e
+                    ),
+                )?;
+                false
             }
+        };
+        let group_has = match path_mask_allows(
+            root,
+            &[sandbox_group_psid],
+            write_mask,
+            /*require_all_bits*/ true,
+        ) {
+            Ok(h) => h,
+            Err(e) => {
+                refresh_errors.push(format!(
+                    "write mask check failed on {} for sandbox_group: {}",
+                    root.display(),
+                    e
+                ));
+                log_line(
+                    log,
+                    &format!(
+                        "write mask check failed on {} for sandbox_group: {}; continuing",
+                        root.display(),
+                        e
+                    ),
+                )?;
+                false
+            }
+        };
+        if !cap_has || !group_has {
+            need_grant = true;
         }
         unsafe {
             LocalFree(root_cap_psid as HLOCAL);
         }
         if need_grant {
-            log_line(
-                log,
-                &format!(
-                    "granting write ACE to {} for sandbox group and capability SID",
-                    root.display()
-                ),
-            )?;
-            grant_tasks.push((root.clone(), root_cap_sid_str));
+            log_line(log, &format!("granting write ACEs to {}", root.display()))?;
+            grant_tasks.push((
+                root.clone(),
+                vec![sandbox_group_sid_str.clone(), root_cap_sid_str],
+            ));
         }
     }
 
     let (tx, rx) = mpsc::channel::<(PathBuf, Result<bool>)>();
     std::thread::scope(|scope| {
-        for (root, root_cap_sid_str) in grant_tasks {
-            let sid_strings = vec![sandbox_group_sid_str.clone(), root_cap_sid_str];
+        for (root, sid_strings) in grant_tasks {
             let tx = tx.clone();
             scope.spawn(move || {
                 // Convert SID strings to psids locally in this thread.
@@ -1406,17 +1507,35 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
                 .with_context(|| format!("failed to create deny-write path {}", path.display()))?;
         }
 
-        let deny_sid_strs = workspace_write_cap_sids_for_path(
+        if payload.read_cap_sid.is_some() {
+            unsafe { protect_dacl_from_inheritance(path) }
+                .with_context(|| format!("failed to protect deny-write path {}", path.display()))?;
+        }
+
+        let mut deny_sid_strs = workspace_write_cap_sids_for_path(
             &payload.codex_home,
             &payload.command_cwd,
             &payload.write_roots,
             path,
+            payload.read_cap_sid.is_some(),
         )?;
+        if let Some(appcontainer_sid) = payload.appcontainer_sid.as_ref() {
+            deny_sid_strs.push(appcontainer_sid.clone());
+        }
         for deny_sid_str in deny_sid_strs {
             let deny_psid = unsafe {
                 convert_string_sid_to_sid(&deny_sid_str)
                     .ok_or_else(|| anyhow::anyhow!("convert deny capability SID failed"))?
             };
+
+            if payload.read_cap_sid.is_some() {
+                unsafe { revoke_allow_write_ace(path, deny_psid) }.with_context(|| {
+                    format!(
+                        "failed to remove inherited AppContainer write ACE from {}",
+                        path.display()
+                    )
+                })?;
+            }
 
             match unsafe { add_deny_write_ace(path, deny_psid) } {
                 Ok(true) => {
@@ -1454,9 +1573,19 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
     }
     if !refresh_only {
         lock_persistent_sandbox_dirs(payload, &sandbox_group_sid, log)?;
-        ensure_scheduled_setup_task_or_fail(&payload.codex_home, log)?;
+        if let Err(err) = ensure_scheduled_setup_task(&payload.codex_home, log) {
+            log_line(
+                log,
+                &format!("scheduled setup task configure failed: {err:?}"),
+            )?;
+        }
     }
 
+    unsafe {
+        if !sandbox_user_psid.is_null() {
+            LocalFree(sandbox_user_psid as HLOCAL);
+        }
+    }
     unsafe {
         if !sandbox_group_psid.is_null() {
             LocalFree(sandbox_group_psid as HLOCAL);
@@ -1477,6 +1606,10 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
 mod tests {
     use super::Payload;
     use super::SETUP_VERSION;
+    use super::SetupInvocation;
+    use super::parse_setup_invocation;
+    use super::run_payload_file;
+    use super::setup_task_request_id;
     use super::workspace_write_cap_sids_for_path;
     use codex_otel::StatsigMetricsSettings;
     use codex_windows_sandbox::load_or_create_cap_sids;
@@ -1541,47 +1674,26 @@ mod tests {
     }
 
     #[test]
-    fn setup_invocation_accepts_payload_file_and_rejects_legacy_b64() {
-        let task_args = vec!["--task-run".to_string(), r"C:\broker".to_string()];
-        assert_eq!(
-            super::parse_setup_invocation(&task_args).expect("task invocation"),
-            super::SetupInvocation::TaskRun(PathBuf::from(r"C:\broker"))
-        );
-
+    fn setup_invocation_parses_payload_file_and_task_run_modes() {
         let payload_args = vec![
             "--payload-file".to_string(),
-            r"C:\runseal\payload.json".to_string(),
+            r"C:\sandbox\payloads\setup-payload-1.json".to_string(),
         ];
         assert_eq!(
-            super::parse_setup_invocation(&payload_args).expect("payload invocation"),
-            super::SetupInvocation::PayloadFile(PathBuf::from(r"C:\runseal\payload.json"))
+            parse_setup_invocation(&payload_args).expect("payload invocation"),
+            SetupInvocation::PayloadFile(PathBuf::from(
+                r"C:\sandbox\payloads\setup-payload-1.json"
+            ))
         );
 
-        let legacy_args = vec![r"eyJ2ZXJzaW9uIjo1fQ==".to_string()];
-        assert!(super::parse_setup_invocation(&legacy_args).is_err());
-    }
-
-    #[test]
-    fn setup_invocation_rejects_relative_paths() {
-        let task_args = vec!["--task-run".to_string(), r"broker".to_string()];
-        assert!(super::parse_setup_invocation(&task_args).is_err());
-
-        let payload_args = vec!["--payload-file".to_string(), r"payload.json".to_string()];
-        assert!(super::parse_setup_invocation(&payload_args).is_err());
-    }
-
-    #[test]
-    fn scheduled_setup_env_paths_must_be_absolute() {
+        let task_args = vec!["--task-run".to_string(), r"C:\broker".to_string()];
         assert_eq!(
-            super::absolute_path_from_env_value(Some(std::ffi::OsString::from(
-                r"C:\runseal\broker"
-            ))),
-            Some(PathBuf::from(r"C:\runseal\broker"))
+            parse_setup_invocation(&task_args).expect("task invocation"),
+            SetupInvocation::TaskRun(PathBuf::from(r"C:\broker"))
         );
-        assert_eq!(
-            super::absolute_path_from_env_value(Some(std::ffi::OsString::from(r"relative\broker"))),
-            None
-        );
+
+        let legacy_args = vec![r"eyJ2ZXJzaW9uIjoxMH0=".to_string()];
+        assert!(parse_setup_invocation(&legacy_args).is_err());
     }
 
     #[test]
@@ -1590,7 +1702,7 @@ mod tests {
         let payload_path = temp.path().join("setup-payload-invalid.json");
         fs::write(&payload_path, b"{not-json").expect("write invalid payload");
 
-        let err = super::run_payload_file(&payload_path).expect_err("invalid json should fail");
+        let err = run_payload_file(&payload_path).expect_err("invalid json should fail");
 
         assert!(!payload_path.exists());
         assert!(err.to_string().contains("failed to parse payload json"));
@@ -1599,98 +1711,12 @@ mod tests {
     #[test]
     fn scheduled_setup_payload_scan_uses_json_suffix() {
         assert_eq!(
-            super::setup_task_request_id(PathBuf::from("setup-task-payload-abc.json").as_path()),
-            Some("abc".to_string())
+            setup_task_request_id(PathBuf::from("setup-task-payload-123.json").as_path()),
+            Some("123".to_string())
         );
         assert_eq!(
-            super::setup_task_request_id(PathBuf::from("setup-task-payload-.json").as_path()),
+            setup_task_request_id(PathBuf::from("setup-task-payload-123.b64").as_path()),
             None
-        );
-        assert_eq!(
-            super::setup_task_request_id(PathBuf::from("setup-task-payload-abc.tmp").as_path()),
-            None
-        );
-    }
-
-    #[test]
-    fn scheduled_setup_result_publish_does_not_overwrite_existing_result() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let broker_home = temp.path().join("broker");
-        let sbx_dir = codex_windows_sandbox::sandbox_dir(&broker_home);
-        fs::create_dir_all(&sbx_dir).expect("create broker dir");
-        let request_id = "req-1";
-        let result_path = super::scheduled_setup_result_path(&broker_home, request_id);
-        let temp_path = super::scheduled_setup_result_temp_path(&broker_home, request_id);
-        fs::write(&result_path, br#"{"ok":true,"message":null}"#).expect("write old result");
-        let result = super::ScheduledSetupTaskResult {
-            request_id: request_id.to_string(),
-            payload_sha256: super::scheduled_setup_payload_sha256(b"payload"),
-            ok: false,
-            message: Some("new".to_string()),
-        };
-
-        let err = super::write_scheduled_setup_result(&broker_home, request_id, &result)
-            .expect_err("existing result must fail closed");
-
-        assert!(
-            err.to_string()
-                .contains("failed to publish scheduled setup result")
-        );
-        assert_eq!(
-            fs::read_to_string(&result_path).expect("read old result"),
-            r#"{"ok":true,"message":null}"#
-        );
-        assert!(!temp_path.exists());
-    }
-
-    #[test]
-    fn scheduled_setup_task_removes_payload_before_processing() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let broker_home = temp.path().join("broker");
-        let sbx_dir = codex_windows_sandbox::sandbox_dir(&broker_home);
-        fs::create_dir_all(&sbx_dir).expect("create broker dir");
-        let payload_path = sbx_dir.join("setup-task-payload-invalid.json");
-        fs::write(&payload_path, b"{not-json").expect("write invalid payload");
-
-        super::run_scheduled_setup_task(&broker_home).expect("run scheduled task");
-
-        assert!(!payload_path.exists());
-        let result_path = super::scheduled_setup_result_path(&broker_home, "invalid");
-        let result: serde_json::Value =
-            serde_json::from_slice(&fs::read(&result_path).expect("read result"))
-                .expect("parse result");
-        assert_eq!(result["request_id"], "invalid");
-        assert_eq!(
-            result["payload_sha256"],
-            super::scheduled_setup_payload_sha256(b"{not-json")
-        );
-        assert_eq!(result["ok"], false);
-        assert!(
-            result["message"]
-                .as_str()
-                .expect("result message")
-                .contains("failed to parse payload json")
-        );
-    }
-
-    #[test]
-    fn sandbox_bin_lock_includes_broker_bin() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let codex_home = temp.path().join("codex-home");
-        let broker_home = temp.path().join("broker-home");
-
-        let dirs = super::sandbox_bin_dirs_to_lock_for_broker(&codex_home, &broker_home);
-
-        assert_eq!(
-            dirs,
-            vec![
-                codex_windows_sandbox::sandbox_bin_dir(&codex_home),
-                codex_windows_sandbox::sandbox_bin_dir(&broker_home),
-            ]
-        );
-        assert_eq!(
-            super::sandbox_bin_dirs_to_lock_for_broker(&codex_home, &codex_home),
-            vec![codex_windows_sandbox::sandbox_bin_dir(&codex_home)]
         );
     }
 
@@ -1721,6 +1747,7 @@ mod tests {
             &workspace,
             &[workspace.clone(), active_root],
             &deny_path,
+            false,
         )
         .expect("deny sids");
 
@@ -1757,6 +1784,7 @@ mod tests {
             &workspace,
             &[workspace.clone(), active_root],
             &deny_path,
+            false,
         )
         .expect("deny sids");
 
@@ -1788,6 +1816,7 @@ mod tests {
             &workspace,
             &[workspace.clone(), nested_root],
             &protected_dir,
+            false,
         )
         .expect("deny sids");
 

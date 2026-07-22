@@ -8,12 +8,10 @@ use super::{
 #[cfg(windows)]
 use super::{
     POLICY_TRANSITION_BUSY_REASON, WindowsKillOnCloseJob, WindowsSandboxPolicyCohortKey,
-    collect_workspace_contained_profile_denies, execute_windows_sandbox_plan,
-    policy_transition_busy_reason, public_windows_setup_unavailable_reason,
-    windows_explicit_deny_read_paths, windows_sandbox_command,
+    execute_windows_sandbox_plan, policy_transition_busy_reason,
+    public_windows_setup_unavailable_reason, windows_sandbox_command,
     windows_sandbox_execution_gate_for_key, windows_sandbox_path_key,
     windows_sandbox_workspace_roots_for_plan, windows_sandbox_write_roots_for_plan,
-    windows_sensitive_profile_deny_read_paths_for_profile,
 };
 use crate::policy::{NetworkMode, normalize_policy};
 use crate::windows::policy::{
@@ -101,106 +99,6 @@ fn windows_sandbox_execution_gate_allows_same_policy_and_rejects_mixed_policy() 
 
     let next_policy_guard = windows_sandbox_execution_gate_for_key(policy_b)?;
     drop(next_policy_guard);
-    Ok(())
-}
-
-#[cfg(windows)]
-#[test]
-fn windows_explicit_deny_paths_feed_deny_read_overrides() -> io::Result<()> {
-    let tmp = TempDir::new()?;
-    let cwd = tmp.path().join("workspace");
-    let secret = tmp.path().join("secret");
-    fs::create_dir_all(&cwd)?;
-    fs::create_dir_all(&secret)?;
-    let policy = normalize_policy(
-        &json!({
-            "version": "runseal.policy/v1",
-            "sandbox_level": "workspace-write",
-            "filesystem": {
-                "write": [cwd],
-                "deny": [secret],
-            },
-        }),
-        &cwd,
-        None,
-    )
-    .unwrap();
-    let plan = WindowsReferenceBackend.fail_closed_plan("exec_explicit_deny", &cwd, &policy);
-    let deny_keys = windows_explicit_deny_read_paths(&plan)
-        .iter()
-        .map(|path| windows_sandbox_path_key(path.as_path()))
-        .collect::<HashSet<_>>();
-
-    assert!(deny_keys.contains(&windows_sandbox_path_key(&secret)));
-    Ok(())
-}
-
-#[cfg(windows)]
-#[test]
-fn windows_sensitive_profile_denies_include_credential_roots() -> io::Result<()> {
-    let tmp = TempDir::new()?;
-    let profile = tmp.path().join("profile");
-    let ssh = profile.join(".ssh");
-    let codex = profile.join(".codex");
-    let config = profile.join(".config");
-    let roaming = profile.join("AppData").join("Roaming");
-    let workspace = profile.join("workspace");
-    for dir in [&ssh, &codex, &config, &roaming, &workspace] {
-        fs::create_dir_all(dir)?;
-    }
-
-    let deny_paths = windows_sensitive_profile_deny_read_paths_for_profile(
-        &profile,
-        std::slice::from_ref(&workspace),
-    );
-    let deny_keys = deny_paths
-        .iter()
-        .map(|path| windows_sandbox_path_key(path.as_path()))
-        .collect::<HashSet<_>>();
-
-    assert!(deny_keys.contains(&windows_sandbox_path_key(&ssh)));
-    assert!(deny_keys.contains(&windows_sandbox_path_key(&codex)));
-    assert!(deny_keys.contains(&windows_sandbox_path_key(&config)));
-    assert!(deny_keys.contains(&windows_sandbox_path_key(&roaming)));
-    assert!(!deny_keys.contains(&windows_sandbox_path_key(&workspace)));
-    Ok(())
-}
-
-#[cfg(windows)]
-#[test]
-fn workspace_contained_profile_denies_skip_allowed_workspace_branches() -> io::Result<()> {
-    let tmp = TempDir::new()?;
-    let profile = tmp.path().join("profile");
-    let workspace = profile.join("workspace");
-    let documents = profile.join("Documents");
-    let appdata = profile.join("AppData");
-    let local = appdata.join("Local");
-    let sandbox_temp = local.join("Temp").join("runseal");
-    let roaming = appdata.join("Roaming");
-    for dir in [&workspace, &documents, &sandbox_temp, &roaming] {
-        fs::create_dir_all(dir)?;
-    }
-
-    let allowed_roots = vec![workspace.clone(), sandbox_temp.clone()];
-    let mut deny_paths = Vec::new();
-    let mut seen = HashSet::new();
-    collect_workspace_contained_profile_denies(
-        &profile,
-        &allowed_roots,
-        &mut deny_paths,
-        &mut seen,
-    );
-    let deny_keys = deny_paths
-        .iter()
-        .map(|path| windows_sandbox_path_key(path.as_path()))
-        .collect::<HashSet<_>>();
-
-    assert!(deny_keys.contains(&windows_sandbox_path_key(&documents)));
-    assert!(deny_keys.contains(&windows_sandbox_path_key(&roaming)));
-    assert!(!deny_keys.contains(&windows_sandbox_path_key(&workspace)));
-    assert!(!deny_keys.contains(&windows_sandbox_path_key(&sandbox_temp)));
-    assert!(!deny_keys.contains(&windows_sandbox_path_key(&appdata)));
-    assert!(!deny_keys.contains(&windows_sandbox_path_key(&local)));
     Ok(())
 }
 

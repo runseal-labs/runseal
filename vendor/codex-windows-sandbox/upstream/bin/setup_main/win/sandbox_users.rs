@@ -21,7 +21,9 @@ use windows_sys::Win32::NetworkManagement::NetManagement::LOCALGROUP_MEMBERS_INF
 use windows_sys::Win32::NetworkManagement::NetManagement::NERR_Success;
 use windows_sys::Win32::NetworkManagement::NetManagement::NetLocalGroupAdd;
 use windows_sys::Win32::NetworkManagement::NetManagement::NetLocalGroupAddMembers;
+use windows_sys::Win32::NetworkManagement::NetManagement::NetLocalGroupDel;
 use windows_sys::Win32::NetworkManagement::NetManagement::NetUserAdd;
+use windows_sys::Win32::NetworkManagement::NetManagement::NetUserDel;
 use windows_sys::Win32::NetworkManagement::NetManagement::NetUserSetInfo;
 use windows_sys::Win32::NetworkManagement::NetManagement::UF_DONT_EXPIRE_PASSWD;
 use windows_sys::Win32::NetworkManagement::NetManagement::UF_SCRIPT;
@@ -41,7 +43,15 @@ use windows_sys::Win32::Security::SID_NAME_USE;
 use windows_sys::Win32::Storage::FileSystem::CREATE_NEW;
 use windows_sys::Win32::Storage::FileSystem::CreateFileW;
 use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_NORMAL;
+use windows_sys::Win32::System::Registry::HKEY;
+use windows_sys::Win32::System::Registry::HKEY_LOCAL_MACHINE;
+use windows_sys::Win32::System::Registry::KEY_WRITE;
+use windows_sys::Win32::System::Registry::REG_OPTION_NON_VOLATILE;
+use windows_sys::Win32::System::Registry::RegCloseKey;
+use windows_sys::Win32::System::Registry::RegCreateKeyExW;
+use windows_sys::Win32::System::Registry::RegDeleteValueW;
 
+use codex_windows_sandbox::SANDBOX_USERS_GROUP;
 use codex_windows_sandbox::SETUP_VERSION;
 use codex_windows_sandbox::SetupErrorCode;
 use codex_windows_sandbox::SetupFailure;
@@ -51,8 +61,18 @@ use codex_windows_sandbox::sandbox_secrets_dir;
 use codex_windows_sandbox::string_from_sid_bytes;
 use codex_windows_sandbox::to_wide;
 
-pub const SANDBOX_USERS_GROUP: &str = "RunSealSandboxUsers";
+const LEGACY_SANDBOX_USERNAMES: &[&str] = &["RunSealSandboxOffline", "RunSealSandboxOnline"];
+const LEGACY_SANDBOX_NETWORK_GROUP: &str = "RunSealSandboxNetwork";
 const SANDBOX_USERS_GROUP_COMMENT: &str = "RunSeal sandbox internal group (managed)";
+const NERR_GROUP_NOT_FOUND: u32 = 2220;
+const NERR_USER_NOT_FOUND: u32 = 2221;
+const ERROR_FILE_NOT_FOUND: u32 = 2;
+const USERLIST_KEY_PATH: &str =
+    r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\SpecialAccounts\UserList";
+
+pub fn legacy_sandbox_usernames() -> &'static [&'static str] {
+    LEGACY_SANDBOX_USERNAMES
+}
 const SID_ADMINISTRATORS: &str = "S-1-5-32-544";
 const SID_USERS: &str = "S-1-5-32-545";
 const SID_AUTHENTICATED_USERS: &str = "S-1-5-11";
@@ -60,7 +80,26 @@ const SID_EVERYONE: &str = "S-1-1-0";
 const SID_SYSTEM: &str = "S-1-5-18";
 
 pub fn ensure_sandbox_users_group(log: &mut dyn Write) -> Result<()> {
+    remove_legacy_sandbox_network_group(log)?;
     ensure_local_group(SANDBOX_USERS_GROUP, SANDBOX_USERS_GROUP_COMMENT, log)
+}
+
+fn remove_legacy_sandbox_network_group(log: &mut dyn Write) -> Result<()> {
+    let name = to_wide(LEGACY_SANDBOX_NETWORK_GROUP);
+    let status = unsafe { NetLocalGroupDel(std::ptr::null(), name.as_ptr()) };
+    if status == 0 {
+        super::log_line(
+            log,
+            &format!("removed legacy local group {LEGACY_SANDBOX_NETWORK_GROUP}"),
+        )?;
+        return Ok(());
+    }
+    if status == NERR_GROUP_NOT_FOUND {
+        return Ok(());
+    }
+    Err(anyhow::anyhow!(
+        "NetLocalGroupDel failed for {LEGACY_SANDBOX_NETWORK_GROUP} code {status}"
+    ))
 }
 
 pub fn resolve_sandbox_users_group_sid() -> Result<Vec<u8>> {
@@ -81,6 +120,112 @@ pub fn provision_sandbox_users(
     ensure_sandbox_user(sandbox_username, &sandbox_password, log)?;
     write_secrets(codex_home, sandbox_username, &sandbox_password)?;
     Ok(())
+}
+
+pub fn cleanup_legacy_sandbox_state(codex_home: &Path, log: &mut dyn Write) -> Result<()> {
+    remove_legacy_state_file(
+        &sandbox_secrets_dir(codex_home).join("sandbox_users.json"),
+        log,
+    )?;
+    remove_legacy_state_file(&sandbox_dir(codex_home).join("setup_marker.json"), log)?;
+    remove_legacy_state_file(&sandbox_dir(codex_home).join("sandbox_users.json"), log)?;
+    remove_legacy_hidden_user_entries(log)?;
+    for username in LEGACY_SANDBOX_USERNAMES {
+        delete_legacy_user(username, log)?;
+    }
+    Ok(())
+}
+
+fn remove_legacy_state_file(path: &Path, log: &mut dyn Write) -> Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => {
+            super::log_line(
+                log,
+                &format!("removed legacy sandbox state file {}", path.display()),
+            )?;
+            Ok(())
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperLegacyUserCleanupFailed,
+            format!(
+                "remove legacy sandbox state file {} failed: {err}",
+                path.display()
+            ),
+        ))),
+    }
+}
+
+fn delete_legacy_user(username: &str, log: &mut dyn Write) -> Result<()> {
+    let username_w = to_wide(OsStr::new(username));
+    let status = unsafe { NetUserDel(std::ptr::null(), username_w.as_ptr()) };
+    if status == NERR_Success {
+        super::log_line(log, &format!("deleted legacy sandbox user {username}"))?;
+        return Ok(());
+    }
+    if status == NERR_USER_NOT_FOUND {
+        super::log_line(log, &format!("legacy sandbox user {username} absent"))?;
+        return Ok(());
+    }
+    Err(anyhow::Error::new(SetupFailure::new(
+        SetupErrorCode::HelperLegacyUserCleanupFailed,
+        format!(
+            "delete legacy sandbox user {username} failed with code {status}; close processes running as that user and rerun setup"
+        ),
+    )))
+}
+
+fn remove_legacy_hidden_user_entries(log: &mut dyn Write) -> Result<()> {
+    let key = create_userlist_key_for_cleanup()?;
+    for username in LEGACY_SANDBOX_USERNAMES {
+        let username_w = to_wide(OsStr::new(username));
+        let status = unsafe { RegDeleteValueW(key, username_w.as_ptr()) };
+        if status == 0 {
+            super::log_line(
+                log,
+                &format!("removed legacy UserList entry for {username}"),
+            )?;
+        } else if status == ERROR_FILE_NOT_FOUND {
+            super::log_line(log, &format!("legacy UserList entry for {username} absent"))?;
+        } else {
+            unsafe {
+                RegCloseKey(key);
+            }
+            return Err(anyhow::Error::new(SetupFailure::new(
+                SetupErrorCode::HelperLegacyUserCleanupFailed,
+                format!("remove legacy UserList entry for {username} failed with code {status}"),
+            )));
+        }
+    }
+    unsafe {
+        RegCloseKey(key);
+    }
+    Ok(())
+}
+
+fn create_userlist_key_for_cleanup() -> Result<HKEY> {
+    let key_path = to_wide(USERLIST_KEY_PATH);
+    let mut key: HKEY = 0;
+    let status = unsafe {
+        RegCreateKeyExW(
+            HKEY_LOCAL_MACHINE,
+            key_path.as_ptr(),
+            0,
+            std::ptr::null_mut(),
+            REG_OPTION_NON_VOLATILE,
+            KEY_WRITE,
+            std::ptr::null_mut(),
+            &mut key,
+            std::ptr::null_mut(),
+        )
+    };
+    if status != 0 {
+        return Err(anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperLegacyUserCleanupFailed,
+            format!("open Winlogon UserList for legacy cleanup failed with code {status}"),
+        )));
+    }
+    Ok(key)
 }
 
 pub fn ensure_sandbox_user(username: &str, password: &str, log: &mut dyn Write) -> Result<()> {
@@ -387,6 +532,7 @@ struct SetupMarker {
     created_at: String,
     proxy_ports: Vec<u16>,
     allow_local_binding: bool,
+    appcontainer_sid: Option<String>,
     read_roots: Vec<PathBuf>,
     write_roots: Vec<PathBuf>,
 }
@@ -526,6 +672,7 @@ pub(super) fn commit_setup_marker(
     sandbox_user: &str,
     proxy_ports: &[u16],
     allow_local_binding: bool,
+    appcontainer_sid: Option<&str>,
 ) -> Result<()> {
     let marker = SetupMarker {
         version: SETUP_VERSION,
@@ -533,6 +680,7 @@ pub(super) fn commit_setup_marker(
         created_at: chrono::Utc::now().to_rfc3339(),
         proxy_ports: proxy_ports.to_vec(),
         allow_local_binding,
+        appcontainer_sid: appcontainer_sid.map(str::to_owned),
         read_roots: Vec::new(),
         write_roots: Vec::new(),
     };

@@ -259,10 +259,7 @@ pub(super) fn execute_windows_sandbox_plan(
     let _runtime_root = required_plan_path(plan.runtime_root.as_deref(), "runtime_root")?;
     let vendor_sandbox_home = vendor_sandbox_home(cwd);
     let _execution_guard = windows_sandbox_execution_gate(plan, &vendor_sandbox_home)?;
-    let stdin_bytes = match stdin {
-        ExecutionStdin::Empty => None,
-        ExecutionStdin::Bytes(bytes) | ExecutionStdin::File(bytes) => Some(bytes),
-    };
+    let _stdin = stdin;
     let workspace_roots = windows_sandbox_workspace_roots_for_plan(cwd, plan)?;
     let write_roots_override = windows_sandbox_write_roots_for_plan(plan);
     let permission_profile = plan.vendor_permission_profile()?;
@@ -295,8 +292,20 @@ pub(super) fn execute_windows_sandbox_plan(
         };
         let env_map = sandbox_environment(plan, env, managed_proxy.as_ref());
         let workspace_contained = plan.sandbox_level == SandboxLevel::WorkspaceContained.as_str();
-        let deny_read_paths =
-            windows_sandbox_deny_read_paths(&workspace_roots, plan, &env_map, workspace_contained)?;
+        let read_cap_sid = if workspace_contained {
+            let workspace_root = workspace_roots.first().ok_or_else(|| {
+                io::Error::other("workspace-contained requires an active workspace root")
+            })?;
+            Some(
+                codex_windows_sandbox::workspace_appcontainer_read_capability_sid(
+                    &vendor_sandbox_home,
+                    workspace_root.as_path(),
+                )
+                .map_err(|err| io::Error::other(err.to_string()))?,
+            )
+        } else {
+            None
+        };
         let sandbox_command = windows_sandbox_command(command, &env_map);
 
         let capture =
@@ -308,15 +317,16 @@ pub(super) fn execute_windows_sandbox_plan(
                     command: sandbox_command,
                     cwd,
                     env_map,
-                    stdin_bytes,
                     timeout_ms: timeout.map(duration_millis_u64),
                     cancellation: None,
                     use_private_desktop: false,
                     proxy_enforced: plan.network_managed_proxy == "required",
+                    allow_network_proxy: plan.network_managed_proxy == "required",
+                    sandbox_proxy_settings: None,
+                    read_cap_sid,
                     read_roots_override: None,
                     read_roots_include_platform_defaults: workspace_contained,
                     write_roots_override: Some(write_roots_override.as_slice()),
-                    deny_read_paths_override: deny_read_paths.as_slice(),
                     deny_write_paths_override: &[],
                 },
             )
@@ -474,178 +484,6 @@ fn windows_executable_candidate_names(program: &str, pathext: &str) -> Vec<Strin
     }
     names.push(program.to_string());
     names
-}
-
-#[cfg(windows)]
-fn windows_sandbox_deny_read_paths(
-    workspace_roots: &[AbsolutePathBuf],
-    plan: &PlatformSandboxPlan,
-    env_map: &HashMap<String, String>,
-    workspace_contained: bool,
-) -> io::Result<Vec<AbsolutePathBuf>> {
-    let mut deny_paths = windows_explicit_deny_read_paths(plan);
-    deny_paths.extend(windows_sensitive_profile_deny_read_paths(
-        workspace_roots,
-        plan,
-        env_map,
-    ));
-    if workspace_contained {
-        deny_paths.extend(windows_workspace_contained_deny_read_paths(
-            workspace_roots,
-            plan,
-            env_map,
-        )?);
-    }
-    Ok(deduplicate_absolute_paths(deny_paths))
-}
-
-#[cfg(windows)]
-pub(super) fn windows_explicit_deny_read_paths(plan: &PlatformSandboxPlan) -> Vec<AbsolutePathBuf> {
-    plan.filesystem_deny
-        .iter()
-        .map(PathBuf::from)
-        .filter(|path| path.is_absolute() && path.exists())
-        .filter_map(|path| AbsolutePathBuf::from_absolute_path_checked(path).ok())
-        .collect()
-}
-
-#[cfg(windows)]
-fn windows_sensitive_profile_deny_read_paths(
-    workspace_roots: &[AbsolutePathBuf],
-    plan: &PlatformSandboxPlan,
-    env_map: &HashMap<String, String>,
-) -> Vec<AbsolutePathBuf> {
-    let Some(user_profile) = std::env::var_os("USERPROFILE").map(PathBuf::from) else {
-        return Vec::new();
-    };
-    let allowed_roots = windows_allowed_roots(workspace_roots, plan, env_map);
-    windows_sensitive_profile_deny_read_paths_for_profile(&user_profile, &allowed_roots)
-}
-
-#[cfg(windows)]
-pub(super) fn windows_sensitive_profile_deny_read_paths_for_profile(
-    user_profile: &Path,
-    allowed_roots: &[PathBuf],
-) -> Vec<AbsolutePathBuf> {
-    [
-        user_profile.join(".ssh"),
-        user_profile.join(".codex"),
-        user_profile.join(".config"),
-        user_profile.join("AppData").join("Roaming"),
-    ]
-    .into_iter()
-    .filter(|path| path.exists())
-    .filter(|path| !is_allowed_or_inside_allowed_root(path, allowed_roots))
-    .filter_map(|path| AbsolutePathBuf::from_absolute_path_checked(path).ok())
-    .collect()
-}
-
-#[cfg(windows)]
-fn windows_workspace_contained_deny_read_paths(
-    workspace_roots: &[AbsolutePathBuf],
-    plan: &PlatformSandboxPlan,
-    env_map: &HashMap<String, String>,
-) -> io::Result<Vec<AbsolutePathBuf>> {
-    let Some(user_profile) = std::env::var_os("USERPROFILE").map(PathBuf::from) else {
-        return Ok(Vec::new());
-    };
-    let allowed_roots = windows_allowed_roots(workspace_roots, plan, env_map);
-
-    let mut deny_paths = Vec::new();
-    let mut seen = HashSet::new();
-    collect_workspace_contained_profile_denies(
-        &user_profile,
-        &allowed_roots,
-        &mut deny_paths,
-        &mut seen,
-    );
-    Ok(deny_paths)
-}
-
-#[cfg(windows)]
-fn windows_allowed_roots(
-    workspace_roots: &[AbsolutePathBuf],
-    plan: &PlatformSandboxPlan,
-    env_map: &HashMap<String, String>,
-) -> Vec<PathBuf> {
-    let mut allowed_roots = workspace_roots
-        .iter()
-        .map(AbsolutePathBuf::as_path)
-        .map(Path::to_path_buf)
-        .collect::<Vec<_>>();
-    for root in &plan.filesystem_write {
-        let root = PathBuf::from(root);
-        if root.is_absolute() {
-            allowed_roots.push(root);
-        }
-    }
-    for key in ["TEMP", "TMP"] {
-        if let Some(value) = env_map.get(key) {
-            let root = PathBuf::from(value);
-            if root.is_absolute() {
-                allowed_roots.push(root);
-            }
-        }
-    }
-    allowed_roots
-}
-
-#[cfg(windows)]
-fn deduplicate_absolute_paths(paths: Vec<AbsolutePathBuf>) -> Vec<AbsolutePathBuf> {
-    let mut deny_paths = Vec::new();
-    let mut seen = HashSet::new();
-    for path in paths {
-        if seen.insert(windows_sandbox_path_key(path.as_path())) {
-            deny_paths.push(path);
-        }
-    }
-    deny_paths
-}
-
-#[cfg(windows)]
-pub(super) fn collect_workspace_contained_profile_denies(
-    root: &Path,
-    allowed_roots: &[PathBuf],
-    deny_paths: &mut Vec<AbsolutePathBuf>,
-    seen: &mut HashSet<String>,
-) {
-    let Ok(entries) = fs::read_dir(root) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if is_allowed_or_inside_allowed_root(&path, allowed_roots) {
-            continue;
-        }
-        if contains_allowed_root(&path, allowed_roots) {
-            collect_workspace_contained_profile_denies(&path, allowed_roots, deny_paths, seen);
-            continue;
-        }
-        let Ok(absolute) = AbsolutePathBuf::from_absolute_path_checked(&path) else {
-            continue;
-        };
-        if seen.insert(windows_sandbox_path_key(absolute.as_path())) {
-            deny_paths.push(absolute);
-        }
-    }
-}
-
-#[cfg(windows)]
-fn is_allowed_or_inside_allowed_root(path: &Path, allowed_roots: &[PathBuf]) -> bool {
-    let path_key = windows_sandbox_path_key(path);
-    allowed_roots.iter().any(|root| {
-        let root_key = windows_sandbox_path_key(root);
-        path_key == root_key || path_key.starts_with(&format!("{root_key}\\"))
-    })
-}
-
-#[cfg(windows)]
-fn contains_allowed_root(path: &Path, allowed_roots: &[PathBuf]) -> bool {
-    let path_key = windows_sandbox_path_key(path);
-    allowed_roots.iter().any(|root| {
-        let root_key = windows_sandbox_path_key(root);
-        root_key.starts_with(&format!("{path_key}\\"))
-    })
 }
 
 #[cfg(windows)]

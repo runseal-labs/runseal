@@ -27,20 +27,21 @@ pub(crate) struct WindowsWritableRoot {
     pub(crate) read_only_subpaths: Vec<PathBuf>,
 }
 
-/// Restricted-token family needed to enforce a Windows permission profile.
+/// Process isolation strategy needed to enforce a Windows permission profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WindowsSandboxTokenMode {
+pub enum WindowsSandboxIsolationMode {
     ReadOnlyCapability,
     WritableRootsCapability,
+    AppContainerCapabilities,
 }
 
-/// Chooses the restricted-token family needed for a managed permission profile.
-pub fn token_mode_for_permission_profile(
+/// Chooses the process isolation strategy needed for a managed permission profile.
+pub fn isolation_mode_for_permission_profile(
     permission_profile: &PermissionProfile,
     workspace_roots: &[AbsolutePathBuf],
     cwd: &Path,
     env_map: &HashMap<String, String>,
-) -> Result<WindowsSandboxTokenMode> {
+) -> Result<WindowsSandboxIsolationMode> {
     let permissions =
         ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_workspace_roots(
             permission_profile,
@@ -52,9 +53,11 @@ pub fn token_mode_for_permission_profile(
         );
     }
     if permissions.writable_roots_for_cwd(cwd, env_map).is_empty() {
-        Ok(WindowsSandboxTokenMode::ReadOnlyCapability)
+        Ok(WindowsSandboxIsolationMode::ReadOnlyCapability)
+    } else if permissions.has_full_disk_read_access() {
+        Ok(WindowsSandboxIsolationMode::WritableRootsCapability)
     } else {
-        Ok(WindowsSandboxTokenMode::WritableRootsCapability)
+        Ok(WindowsSandboxIsolationMode::AppContainerCapabilities)
     }
 }
 
@@ -92,10 +95,6 @@ impl ResolvedWindowsSandboxPermissions {
 
     pub(crate) fn should_apply_network_block(&self) -> bool {
         !self.network.is_enabled()
-    }
-
-    pub(crate) fn network_policy(&self) -> NetworkSandboxPolicy {
-        self.network
     }
 
     pub(crate) fn is_enforceable_by_windows_sandbox(&self) -> bool {
@@ -378,39 +377,83 @@ mod tests {
     }
 
     #[test]
-    fn token_mode_for_profile_without_writable_roots_uses_readonly_capability() {
+    fn isolation_mode_for_profile_without_writable_roots_uses_readonly_capability() {
         let tmp = TempDir::new().expect("tempdir");
         let cwd = tmp.path().join("workspace");
         std::fs::create_dir_all(&cwd).expect("create cwd");
         let workspace_roots = workspace_roots_for(cwd.as_path());
 
-        let token_mode = token_mode_for_permission_profile(
+        let isolation_mode = isolation_mode_for_permission_profile(
             &PermissionProfile::read_only(),
             workspace_roots.as_slice(),
             &cwd,
             &HashMap::new(),
         )
-        .expect("token mode");
+        .expect("isolation mode");
 
-        assert_eq!(WindowsSandboxTokenMode::ReadOnlyCapability, token_mode);
+        assert_eq!(
+            WindowsSandboxIsolationMode::ReadOnlyCapability,
+            isolation_mode
+        );
     }
 
     #[test]
-    fn token_mode_for_profile_with_writable_roots_uses_write_capabilities() {
+    fn isolation_mode_for_profile_with_writable_roots_uses_write_capabilities() {
         let tmp = TempDir::new().expect("tempdir");
         let cwd = tmp.path().join("workspace");
         std::fs::create_dir_all(&cwd).expect("create cwd");
         let workspace_roots = workspace_roots_for(cwd.as_path());
 
-        let token_mode = token_mode_for_permission_profile(
+        let isolation_mode = isolation_mode_for_permission_profile(
             &PermissionProfile::workspace_write(),
             workspace_roots.as_slice(),
             &cwd,
             &HashMap::new(),
         )
-        .expect("token mode");
+        .expect("isolation mode");
 
-        assert_eq!(WindowsSandboxTokenMode::WritableRootsCapability, token_mode);
+        assert_eq!(
+            WindowsSandboxIsolationMode::WritableRootsCapability,
+            isolation_mode
+        );
+    }
+
+    #[test]
+    fn isolation_mode_for_contained_profile_uses_appcontainer_capabilities() {
+        use codex_protocol::models::ManagedFileSystemPermissions;
+        use codex_protocol::permissions::FileSystemAccessMode;
+        use codex_protocol::permissions::FileSystemPath;
+        use codex_protocol::permissions::FileSystemSandboxEntry;
+        use codex_protocol::permissions::FileSystemSandboxPolicy;
+        use codex_protocol::permissions::NetworkSandboxPolicy;
+
+        let tmp = TempDir::new().expect("tempdir");
+        let cwd = tmp.path().join("workspace");
+        std::fs::create_dir_all(&cwd).expect("create cwd");
+        let workspace_roots = workspace_roots_for(cwd.as_path());
+        let file_system = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: workspace_roots[0].clone(),
+            },
+            access: FileSystemAccessMode::Write,
+        }]);
+        let profile = PermissionProfile::Managed {
+            file_system: ManagedFileSystemPermissions::from_sandbox_policy(&file_system),
+            network: NetworkSandboxPolicy::Restricted,
+        };
+
+        let isolation_mode = isolation_mode_for_permission_profile(
+            &profile,
+            workspace_roots.as_slice(),
+            &cwd,
+            &HashMap::new(),
+        )
+        .expect("isolation mode");
+
+        assert_eq!(
+            WindowsSandboxIsolationMode::AppContainerCapabilities,
+            isolation_mode
+        );
     }
 
     #[test]
@@ -444,7 +487,7 @@ mod tests {
     }
 
     #[test]
-    fn token_mode_rejects_full_disk_write_entries() {
+    fn isolation_mode_rejects_full_disk_write_entries() {
         let tmp = TempDir::new().expect("tempdir");
         let cwd = tmp.path().join("workspace");
         std::fs::create_dir_all(&cwd).expect("create cwd");
@@ -462,13 +505,13 @@ mod tests {
         };
         let workspace_roots = workspace_roots_for(cwd.as_path());
 
-        let err = token_mode_for_permission_profile(
+        let err = isolation_mode_for_permission_profile(
             &permission_profile,
             workspace_roots.as_slice(),
             &cwd,
             &HashMap::new(),
         )
-        .expect_err("full disk writes should not resolve to a token mode");
+        .expect_err("full disk writes should not resolve to an isolation mode");
 
         assert!(
             err.to_string()

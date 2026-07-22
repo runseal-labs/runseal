@@ -32,7 +32,11 @@ pub(crate) fn compute_allow_paths_for_permissions(
 
     for writable_root in permissions.writable_roots_for_cwd(command_cwd, env_map) {
         let canonical = canonicalize(&writable_root.root).unwrap_or(writable_root.root);
-        add_allow_path(canonical);
+        add_allow_path(canonical.clone());
+        for protected in [".git", ".agents", ".codex"] {
+            let protected_path = canonical.join(protected);
+            add_deny_path(canonicalize(&protected_path).unwrap_or(protected_path));
+        }
         for read_only_subpath in writable_root.read_only_subpaths {
             add_deny_path(read_only_subpath);
         }

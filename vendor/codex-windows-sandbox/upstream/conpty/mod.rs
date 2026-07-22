@@ -7,6 +7,7 @@
 //! Windows sandbox flows that need a PTY.
 
 use crate::desktop::LaunchDesktop;
+use crate::desktop::LaunchDesktopMode;
 use crate::proc_thread_attr::ProcThreadAttributeList;
 use crate::winutil::format_last_error;
 use crate::winutil::quote_windows_arg;
@@ -23,10 +24,14 @@ use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+use windows_sys::Win32::Security::SECURITY_CAPABILITIES;
+use windows_sys::Win32::System::Threading::CREATE_SUSPENDED;
 use windows_sys::Win32::System::Threading::CREATE_UNICODE_ENVIRONMENT;
 use windows_sys::Win32::System::Threading::CreateProcessAsUserW;
+use windows_sys::Win32::System::Threading::CreateProcessW;
 use windows_sys::Win32::System::Threading::EXTENDED_STARTUPINFO_PRESENT;
 use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
+use windows_sys::Win32::System::Threading::STARTF_FORCEOFFFEEDBACK;
 use windows_sys::Win32::System::Threading::STARTF_USESTDHANDLES;
 use windows_sys::Win32::System::Threading::STARTUPINFOEXW;
 
@@ -95,13 +100,17 @@ pub fn resize_conpty_handle(hpc: HANDLE, cols: i16, rows: i16) -> Result<()> {
 ///
 /// This is the main shared ConPTY entry point and is used by both the legacy/direct path
 /// and the elevated runner path whenever a PTY-backed sandboxed process is needed.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_conpty_process_as_user(
     h_token: HANDLE,
     argv: &[String],
     cwd: &Path,
     env_map: &HashMap<String, String>,
-    use_private_desktop: bool,
+    desktop_mode: LaunchDesktopMode,
+    restricting_sids: &[*mut c_void],
     logs_base_dir: Option<&Path>,
+    start_suspended: bool,
+    security_capabilities: Option<*mut SECURITY_CAPABILITIES>,
 ) -> Result<(PROCESS_INFORMATION, ConptyInstance)> {
     let cmdline_str = argv
         .iter()
@@ -112,11 +121,11 @@ pub fn spawn_conpty_process_as_user(
     let env_block = make_env_block(env_map);
     let mut si: STARTUPINFOEXW = unsafe { std::mem::zeroed() };
     si.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
-    si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    si.StartupInfo.dwFlags = STARTF_USESTDHANDLES | STARTF_FORCEOFFFEEDBACK;
     si.StartupInfo.hStdInput = INVALID_HANDLE_VALUE;
     si.StartupInfo.hStdOutput = INVALID_HANDLE_VALUE;
     si.StartupInfo.hStdError = INVALID_HANDLE_VALUE;
-    let desktop = LaunchDesktop::prepare(use_private_desktop, logs_base_dir)?;
+    let desktop = LaunchDesktop::prepare(desktop_mode, logs_base_dir, restricting_sids)?;
     si.StartupInfo.lpDesktop = desktop.startup_info_desktop();
 
     let raw = RawConPty::new(/*cols*/ 80, /*rows*/ 24)?;
@@ -128,30 +137,59 @@ pub fn spawn_conpty_process_as_user(
         output_read: output_read.into_raw_handle() as HANDLE,
         _desktop: Some(desktop),
     };
-    let mut attrs = ProcThreadAttributeList::new(/*attr_count*/ 1)?;
+    let mut attrs = ProcThreadAttributeList::new(
+        /*attr_count*/ 1 + u32::from(security_capabilities.is_some()),
+    )?;
     attrs.set_pseudoconsole(hpc)?;
+    if let Some(capabilities) = security_capabilities {
+        attrs.set_security_capabilities(capabilities)?;
+    }
     si.lpAttributeList = attrs.as_mut_ptr();
 
     let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+    let lowbox = security_capabilities.is_some();
+    let creation_flags = EXTENDED_STARTUPINFO_PRESENT
+        | CREATE_UNICODE_ENVIRONMENT
+        | if start_suspended { CREATE_SUSPENDED } else { 0 };
     let ok = unsafe {
-        CreateProcessAsUserW(
-            h_token,
-            std::ptr::null(),
-            cmdline.as_mut_ptr(),
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            0,
-            EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
-            env_block.as_ptr() as *mut c_void,
-            to_wide(cwd).as_ptr(),
-            &si.StartupInfo,
-            &mut pi,
-        )
+        if lowbox {
+            CreateProcessW(
+                std::ptr::null(),
+                cmdline.as_mut_ptr(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                0,
+                creation_flags,
+                env_block.as_ptr() as *mut c_void,
+                to_wide(cwd).as_ptr(),
+                &si.StartupInfo,
+                &mut pi,
+            )
+        } else {
+            CreateProcessAsUserW(
+                h_token,
+                std::ptr::null(),
+                cmdline.as_mut_ptr(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                0,
+                creation_flags,
+                env_block.as_ptr() as *mut c_void,
+                to_wide(cwd).as_ptr(),
+                &si.StartupInfo,
+                &mut pi,
+            )
+        }
     };
     if ok == 0 {
         let err = unsafe { GetLastError() } as i32;
         return Err(anyhow::anyhow!(
-            "CreateProcessAsUserW failed: {} ({}) | cwd={} | cmd={} | env_u16_len={}",
+            "{} failed: {} ({}) | cwd={} | cmd={} | env_u16_len={}",
+            if lowbox {
+                "CreateProcessW"
+            } else {
+                "CreateProcessAsUserW"
+            },
             err,
             format_last_error(err),
             cwd.display(),

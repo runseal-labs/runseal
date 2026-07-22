@@ -11,44 +11,42 @@ pub struct ElevatedSandboxProfileCaptureRequest<'a> {
     pub command: Vec<String>,
     pub cwd: &'a Path,
     pub env_map: HashMap<String, String>,
-    pub stdin_bytes: Option<Vec<u8>>,
     pub timeout_ms: Option<u64>,
     pub cancellation: Option<crate::WindowsSandboxCancellationToken>,
     pub use_private_desktop: bool,
     pub proxy_enforced: bool,
+    pub allow_network_proxy: bool,
+    pub sandbox_proxy_settings: Option<crate::SandboxProxySettings>,
+    pub read_cap_sid: Option<String>,
     pub read_roots_override: Option<&'a [PathBuf]>,
     pub read_roots_include_platform_defaults: bool,
     pub write_roots_override: Option<&'a [PathBuf]>,
-    pub deny_read_paths_override: &'a [AbsolutePathBuf],
     pub deny_write_paths_override: &'a [AbsolutePathBuf],
 }
 
 mod windows_impl {
     use super::ElevatedSandboxProfileCaptureRequest;
     use crate::acl::allow_null_device;
+    use crate::appcontainer::appcontainer_capability_sid;
+    use crate::appcontainer::workspace_appcontainer_write_capability_sid;
     use crate::cap::load_or_create_cap_sids;
     use crate::cap::workspace_write_cap_sid_for_root;
     use crate::env::ensure_non_interactive_pager;
     use crate::env::inherit_path_env;
     use crate::env::normalize_null_device_env;
-    use crate::identity::refresh_logon_sandbox_creds;
     use crate::identity::require_logon_sandbox_creds;
     use crate::ipc_framed::EmptyPayload;
     use crate::ipc_framed::FramedMessage;
-    use crate::ipc_framed::IPC_PROTOCOL_VERSION;
     use crate::ipc_framed::Message;
     use crate::ipc_framed::OutputStream;
     use crate::ipc_framed::SpawnRequest;
-    use crate::ipc_framed::StdinPayload;
     use crate::ipc_framed::decode_bytes;
-    use crate::ipc_framed::encode_bytes;
     use crate::ipc_framed::read_frame;
     use crate::ipc_framed::write_frame;
     use crate::logging::log_failure;
     use crate::logging::log_start;
     use crate::logging::log_success;
     use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
-    use crate::runner_client::is_stale_sandbox_creds_error;
     use crate::runner_client::spawn_runner_transport;
     use crate::sandbox_utils::ensure_codex_home_exists;
     use crate::sandbox_utils::inject_git_safe_directory;
@@ -64,8 +62,6 @@ mod windows_impl {
     use std::time::Duration;
 
     pub use crate::windows_impl::CaptureResult;
-
-    const STDIN_FRAME_CHUNK_BYTES: usize = 64 * 1024;
 
     /// Polls for cancellation and sends the runner's terminate IPC frame when requested.
     ///
@@ -86,7 +82,7 @@ mod windows_impl {
                     let _ = write_frame(
                         &mut pipe_write,
                         &FramedMessage {
-                            version: IPC_PROTOCOL_VERSION,
+                            version: 1,
                             message: Message::Terminate {
                                 payload: EmptyPayload::default(),
                             },
@@ -98,31 +94,6 @@ mod windows_impl {
             }
         });
         Ok(Some((handle, done)))
-    }
-
-    fn write_stdin_and_close(pipe_write: &mut File, bytes: &[u8]) -> Result<()> {
-        for chunk in bytes.chunks(STDIN_FRAME_CHUNK_BYTES) {
-            write_frame(
-                &mut *pipe_write,
-                &FramedMessage {
-                    version: IPC_PROTOCOL_VERSION,
-                    message: Message::Stdin {
-                        payload: StdinPayload {
-                            data_b64: encode_bytes(chunk),
-                        },
-                    },
-                },
-            )?;
-        }
-        write_frame(
-            pipe_write,
-            &FramedMessage {
-                version: IPC_PROTOCOL_VERSION,
-                message: Message::CloseStdin {
-                    payload: EmptyPayload::default(),
-                },
-            },
-        )
     }
 
     /// Launches the command runner under the sandbox user and captures its output.
@@ -137,15 +108,16 @@ mod windows_impl {
             command,
             cwd,
             mut env_map,
-            stdin_bytes,
             timeout_ms,
             cancellation,
             use_private_desktop,
             proxy_enforced,
+            allow_network_proxy,
+            sandbox_proxy_settings,
+            read_cap_sid,
             read_roots_override,
             read_roots_include_platform_defaults,
             write_roots_override,
-            deny_read_paths_override,
             deny_write_paths_override,
         } = request;
         let permissions =
@@ -153,10 +125,6 @@ mod windows_impl {
                 permission_profile,
                 workspace_roots,
             )?;
-        let deny_read_paths_override = deny_read_paths_override
-            .iter()
-            .map(AbsolutePathBuf::to_path_buf)
-            .collect::<Vec<_>>();
         let deny_write_paths_override = deny_write_paths_override
             .iter()
             .map(AbsolutePathBuf::to_path_buf)
@@ -171,7 +139,7 @@ mod windows_impl {
 
         let logs_base_dir: Option<&Path> = Some(sandbox_base.as_path());
         log_start(&command, logs_base_dir);
-        let mut sandbox_creds = require_logon_sandbox_creds(
+        let sandbox_creds = require_logon_sandbox_creds(
             &permissions,
             cwd,
             &env_map,
@@ -179,9 +147,10 @@ mod windows_impl {
             read_roots_override,
             read_roots_include_platform_defaults,
             write_roots_override,
-            &deny_read_paths_override,
             &deny_write_paths_override,
             proxy_enforced,
+            sandbox_proxy_settings.as_ref(),
+            read_cap_sid.as_deref(),
         )?;
         // Build capability SID for ACL grants.
         let caps = load_or_create_cap_sids(codex_home)?;
@@ -194,12 +163,24 @@ mod windows_impl {
                 codex_home,
                 write_roots_override,
             );
-            let cap_sids = write_roots
+            let mut cap_sids = write_roots
                 .iter()
-                .map(|root| workspace_write_cap_sid_for_root(codex_home, cwd, root))
+                .map(|root| {
+                    if read_cap_sid.is_some() {
+                        workspace_appcontainer_write_capability_sid(codex_home, cwd, root)
+                    } else {
+                        workspace_write_cap_sid_for_root(codex_home, cwd, root)
+                    }
+                })
                 .collect::<Result<Vec<_>>>()?;
             if cap_sids.is_empty() {
                 anyhow::bail!("workspace-write sandbox has no writable root capability SIDs");
+            }
+            if let Some(read_cap_sid) = read_cap_sid {
+                cap_sids.push(read_cap_sid);
+                if allow_network_proxy {
+                    cap_sids.push(appcontainer_capability_sid("internetClient")?);
+                }
             }
             (LocalSid::from_string(&cap_sids[0])?, cap_sids)
         } else {
@@ -223,46 +204,18 @@ mod windows_impl {
                 cap_sids,
                 timeout_ms,
                 tty: false,
-                stdin_open: stdin_bytes.is_some(),
+                stdin_open: false,
                 use_private_desktop,
             };
-            let transport = match spawn_runner_transport(
+            let transport = spawn_runner_transport(
                 codex_home,
                 cwd,
                 &sandbox_creds,
                 logs_base_dir,
-                spawn_request.clone(),
-            ) {
-                Ok(transport) => transport,
-                Err(err) if is_stale_sandbox_creds_error(&err) => {
-                    sandbox_creds = refresh_logon_sandbox_creds(
-                        &permissions,
-                        cwd,
-                        &env_map,
-                        codex_home,
-                        read_roots_override,
-                        read_roots_include_platform_defaults,
-                        write_roots_override,
-                        &deny_read_paths_override,
-                        &deny_write_paths_override,
-                        proxy_enforced,
-                    )?;
-                    spawn_runner_transport(
-                        codex_home,
-                        cwd,
-                        &sandbox_creds,
-                        logs_base_dir,
-                        spawn_request,
-                    )?
-                }
-                Err(err) => return Err(err),
-            };
-            let (mut pipe_write, mut pipe_read) = transport.into_files();
-            let mut cancellation = cancellation;
-            if let Some(bytes) = stdin_bytes {
-                write_stdin_and_close(&mut pipe_write, &bytes)?;
-            }
-            let cancel_writer = spawn_cancel_writer(&pipe_write, cancellation.take())?;
+                spawn_request,
+            )?;
+            let (pipe_write, mut pipe_read) = transport.into_files();
+            let cancel_writer = spawn_cancel_writer(&pipe_write, cancellation)?;
 
             let mut stdout = Vec::new();
             let mut stderr = Vec::new();
@@ -273,10 +226,7 @@ mod windows_impl {
                     Err(err) => break Err(err),
                 };
                 match msg.message {
-                    Message::SpawnReady { .. } => {
-                        // `spawn_runner_transport` consumes the initial SpawnReady during
-                        // startup. Treat any later duplicate as benign protocol noise.
-                    }
+                    Message::SpawnReady { .. } => {}
                     Message::Output { payload } => match decode_bytes(&payload.data_b64) {
                         Ok(bytes) => match payload.stream {
                             OutputStream::Stdout => stdout.extend_from_slice(&bytes),
@@ -318,57 +268,6 @@ mod windows_impl {
                 timed_out,
             })
         })()
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-        use std::io::{Seek, SeekFrom};
-
-        #[test]
-        fn write_stdin_and_close_emits_stdin_then_close_frames() -> Result<()> {
-            let mut file = tempfile::tempfile()?;
-            write_stdin_and_close(&mut file, b"hello")?;
-            file.seek(SeekFrom::Start(0))?;
-
-            let stdin_frame = read_frame(&mut file)?.expect("stdin frame");
-            assert_eq!(stdin_frame.version, IPC_PROTOCOL_VERSION);
-            match stdin_frame.message {
-                Message::Stdin { payload } => {
-                    assert_eq!(decode_bytes(&payload.data_b64)?, b"hello");
-                }
-                other => panic!("expected stdin frame, got {other:?}"),
-            }
-
-            let close_frame = read_frame(&mut file)?.expect("close stdin frame");
-            assert_eq!(close_frame.version, IPC_PROTOCOL_VERSION);
-            assert!(matches!(close_frame.message, Message::CloseStdin { .. }));
-            assert!(read_frame(&mut file)?.is_none());
-            Ok(())
-        }
-
-        #[test]
-        fn write_stdin_and_close_chunks_large_stdin_frames() -> Result<()> {
-            let mut file = tempfile::tempfile()?;
-            let bytes = vec![b'x'; STDIN_FRAME_CHUNK_BYTES + 7];
-            write_stdin_and_close(&mut file, &bytes)?;
-            file.seek(SeekFrom::Start(0))?;
-
-            for expected_len in [STDIN_FRAME_CHUNK_BYTES, 7] {
-                let frame = read_frame(&mut file)?.expect("stdin frame");
-                match frame.message {
-                    Message::Stdin { payload } => {
-                        assert_eq!(decode_bytes(&payload.data_b64)?.len(), expected_len);
-                    }
-                    other => panic!("expected stdin frame, got {other:?}"),
-                }
-            }
-
-            let close_frame = read_frame(&mut file)?.expect("close stdin frame");
-            assert!(matches!(close_frame.message, Message::CloseStdin { .. }));
-            assert!(read_frame(&mut file)?.is_none());
-            Ok(())
-        }
     }
 }
 

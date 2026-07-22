@@ -17,8 +17,6 @@ use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
-const STDIN_FRAME_CHUNK_BYTES: usize = 64 * 1024;
-
 pub(crate) fn finish_driver_spawn(driver: ProcessDriver, stdin_open: bool) -> SpawnedProcess {
     let spawned = spawn_from_driver(driver);
     if !stdin_open {
@@ -58,18 +56,6 @@ pub(crate) fn start_runner_pipe_writer(
     outbound_tx
 }
 
-fn send_stdin_frame(outbound_tx: &std::sync::mpsc::Sender<FramedMessage>, bytes: &[u8]) -> bool {
-    let msg = FramedMessage {
-        version: IPC_PROTOCOL_VERSION,
-        message: Message::Stdin {
-            payload: StdinPayload {
-                data_b64: encode_bytes(bytes),
-            },
-        },
-    };
-    outbound_tx.send(msg).is_ok()
-}
-
 pub(crate) fn start_runner_stdin_writer(
     mut writer_rx: mpsc::Receiver<Vec<u8>>,
     outbound_tx: std::sync::mpsc::Sender<FramedMessage>,
@@ -84,13 +70,16 @@ pub(crate) fn start_runner_stdin_writer(
             } else {
                 bytes
             };
-            if bytes.is_empty() && !send_stdin_frame(&outbound_tx, &bytes) {
-                return;
-            }
-            for chunk in bytes.chunks(STDIN_FRAME_CHUNK_BYTES) {
-                if !send_stdin_frame(&outbound_tx, chunk) {
-                    return;
-                }
+            let msg = FramedMessage {
+                version: IPC_PROTOCOL_VERSION,
+                message: Message::Stdin {
+                    payload: StdinPayload {
+                        data_b64: encode_bytes(&bytes),
+                    },
+                },
+            };
+            if outbound_tx.send(msg).is_err() {
+                break;
             }
         }
         if stdin_open {

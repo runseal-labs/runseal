@@ -1,4 +1,5 @@
 use crate::desktop::LaunchDesktop;
+use crate::desktop::LaunchDesktopMode;
 use crate::logging;
 use crate::proc_thread_attr::ProcThreadAttributeList;
 use crate::winutil::argv_to_command_line;
@@ -16,6 +17,7 @@ use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Foundation::HANDLE_FLAG_INHERIT;
 use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
 use windows_sys::Win32::Foundation::SetHandleInformation;
+use windows_sys::Win32::Security::SECURITY_CAPABILITIES;
 use windows_sys::Win32::Storage::FileSystem::ReadFile;
 use windows_sys::Win32::System::Console::GetStdHandle;
 use windows_sys::Win32::System::Console::STD_ERROR_HANDLE;
@@ -23,16 +25,16 @@ use windows_sys::Win32::System::Console::STD_INPUT_HANDLE;
 use windows_sys::Win32::System::Console::STD_OUTPUT_HANDLE;
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+use windows_sys::Win32::System::Threading::CREATE_SUSPENDED;
 use windows_sys::Win32::System::Threading::CREATE_UNICODE_ENVIRONMENT;
 use windows_sys::Win32::System::Threading::CreateProcessAsUserW;
+use windows_sys::Win32::System::Threading::CreateProcessW;
 use windows_sys::Win32::System::Threading::EXTENDED_STARTUPINFO_PRESENT;
 use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
 use windows_sys::Win32::System::Threading::STARTF_FORCEOFFFEEDBACK;
-use windows_sys::Win32::System::Threading::STARTF_USESHOWWINDOW;
 use windows_sys::Win32::System::Threading::STARTF_USESTDHANDLES;
 use windows_sys::Win32::System::Threading::STARTUPINFOEXW;
 use windows_sys::Win32::System::Threading::STARTUPINFOW;
-use windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE;
 
 pub struct CreatedProcess {
     pub process_info: PROCESS_INFORMATION,
@@ -79,6 +81,7 @@ unsafe fn ensure_inheritable_stdio(si: &mut STARTUPINFOW) -> Result<()> {
 /// # Safety
 /// Caller must provide a valid primary token handle (`h_token`) with appropriate access,
 /// and the `argv`, `cwd`, and `env_map` must remain valid for the duration of the call.
+#[allow(clippy::too_many_arguments)]
 pub unsafe fn create_process_as_user(
     h_token: HANDLE,
     argv: &[String],
@@ -86,12 +89,15 @@ pub unsafe fn create_process_as_user(
     env_map: &HashMap<String, String>,
     logs_base_dir: Option<&Path>,
     stdio: Option<(HANDLE, HANDLE, HANDLE)>,
-    use_private_desktop: bool,
+    desktop_mode: LaunchDesktopMode,
+    restricting_sids: &[*mut c_void],
+    start_suspended: bool,
+    security_capabilities: Option<*mut SECURITY_CAPABILITIES>,
 ) -> Result<CreatedProcess> {
     let cmdline_str = argv_to_command_line(argv);
     let mut cmdline: Vec<u16> = to_wide(&cmdline_str);
     let env_block = make_env_block(env_map);
-    let desktop = LaunchDesktop::prepare(use_private_desktop, logs_base_dir)?;
+    let desktop = LaunchDesktop::prepare(desktop_mode, logs_base_dir, restricting_sids)?;
     let mut pi: PROCESS_INFORMATION = std::mem::zeroed();
     let cwd_wide = to_wide(cwd);
     let env_block_len = env_block.len();
@@ -103,9 +109,7 @@ pub unsafe fn create_process_as_user(
             // if lpDesktop is not set when launching with a restricted token.
             // Point explicitly at the interactive desktop or a private desktop.
             si.StartupInfo.lpDesktop = desktop.startup_info_desktop();
-            si.StartupInfo.dwFlags |=
-                STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW | STARTF_FORCEOFFFEEDBACK;
-            si.StartupInfo.wShowWindow = SW_HIDE as u16;
+            si.StartupInfo.dwFlags |= STARTF_USESTDHANDLES | STARTF_FORCEOFFFEEDBACK;
             si.StartupInfo.hStdInput = stdin_h;
             si.StartupInfo.hStdOutput = stdout_h;
             si.StartupInfo.hStdError = stderr_h;
@@ -121,29 +125,57 @@ pub unsafe fn create_process_as_user(
                     ));
                 }
             }
-            let mut attrs = ProcThreadAttributeList::new(/*attr_count*/ 1)?;
+            let mut attrs = ProcThreadAttributeList::new(
+                /*attr_count*/ 1 + u32::from(security_capabilities.is_some()),
+            )?;
             attrs.set_handle_list(inherited_handles)?;
+            if let Some(capabilities) = security_capabilities {
+                attrs.set_security_capabilities(capabilities)?;
+            }
             si.lpAttributeList = attrs.as_mut_ptr();
 
-            let creation_flags =
-                CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW;
-            let ok = CreateProcessAsUserW(
-                h_token,
-                std::ptr::null(),
-                cmdline.as_mut_ptr(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                1,
-                creation_flags,
-                env_block.as_ptr() as *mut c_void,
-                cwd_wide.as_ptr(),
-                &si.StartupInfo,
-                &mut pi,
-            );
+            let creation_flags = CREATE_UNICODE_ENVIRONMENT
+                | CREATE_NO_WINDOW
+                | EXTENDED_STARTUPINFO_PRESENT
+                | if start_suspended { CREATE_SUSPENDED } else { 0 };
+            let lowbox = security_capabilities.is_some();
+            let ok = if lowbox {
+                CreateProcessW(
+                    std::ptr::null(),
+                    cmdline.as_mut_ptr(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    1,
+                    creation_flags,
+                    env_block.as_ptr() as *mut c_void,
+                    cwd_wide.as_ptr(),
+                    &si.StartupInfo,
+                    &mut pi,
+                )
+            } else {
+                CreateProcessAsUserW(
+                    h_token,
+                    std::ptr::null(),
+                    cmdline.as_mut_ptr(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    1,
+                    creation_flags,
+                    env_block.as_ptr() as *mut c_void,
+                    cwd_wide.as_ptr(),
+                    &si.StartupInfo,
+                    &mut pi,
+                )
+            };
             if ok == 0 {
                 let err = GetLastError() as i32;
                 let msg = format!(
-                    "CreateProcessAsUserW failed: {} ({}) | cwd={} | cmd={} | env_u16_len={} | si_flags={} | creation_flags={}",
+                    "{} failed: {} ({}) | cwd={} | cmd={} | env_u16_len={} | si_flags={} | creation_flags={}",
+                    if lowbox {
+                        "CreateProcessW"
+                    } else {
+                        "CreateProcessAsUserW"
+                    },
                     err,
                     format_last_error(err),
                     cwd.display(),
@@ -162,14 +194,17 @@ pub unsafe fn create_process_as_user(
             })
         }
         None => {
+            if security_capabilities.is_some() {
+                anyhow::bail!("AppContainer process creation requires an explicit handle list");
+            }
             let mut si: STARTUPINFOW = std::mem::zeroed();
             si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
             si.lpDesktop = desktop.startup_info_desktop();
             ensure_inheritable_stdio(&mut si)?;
-            si.dwFlags |= STARTF_USESHOWWINDOW;
-            si.wShowWindow = SW_HIDE as u16;
 
-            let creation_flags = CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW;
+            let creation_flags = CREATE_UNICODE_ENVIRONMENT
+                | CREATE_NO_WINDOW
+                | if start_suspended { CREATE_SUSPENDED } else { 0 };
             let ok = CreateProcessAsUserW(
                 h_token,
                 std::ptr::null(),
@@ -240,8 +275,11 @@ pub fn spawn_process_with_pipes(
     env_map: &HashMap<String, String>,
     stdin_mode: StdinMode,
     stderr_mode: StderrMode,
-    use_private_desktop: bool,
+    desktop_mode: LaunchDesktopMode,
+    restricting_sids: &[*mut c_void],
     logs_base_dir: Option<&Path>,
+    start_suspended: bool,
+    security_capabilities: Option<*mut SECURITY_CAPABILITIES>,
 ) -> Result<PipeSpawnHandles> {
     let mut in_r: HANDLE = 0;
     let mut in_w: HANDLE = 0;
@@ -283,7 +321,10 @@ pub fn spawn_process_with_pipes(
             env_map,
             logs_base_dir,
             stdio,
-            use_private_desktop,
+            desktop_mode,
+            restricting_sids,
+            start_suspended,
+            security_capabilities,
         )
     };
     let created = match spawn_result {

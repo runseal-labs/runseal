@@ -4,6 +4,7 @@ use crate::conpty::ConptyInstance;
 use crate::conpty::resize_conpty_handle as resize_raw_conpty_handle;
 use crate::conpty::spawn_conpty_process_as_user;
 use crate::desktop::LaunchDesktop;
+use crate::desktop::LaunchDesktopMode;
 use crate::logging::log_failure;
 use crate::logging::log_success;
 use crate::process::StderrMode;
@@ -43,13 +44,6 @@ use windows_sys::Win32::System::Threading::TerminateProcess;
 use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
 const WAIT_TIMEOUT: u32 = 0x0000_0102;
-const MAX_FINITE_WAIT_MS: u32 = INFINITE - 1;
-
-fn wait_timeout_ms(timeout_ms: Option<u64>) -> u32 {
-    timeout_ms
-        .map(|ms| ms.min(MAX_FINITE_WAIT_MS as u64) as u32)
-        .unwrap_or(INFINITE)
-}
 
 struct LegacyProcessHandles {
     process: PROCESS_INFORMATION,
@@ -81,8 +75,11 @@ fn spawn_legacy_process(
             command,
             cwd,
             env_map,
-            use_private_desktop,
+            LaunchDesktopMode::from_private_desktop(use_private_desktop),
+            &[],
             logs_base_dir,
+            /*start_suspended*/ false,
+            None,
         )?;
         let hpc = conpty.raw_handle();
         let output_join = spawn_output_reader(conpty.take_output_read(), stdout_tx);
@@ -104,8 +101,11 @@ fn spawn_legacy_process(
                 StdinMode::Closed
             },
             StderrMode::Separate,
-            use_private_desktop,
+            LaunchDesktopMode::from_private_desktop(use_private_desktop),
+            &[],
             logs_base_dir,
+            /*start_suspended*/ false,
+            None,
         )?;
         let stdout_join = spawn_output_reader(pipe_handles.stdout_read, stdout_tx);
         let Some(stderr_read) = pipe_handles.stderr_read else {
@@ -183,13 +183,12 @@ fn spawn_input_writer(
 
 fn write_all_handle(handle: HANDLE, mut bytes: &[u8]) -> Result<()> {
     while !bytes.is_empty() {
-        let chunk_len = bytes.len().min(u32::MAX as usize);
         let mut written = 0u32;
         let ok = unsafe {
             WriteFile(
                 handle,
                 bytes.as_ptr() as *const _,
-                chunk_len as u32,
+                bytes.len() as u32,
                 &mut written,
                 ptr::null_mut(),
             )
@@ -269,7 +268,6 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
     cwd: &Path,
     mut env_map: HashMap<String, String>,
     timeout_ms: Option<u64>,
-    additional_deny_read_paths: &[AbsolutePathBuf],
     additional_deny_write_paths: &[AbsolutePathBuf],
     tty: bool,
     stdin_open: bool,
@@ -289,11 +287,6 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
     )?;
     if !common.permissions.has_full_disk_read_access() {
         anyhow::bail!("Restricted read-only access requires the elevated Windows sandbox backend");
-    }
-    // WRITE_RESTRICTED tokens consult restricting SIDs only for writes, so this
-    // backend cannot make capability-SID deny-read ACLs authoritative.
-    if !additional_deny_read_paths.is_empty() {
-        anyhow::bail!("deny-read overrides require the elevated Windows sandbox backend");
     }
     let additional_deny_write_paths = additional_deny_write_paths
         .iter()
@@ -315,14 +308,11 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
 
     apply_legacy_session_acl_rules(
         &common.permissions,
-        codex_home,
         &common.current_dir,
         &env_map,
-        &[],
         &additional_deny_write_paths,
         LegacyAclSids {
             readonly_sid: security.readonly_sid.as_ref(),
-            readonly_sid_str: security.readonly_sid_str.as_deref(),
             write_root_sids: &security.write_root_sids,
         },
     )?;
@@ -373,7 +363,7 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
     let hpc_for_wait = hpc_handle.clone();
     std::thread::spawn(move || {
         let _desktop = desktop;
-        let timeout = wait_timeout_ms(timeout_ms);
+        let timeout = timeout_ms.map(|ms| ms as u32).unwrap_or(INFINITE);
         let wait_res = unsafe { WaitForSingleObject(pi.hProcess, timeout) };
         if wait_res == WAIT_TIMEOUT {
             unsafe {

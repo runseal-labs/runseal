@@ -48,7 +48,7 @@ pub fn find_runner_exe(codex_home: &Path, log_dir: Option<&Path>) -> PathBuf {
 pub fn pipe_pair() -> (String, String) {
     let mut rng = SmallRng::from_entropy();
     let nonce: u128 = rng.r#gen();
-    let base = format!(r"\\.\pipe\runseal-runner-{nonce:x}");
+    let base = format!(r"\\.\pipe\codex-runner-{nonce:x}");
     (format!("{base}-in"), format!("{base}-out"))
 }
 

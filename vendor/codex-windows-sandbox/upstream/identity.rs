@@ -1,20 +1,17 @@
 use crate::dpapi;
 use crate::logging::debug_log;
 use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
-use crate::setup::SandboxNetworkGuard;
 use crate::setup::SandboxUserRecord;
 use crate::setup::SandboxUsersFile;
 use crate::setup::SetupMarker;
 use crate::setup::gather_read_roots;
 use crate::setup::gather_write_roots_for_permissions;
-use crate::setup::run_elevated_network_setup;
-use crate::setup::run_elevated_setup;
-use crate::setup::run_setup_refresh_with_overrides;
+use crate::setup::run_elevated_network_setup_with_proxy_settings;
+use crate::setup::run_elevated_setup_with_proxy_settings;
+use crate::setup::run_setup_refresh_with_overrides_and_proxy_settings;
 use crate::setup::sandbox_proxy_settings_from_env;
 use crate::setup::sandbox_users_path;
 use crate::setup::setup_marker_path;
-use crate::setup_error::SetupErrorCode;
-use crate::setup_error::SetupFailure;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
@@ -24,6 +21,14 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
+use windows_sys::Win32::Foundation::CloseHandle;
+use windows_sys::Win32::Foundation::GetLastError;
+use windows_sys::Win32::Foundation::HANDLE;
+use windows_sys::Win32::Security::LOGON32_LOGON_INTERACTIVE;
+use windows_sys::Win32::Security::LOGON32_PROVIDER_DEFAULT;
+use windows_sys::Win32::Security::LogonUserW;
+
+const SANDBOX_SETUP_LOCK_NAME: &str = "runseal-windows-sandbox-runtime-setup";
 
 #[derive(Debug, Clone)]
 struct SandboxIdentity {
@@ -37,11 +42,37 @@ pub struct SandboxCreds {
     pub password: String,
 }
 
+fn validate_sandbox_identity(identity: &SandboxIdentity) -> Result<(), u32> {
+    let username = crate::winutil::to_wide(&identity.username);
+    let domain = crate::winutil::to_wide(".");
+    let password = crate::winutil::to_wide(&identity.password);
+    let mut token: HANDLE = 0;
+    let ok = unsafe {
+        LogonUserW(
+            username.as_ptr(),
+            domain.as_ptr(),
+            password.as_ptr(),
+            LOGON32_LOGON_INTERACTIVE,
+            LOGON32_PROVIDER_DEFAULT,
+            &mut token,
+        )
+    };
+    if ok == 0 {
+        return Err(unsafe { GetLastError() });
+    }
+    if token != 0 {
+        unsafe {
+            CloseHandle(token);
+        }
+    }
+    Ok(())
+}
+
 /// Returns true when the on-disk setup artifacts exist and match the current
 /// setup version.
 ///
 /// This is a coarse readiness check; `require_logon_sandbox_creds` performs the
-/// additional runtime validation for sandbox network guard settings.
+/// additional runtime validation for sandbox proxy/firewall settings.
 pub fn sandbox_setup_is_complete(codex_home: &Path) -> bool {
     let marker_ok = matches!(load_marker(codex_home), Ok(Some(marker)) if marker.version_matches());
     if !marker_ok {
@@ -53,21 +84,16 @@ pub fn sandbox_setup_is_complete(codex_home: &Path) -> bool {
 fn load_marker(codex_home: &Path) -> Result<Option<SetupMarker>> {
     let path = setup_marker_path(codex_home);
     let marker = match fs::read_to_string(&path) {
-        Ok(contents) => {
-            if contains_legacy_split_identity_schema(&contents) {
-                return Err(legacy_split_identity_error());
+        Ok(contents) => match serde_json::from_str::<SetupMarker>(&contents) {
+            Ok(m) => Some(m),
+            Err(err) => {
+                debug_log(
+                    &format!("sandbox setup marker parse failed: {err}"),
+                    Some(codex_home),
+                );
+                None
             }
-            match serde_json::from_str::<SetupMarker>(&contents) {
-                Ok(m) => Some(m),
-                Err(err) => {
-                    debug_log(
-                        &format!("sandbox setup marker parse failed: {err}"),
-                        Some(codex_home),
-                    );
-                    None
-                }
-            }
-        }
+        },
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
         Err(err) => {
             debug_log(
@@ -93,9 +119,6 @@ fn load_users(codex_home: &Path) -> Result<Option<SandboxUsersFile>> {
             return Ok(None);
         }
     };
-    if contains_legacy_split_identity_schema(&file) {
-        return Err(legacy_split_identity_error());
-    }
     match serde_json::from_str::<SandboxUsersFile>(&file) {
         Ok(users) => Ok(Some(users)),
         Err(err) => {
@@ -108,77 +131,6 @@ fn load_users(codex_home: &Path) -> Result<Option<SandboxUsersFile>> {
     }
 }
 
-fn legacy_split_identity_error() -> anyhow::Error {
-    anyhow::Error::new(SetupFailure::new(
-        SetupErrorCode::OrchestratorSetupStateIncompatible,
-        "legacy split-identity Windows sandbox setup state detected; run `runseal setup windows-sandbox` from an elevated shell to repair",
-    ))
-}
-
-fn contains_legacy_split_identity_schema(contents: &str) -> bool {
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(contents) else {
-        return false;
-    };
-
-    value_contains_legacy_split_identity_schema(&value)
-}
-
-fn value_contains_legacy_split_identity_schema(value: &serde_json::Value) -> bool {
-    match value {
-        serde_json::Value::Object(object) => {
-            object.keys().any(|key| is_legacy_split_identity_key(key))
-                || object
-                    .values()
-                    .any(value_contains_legacy_split_identity_schema)
-        }
-        serde_json::Value::Array(values) => values
-            .iter()
-            .any(value_contains_legacy_split_identity_schema),
-        _ => false,
-    }
-}
-
-fn is_legacy_split_identity_key(key: &str) -> bool {
-    [
-        concat!("off", "line"),
-        concat!("on", "line"),
-        concat!("off", "line_user"),
-        concat!("on", "line_user"),
-        concat!("off", "line_username"),
-        concat!("on", "line_username"),
-        concat!("off", "line_sid"),
-        concat!("on", "line_sid"),
-        concat!("off", "line_profile"),
-        concat!("on", "line_profile"),
-        concat!("off", "line_group"),
-        concat!("on", "line_group"),
-        "network_user",
-        "no_network_user",
-        "network_username",
-        "no_network_username",
-    ]
-    .contains(&key)
-}
-
-fn reject_incompatible_setup_state(codex_home: &Path) -> Result<()> {
-    let _ = load_marker(codex_home)?;
-    let _ = load_users(codex_home)?;
-    Ok(())
-}
-
-fn remove_sandbox_users_file(codex_home: &Path, reason: &str) -> Result<()> {
-    let path = sandbox_users_path(codex_home);
-    debug_log(
-        &format!("{reason}; deleting {}", path.display()),
-        Some(codex_home),
-    );
-    match fs::remove_file(&path) {
-        Ok(()) => Ok(()),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(err) => Err(err).with_context(|| format!("delete {}", path.display())),
-    }
-}
-
 fn decode_password(record: &SandboxUserRecord) -> Result<String> {
     let blob = BASE64_STANDARD
         .decode(record.password.as_bytes())
@@ -188,10 +140,7 @@ fn decode_password(record: &SandboxUserRecord) -> Result<String> {
     Ok(pwd)
 }
 
-fn select_identity(
-    _network_guard: SandboxNetworkGuard,
-    codex_home: &Path,
-) -> Result<Option<SandboxIdentity>> {
+fn select_identity(codex_home: &Path) -> Result<Option<SandboxIdentity>> {
     let _marker = match load_marker(codex_home)? {
         Some(m) if m.version_matches() => m,
         _ => return Ok(None),
@@ -217,11 +166,17 @@ pub fn require_logon_sandbox_creds(
     read_roots_override: Option<&[PathBuf]>,
     read_roots_include_platform_defaults: bool,
     write_roots_override: Option<&[PathBuf]>,
-    deny_read_paths_override: &[PathBuf],
     deny_write_paths_override: &[PathBuf],
     proxy_enforced: bool,
+    sandbox_proxy_settings_override: Option<&crate::setup::SandboxProxySettings>,
+    read_cap_sid: Option<&str>,
 ) -> Result<SandboxCreds> {
-    reject_incompatible_setup_state(codex_home)?;
+    // ponytail: one global setup lock; use per-home locks only if preparation latency is measurable.
+    let setup_lock = named_lock::NamedLock::create(SANDBOX_SETUP_LOCK_NAME)
+        .context("create Windows sandbox setup lock")?;
+    let setup_guard = setup_lock
+        .lock()
+        .context("acquire Windows sandbox setup lock")?;
     let sandbox_dir = crate::setup::sandbox_dir(codex_home);
     let needed_read = read_roots_override
         .map(<[PathBuf]>::to_vec)
@@ -229,8 +184,10 @@ pub fn require_logon_sandbox_creds(
     let needed_write = write_roots_override
         .map(<[PathBuf]>::to_vec)
         .unwrap_or_else(|| gather_write_roots_for_permissions(permissions, command_cwd, env_map));
-    let network_guard = SandboxNetworkGuard::from_permissions(permissions, proxy_enforced);
-    let desired_sandbox_proxy_settings = sandbox_proxy_settings_from_env(env_map, network_guard);
+    let desired_sandbox_proxy_settings = sandbox_proxy_settings_override
+        .cloned()
+        .unwrap_or_else(|| sandbox_proxy_settings_from_env(env_map));
+    let desired_appcontainer_sid = Some(crate::ensure_appcontainer_profile_sid()?);
     // NOTE: Do not add CODEX_HOME/.sandbox to `needed_write`; it must remain non-writable by the
     // restricted capability token. The setup helper's `lock_sandbox_dir` is responsible for
     // granting the sandbox group access to this directory without granting the capability SID.
@@ -239,12 +196,13 @@ pub fn require_logon_sandbox_creds(
     let mut refresh_network_only = false;
     let mut identity = match load_marker(codex_home)? {
         Some(marker) if marker.version_matches() => {
-            if let Some(reason) =
-                marker.request_mismatch_reason(network_guard, &desired_sandbox_proxy_settings)
-            {
+            if let Some(reason) = marker.request_mismatch_reason(
+                &desired_sandbox_proxy_settings,
+                desired_appcontainer_sid.as_deref(),
+            ) {
                 setup_reason = Some(reason);
                 refresh_network_only = true;
-                let selected = select_identity(network_guard, codex_home)?;
+                let selected = select_identity(codex_home)?;
                 if selected.is_none() {
                     setup_reason = Some(
                         "sandbox users missing or incompatible with marker version".to_string(),
@@ -253,7 +211,7 @@ pub fn require_logon_sandbox_creds(
                 }
                 selected
             } else {
-                let selected = select_identity(network_guard, codex_home)?;
+                let selected = select_identity(codex_home)?;
                 if selected.is_none() {
                     setup_reason = Some(
                         "sandbox users missing or incompatible with marker version".to_string(),
@@ -277,7 +235,7 @@ pub fn require_logon_sandbox_creds(
         } else {
             crate::logging::log_note("sandbox network refresh required", Some(&sandbox_dir));
         }
-        run_elevated_network_setup(
+        run_elevated_network_setup_with_proxy_settings(
             crate::setup::SandboxSetupRequest {
                 permissions,
                 command_cwd,
@@ -289,9 +247,10 @@ pub fn require_logon_sandbox_creds(
                 read_roots: Some(needed_read.clone()),
                 read_roots_include_platform_defaults,
                 write_roots: Some(needed_write.clone()),
-                deny_read_paths: Some(deny_read_paths_override.to_vec()),
                 deny_write_paths: Some(deny_write_paths_override.to_vec()),
+                read_cap_sid: read_cap_sid.map(str::to_owned),
             },
+            &desired_sandbox_proxy_settings,
         )?;
     }
 
@@ -304,7 +263,7 @@ pub fn require_logon_sandbox_creds(
         } else {
             crate::logging::log_note("sandbox setup required", Some(&sandbox_dir));
         }
-        run_elevated_setup(
+        run_elevated_setup_with_proxy_settings(
             crate::setup::SandboxSetupRequest {
                 permissions,
                 command_cwd,
@@ -316,14 +275,55 @@ pub fn require_logon_sandbox_creds(
                 read_roots: Some(needed_read.clone()),
                 read_roots_include_platform_defaults,
                 write_roots: Some(needed_write.clone()),
-                deny_read_paths: Some(deny_read_paths_override.to_vec()),
                 deny_write_paths: Some(deny_write_paths_override.to_vec()),
+                read_cap_sid: read_cap_sid.map(str::to_owned),
             },
+            &desired_sandbox_proxy_settings,
         )?;
-        identity = select_identity(network_guard, codex_home)?;
+        identity = select_identity(codex_home)?;
     }
-    // Always refresh ACLs (non-elevated) for current roots via the setup binary.
-    run_setup_refresh_with_overrides(
+    if let Some((selected, code)) = identity.as_ref().and_then(|selected| {
+        validate_sandbox_identity(selected)
+            .err()
+            .map(|code| (selected, code))
+    }) {
+        crate::logging::log_note(
+            &format!(
+                "sandbox setup required: stored sandbox credentials failed logon for {} with code {code}",
+                selected.username
+            ),
+            Some(&sandbox_dir),
+        );
+        run_elevated_setup_with_proxy_settings(
+            crate::setup::SandboxSetupRequest {
+                permissions,
+                command_cwd,
+                env_map,
+                codex_home,
+                proxy_enforced,
+            },
+            crate::setup::SetupRootOverrides {
+                read_roots: Some(needed_read.clone()),
+                read_roots_include_platform_defaults,
+                write_roots: Some(needed_write.clone()),
+                deny_write_paths: Some(deny_write_paths_override.to_vec()),
+                read_cap_sid: read_cap_sid.map(str::to_owned),
+            },
+            &desired_sandbox_proxy_settings,
+        )?;
+        identity = select_identity(codex_home)?;
+        if let Some(selected) = identity.as_ref() {
+            validate_sandbox_identity(selected).map_err(|retry_code| {
+                anyhow!(
+                    "stored sandbox credentials are invalid after reprovision for {}: LogonUserW failed with code {retry_code}",
+                    selected.username
+                )
+            })?;
+        }
+    }
+    // Reconcile ACLs while the cross-process setup lock is held. The refresh layer caches exact
+    // prepared requests, so repeated commands with the same policy avoid launching the helper.
+    run_setup_refresh_with_overrides_and_proxy_settings(
         crate::setup::SandboxSetupRequest {
             permissions,
             command_cwd,
@@ -335,10 +335,12 @@ pub fn require_logon_sandbox_creds(
             read_roots: Some(needed_read),
             read_roots_include_platform_defaults,
             write_roots: Some(needed_write),
-            deny_read_paths: Some(deny_read_paths_override.to_vec()),
             deny_write_paths: Some(deny_write_paths_override.to_vec()),
+            read_cap_sid: read_cap_sid.map(str::to_owned),
         },
+        &desired_sandbox_proxy_settings,
     )?;
+    drop(setup_guard);
     let identity = identity.ok_or_else(|| {
         anyhow!(
             "Windows sandbox setup is missing or out of date; rerun the sandbox setup with elevation"
@@ -348,215 +350,4 @@ pub fn require_logon_sandbox_creds(
         username: identity.username,
         password: identity.password,
     })
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn refresh_logon_sandbox_creds(
-    permissions: &ResolvedWindowsSandboxPermissions,
-    command_cwd: &Path,
-    env_map: &HashMap<String, String>,
-    codex_home: &Path,
-    read_roots_override: Option<&[PathBuf]>,
-    read_roots_include_platform_defaults: bool,
-    write_roots_override: Option<&[PathBuf]>,
-    deny_read_paths_override: &[PathBuf],
-    deny_write_paths_override: &[PathBuf],
-    proxy_enforced: bool,
-) -> Result<SandboxCreds> {
-    remove_sandbox_users_file(codex_home, "sandbox user login failed")?;
-    require_logon_sandbox_creds(
-        permissions,
-        command_cwd,
-        env_map,
-        codex_home,
-        read_roots_override,
-        read_roots_include_platform_defaults,
-        write_roots_override,
-        deny_read_paths_override,
-        deny_write_paths_override,
-        proxy_enforced,
-    )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::contains_legacy_split_identity_schema;
-    use super::reject_incompatible_setup_state;
-    use super::remove_sandbox_users_file;
-    use crate::setup::sandbox_users_path;
-    use crate::setup::setup_marker_path;
-    use crate::setup_error::SetupErrorCode;
-    use crate::setup_error::SetupFailure;
-    use std::fs;
-    use tempfile::TempDir;
-
-    #[test]
-    fn remove_sandbox_users_file_deletes_existing_file() {
-        let codex_home = TempDir::new().expect("tempdir");
-        let users_path = sandbox_users_path(codex_home.path());
-        fs::create_dir_all(users_path.parent().expect("sandbox secrets dir"))
-            .expect("create sandbox secrets dir");
-        fs::write(&users_path, "users").expect("write users");
-
-        remove_sandbox_users_file(codex_home.path(), "stale creds").expect("remove users");
-        assert!(!users_path.exists());
-    }
-
-    #[test]
-    fn remove_sandbox_users_file_ignores_missing_file() {
-        let codex_home = TempDir::new().expect("tempdir");
-        let users_path = sandbox_users_path(codex_home.path());
-
-        remove_sandbox_users_file(codex_home.path(), "stale creds").expect("remove users");
-        assert!(!users_path.exists());
-    }
-
-    #[test]
-    fn legacy_split_identity_schema_is_detected() {
-        let contents = format!(
-            r#"{{"version":1,"{}":{{}},"{}":{{}}}}"#,
-            concat!("off", "line_username"),
-            concat!("on", "line_username")
-        );
-
-        assert!(contains_legacy_split_identity_schema(&contents));
-        assert!(!contains_legacy_split_identity_schema(
-            r#"{"version":1,"user":{"username":"RunSealSandbox","password":"secret"}}"#
-        ));
-    }
-
-    #[test]
-    fn nested_legacy_split_identity_schema_is_detected() {
-        let contents = format!(
-            r#"{{"version":1,"state":{{"{}":"S-1-5-21","{}":"C:/Users/legacy"}}}}"#,
-            concat!("off", "line_sid"),
-            concat!("on", "line_profile")
-        );
-
-        assert!(contains_legacy_split_identity_schema(&contents));
-    }
-
-    #[test]
-    fn incompatible_setup_state_rejects_legacy_split_identity_file() {
-        let codex_home = TempDir::new().expect("tempdir");
-        let users_path = sandbox_users_path(codex_home.path());
-        fs::create_dir_all(users_path.parent().expect("sandbox secrets dir"))
-            .expect("create sandbox secrets dir");
-        let contents = format!(
-            r#"{{"version":1,"{}":{{}},"{}":{{}}}}"#,
-            concat!("off", "line_username"),
-            concat!("on", "line_username")
-        );
-        fs::write(&users_path, contents).expect("write users");
-
-        let err = reject_incompatible_setup_state(codex_home.path())
-            .expect_err("legacy split identity state must fail closed");
-        let failure = err
-            .downcast_ref::<SetupFailure>()
-            .expect("legacy split identity error must be structured");
-
-        assert_eq!(
-            failure.code,
-            SetupErrorCode::OrchestratorSetupStateIncompatible
-        );
-        assert!(users_path.exists());
-    }
-
-    #[test]
-    fn incompatible_setup_state_rejects_valid_users_file_with_legacy_fields() {
-        let codex_home = TempDir::new().expect("tempdir");
-        let users_path = sandbox_users_path(codex_home.path());
-        fs::create_dir_all(users_path.parent().expect("sandbox secrets dir"))
-            .expect("create sandbox secrets dir");
-        let contents = format!(
-            r#"{{"version":6,"user":{{"username":"RunSealSandbox","password":"secret"}},"{}":{{}}}}"#,
-            concat!("off", "line_username")
-        );
-        fs::write(&users_path, contents).expect("write users");
-
-        let err = reject_incompatible_setup_state(codex_home.path())
-            .expect_err("valid users file with legacy fields must fail closed");
-        let failure = err
-            .downcast_ref::<SetupFailure>()
-            .expect("valid users file with legacy fields error must be structured");
-
-        assert_eq!(
-            failure.code,
-            SetupErrorCode::OrchestratorSetupStateIncompatible
-        );
-    }
-
-    #[test]
-    fn incompatible_setup_state_rejects_legacy_split_identity_marker() {
-        let codex_home = TempDir::new().expect("tempdir");
-        let marker_path = setup_marker_path(codex_home.path());
-        fs::create_dir_all(marker_path.parent().expect("sandbox dir")).expect("create sandbox dir");
-        let contents = format!(
-            r#"{{"version":1,"{}":{{}},"{}":{{}}}}"#,
-            concat!("off", "line_username"),
-            concat!("on", "line_username")
-        );
-        fs::write(&marker_path, contents).expect("write marker");
-
-        let err = reject_incompatible_setup_state(codex_home.path())
-            .expect_err("legacy split identity marker must fail closed");
-        let failure = err
-            .downcast_ref::<SetupFailure>()
-            .expect("legacy split identity marker error must be structured");
-
-        assert_eq!(
-            failure.code,
-            SetupErrorCode::OrchestratorSetupStateIncompatible
-        );
-        assert!(marker_path.exists());
-    }
-
-    #[test]
-    fn incompatible_setup_state_rejects_valid_marker_with_legacy_fields() {
-        let codex_home = TempDir::new().expect("tempdir");
-        let marker_path = setup_marker_path(codex_home.path());
-        fs::create_dir_all(marker_path.parent().expect("sandbox dir")).expect("create sandbox dir");
-        let contents = format!(
-            r#"{{"version":6,"sandbox_username":"RunSealSandbox","created_at":"2026-01-01T00:00:00Z","proxy_ports":[],"allow_local_binding":false,"{}":{{}}}}"#,
-            concat!("on", "line_username")
-        );
-        fs::write(&marker_path, contents).expect("write marker");
-
-        let err = reject_incompatible_setup_state(codex_home.path())
-            .expect_err("valid marker with legacy fields must fail closed");
-        let failure = err
-            .downcast_ref::<SetupFailure>()
-            .expect("valid marker with legacy fields error must be structured");
-
-        assert_eq!(
-            failure.code,
-            SetupErrorCode::OrchestratorSetupStateIncompatible
-        );
-    }
-
-    #[test]
-    fn incompatible_setup_state_rejects_nested_legacy_split_identity_file() {
-        let codex_home = TempDir::new().expect("tempdir");
-        let users_path = sandbox_users_path(codex_home.path());
-        fs::create_dir_all(users_path.parent().expect("sandbox secrets dir"))
-            .expect("create sandbox secrets dir");
-        let contents = format!(
-            r#"{{"version":1,"state":{{"{}":"S-1-5-21","{}":"C:/Users/legacy"}}}}"#,
-            concat!("off", "line_sid"),
-            concat!("on", "line_profile")
-        );
-        fs::write(&users_path, contents).expect("write users");
-
-        let err = reject_incompatible_setup_state(codex_home.path())
-            .expect_err("nested legacy split identity state must fail closed");
-        let failure = err
-            .downcast_ref::<SetupFailure>()
-            .expect("nested legacy split identity error must be structured");
-
-        assert_eq!(
-            failure.code,
-            SetupErrorCode::OrchestratorSetupStateIncompatible
-        );
-        assert!(users_path.exists());
-    }
 }

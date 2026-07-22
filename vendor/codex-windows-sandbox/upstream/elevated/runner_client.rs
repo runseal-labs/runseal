@@ -11,7 +11,10 @@ use crate::runner_pipe::connect_pipe;
 use crate::runner_pipe::create_named_pipe;
 use crate::runner_pipe::find_runner_exe;
 use crate::runner_pipe::pipe_pair;
+use crate::token::get_current_token_for_restriction;
+use crate::token::get_logon_sid_bytes;
 use crate::winutil::quote_windows_arg;
+use crate::winutil::string_from_sid_bytes;
 use crate::winutil::to_wide;
 use anyhow::Context;
 use anyhow::Result;
@@ -28,18 +31,26 @@ use std::time::Instant;
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::DUPLICATE_SAME_ACCESS;
 use windows_sys::Win32::Foundation::DuplicateHandle;
-use windows_sys::Win32::Foundation::ERROR_LOGON_FAILURE;
 use windows_sys::Win32::Foundation::ERROR_NOT_FOUND;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::HANDLE;
+use windows_sys::Win32::Foundation::HLOCAL;
+use windows_sys::Win32::Foundation::LocalFree;
+use windows_sys::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
+use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
+use windows_sys::Win32::Security::PROTECTED_DACL_SECURITY_INFORMATION;
+use windows_sys::Win32::Security::PSECURITY_DESCRIPTOR;
+use windows_sys::Win32::Security::SetKernelObjectSecurity;
 use windows_sys::Win32::System::Diagnostics::Debug::SetErrorMode;
 use windows_sys::Win32::System::IO::CancelSynchronousIo;
 use windows_sys::Win32::System::Pipes::PeekNamedPipe;
+use windows_sys::Win32::System::Threading::CREATE_SUSPENDED;
 use windows_sys::Win32::System::Threading::CreateProcessWithLogonW;
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 use windows_sys::Win32::System::Threading::GetCurrentThread;
 use windows_sys::Win32::System::Threading::LOGON_WITH_PROFILE;
 use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
+use windows_sys::Win32::System::Threading::ResumeThread;
 use windows_sys::Win32::System::Threading::STARTF_FORCEOFFFEEDBACK;
 use windows_sys::Win32::System::Threading::STARTUPINFOW;
 use windows_sys::Win32::System::Threading::TerminateProcess;
@@ -51,27 +62,52 @@ const RUNNER_SPAWN_READY_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const RUNNER_ERROR_MODE_FLAGS: u32 = 0x0001 | 0x0002;
 const WAIT_OBJECT_0: u32 = 0;
 
-#[derive(Debug)]
-struct RunnerLogonError {
-    code: u32,
-}
-
-impl std::fmt::Display for RunnerLogonError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "CreateProcessWithLogonW failed: {}", self.code)
+unsafe fn restrict_runner_object_access(process: HANDLE, thread: HANDLE) -> Result<()> {
+    let token = get_current_token_for_restriction()?;
+    let parent_logon_sid = get_logon_sid_bytes(token);
+    CloseHandle(token);
+    let parent_logon_sid = string_from_sid_bytes(&parent_logon_sid?).map_err(anyhow::Error::msg)?;
+    let sddl = to_wide(format!("D:P(A;;GA;;;SY)(A;;GA;;;{parent_logon_sid})"));
+    let mut security_descriptor: PSECURITY_DESCRIPTOR = ptr::null_mut();
+    if ConvertStringSecurityDescriptorToSecurityDescriptorW(
+        sddl.as_ptr(),
+        1,
+        &mut security_descriptor,
+        ptr::null_mut(),
+    ) == 0
+    {
+        anyhow::bail!(
+            "runner process security descriptor failed: {}",
+            GetLastError()
+        );
     }
+    let result = (|| {
+        for (label, handle) in [("process", process), ("thread", thread)] {
+            if SetKernelObjectSecurity(
+                handle,
+                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                security_descriptor,
+            ) == 0
+            {
+                anyhow::bail!("restrict runner {label} access failed: {}", GetLastError());
+            }
+        }
+        Ok(())
+    })();
+    let _ = LocalFree(security_descriptor as HLOCAL);
+    result
 }
 
-impl std::error::Error for RunnerLogonError {}
+fn runner_launch_cwd<'a>(runner_exe: &'a Path, fallback_cwd: &'a Path) -> &'a Path {
+    runner_exe
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(fallback_cwd)
+}
 
 pub(crate) struct RunnerTransport {
     pipe_write: File,
     pipe_read: File,
-}
-
-pub(crate) fn is_stale_sandbox_creds_error(err: &anyhow::Error) -> bool {
-    err.downcast_ref::<RunnerLogonError>()
-        .is_some_and(|err| err.code == ERROR_LOGON_FAILURE)
 }
 
 impl RunnerTransport {
@@ -135,7 +171,7 @@ fn connect_pipe_with_timeout(
     let (connect_result_tx, connect_result_rx) = mpsc::sync_channel(1);
     let mut connect_thread = Some(
         thread::Builder::new()
-            .name(format!("runseal-runner-connect-{pipe_label}"))
+            .name(format!("codex-runner-connect-{pipe_label}"))
             .spawn(move || {
                 let current_process = unsafe { GetCurrentProcess() };
                 let mut thread_handle = 0;
@@ -262,7 +298,8 @@ pub(crate) fn spawn_runner_transport(
     );
     let mut cmdline_vec = to_wide(&runner_full_cmd);
     let exe_w = to_wide(&runner_cmdline);
-    let cwd_w = to_wide(cwd);
+    let runner_cwd = runner_launch_cwd(&runner_exe, cwd);
+    let cwd_w = to_wide(runner_cwd);
     let user_w = to_wide(&sandbox_creds.username);
     let domain_w = to_wide(".");
     let password_w = to_wide(&sandbox_creds.password);
@@ -282,6 +319,7 @@ pub(crate) fn spawn_runner_transport(
             exe_w.as_ptr(),
             cmdline_vec.as_mut_ptr(),
             windows_sys::Win32::System::Threading::CREATE_NO_WINDOW
+                | CREATE_SUSPENDED
                 | windows_sys::Win32::System::Threading::CREATE_UNICODE_ENVIRONMENT,
             env_block
                 .as_ref()
@@ -296,12 +334,30 @@ pub(crate) fn spawn_runner_transport(
         SetErrorMode(previous_error_mode);
     }
     if spawn_res == 0 {
-        let err = unsafe { GetLastError() };
+        let err = unsafe { GetLastError() } as i32;
         unsafe {
             CloseHandle(h_pipe_in);
             CloseHandle(h_pipe_out);
         }
-        return Err(RunnerLogonError { code: err }.into());
+        return Err(anyhow::anyhow!("CreateProcessWithLogonW failed: {err}"));
+    }
+
+    let start_result = unsafe {
+        restrict_runner_object_access(pi.hProcess, pi.hThread)?;
+        if ResumeThread(pi.hThread) == u32::MAX {
+            anyhow::bail!("ResumeThread failed for command runner: {}", GetLastError());
+        }
+        Ok::<(), anyhow::Error>(())
+    };
+    if let Err(err) = start_result {
+        unsafe {
+            let _ = TerminateProcess(pi.hProcess, 1);
+            CloseHandle(pi.hThread);
+            CloseHandle(pi.hProcess);
+            CloseHandle(h_pipe_in);
+            CloseHandle(h_pipe_out);
+        }
+        return Err(err);
     }
     let expected_runner_pid = pi.dwProcessId;
 
@@ -417,21 +473,19 @@ fn wait_for_complete_frame(pipe_read: &File, timeout: Duration) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::RunnerLogonError;
-    use super::is_stale_sandbox_creds_error;
-    use pretty_assertions::assert_eq;
-    use windows_sys::Win32::Foundation::ERROR_LOGON_FAILURE;
-    use windows_sys::Win32::Foundation::ERROR_NOT_FOUND;
+    use super::runner_launch_cwd;
+    use std::path::Path;
 
     #[test]
-    fn stale_sandbox_creds_error_recognizes_logon_failures() {
+    fn runner_starts_from_helper_directory_not_command_cwd() {
+        let runner = Path::new(
+            r"C:\Users\me\AppData\Roaming\RunSeal\windows-sandbox\.sandbox-bin\runseal-command-runner.exe",
+        );
+        let command_cwd = Path::new(r"C:\Users\me\AppData\Roaming\RunSeal\scratch\session");
+
         assert_eq!(
-            [ERROR_LOGON_FAILURE, ERROR_NOT_FOUND].map(|code| {
-                let err =
-                    anyhow::Error::new(RunnerLogonError { code }).context("runner launch failed");
-                is_stale_sandbox_creds_error(&err)
-            }),
-            [true, false]
+            runner_launch_cwd(runner, command_cwd),
+            Path::new(r"C:\Users\me\AppData\Roaming\RunSeal\windows-sandbox\.sandbox-bin")
         );
     }
 }

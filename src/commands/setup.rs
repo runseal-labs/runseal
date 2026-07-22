@@ -433,15 +433,13 @@ fn run_windows_sandbox_setup_status(cwd: &Path, json_output: bool) -> Result<(),
 #[cfg(windows)]
 pub(crate) fn windows_sandbox_setup_status_for_cwd(cwd: &Path) -> Result<Value, String> {
     let sandbox_home = backend::windows_sandbox_home(cwd);
-    let broker_available =
-        codex_windows_sandbox::provisioning_setup_broker_is_available(&sandbox_home);
     let setup_complete = codex_windows_sandbox::sandbox_setup_is_complete(&sandbox_home);
     let elevated = codex_windows_sandbox::current_process_is_elevated()
         .map_err(|err| format!("windows sandbox setup status failed: {err}"))?;
     Ok(windows_sandbox_setup_status_payload(
         true,
         setup_complete,
-        broker_available,
+        setup_complete,
         Some(elevated),
     ))
 }

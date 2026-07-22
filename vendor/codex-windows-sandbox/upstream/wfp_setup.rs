@@ -11,8 +11,8 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 const WFP_SETUP_SERVICE_NAME: &str = "runseal-windows-sandbox-setup";
-const WFP_SETUP_SUCCESS_METRIC: &str = "runseal.windows_sandbox.wfp_setup_success";
-const WFP_SETUP_FAILURE_METRIC: &str = "runseal.windows_sandbox.wfp_setup_failure";
+const WFP_SETUP_SUCCESS_METRIC: &str = "codex.windows_sandbox.wfp_setup_success";
+const WFP_SETUP_FAILURE_METRIC: &str = "codex.windows_sandbox.wfp_setup_failure";
 
 #[derive(Debug, Clone, Copy)]
 enum WfpSetupMetricOutcome {
@@ -128,6 +128,8 @@ fn emit_wfp_setup_metric_safely<F>(
 pub fn install_wfp_filters<F>(
     codex_home: &Path,
     sandbox_username: &str,
+    appcontainer_sid: Option<&str>,
+    proxy_ports: &[u16],
     otel: Option<&StatsigMetricsSettings>,
     mut log: F,
 ) -> Result<()>
@@ -135,7 +137,7 @@ where
     F: FnMut(&str),
 {
     let (metric, install_result) = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-        || install_wfp_filters_for_account(sandbox_username),
+        || install_wfp_filters_for_account(sandbox_username, appcontainer_sid, proxy_ports),
     )) {
         Ok(Ok(installed_filter_count)) => {
             log(&format!(

@@ -29,12 +29,33 @@ use windows::core::Interface;
 use codex_windows_sandbox::SetupErrorCode;
 use codex_windows_sandbox::SetupFailure;
 
-// This is the stable identifier we use to find/update the rule idempotently.
-// It intentionally does not change between installs.
-const SANDBOX_BLOCK_RULE_NAME: &str = "runseal_sandbox_block_outbound";
-const SANDBOX_BLOCK_LOOPBACK_TCP_RULE_NAME: &str = "runseal_sandbox_block_loopback_tcp";
-const SANDBOX_BLOCK_LOOPBACK_UDP_RULE_NAME: &str = "runseal_sandbox_block_loopback_udp";
+// These are the stable identifiers we use to find/update rules idempotently.
+// They intentionally do not change between installs.
+const SANDBOX_BLOCK_RULE_NAME: &str = "runseal_sandbox_owner_block_outbound";
+const SANDBOX_BLOCK_LOOPBACK_TCP_RULE_NAME: &str = "runseal_sandbox_owner_block_loopback_tcp";
+const SANDBOX_BLOCK_LOOPBACK_UDP_RULE_NAME: &str = "runseal_sandbox_owner_block_loopback_udp";
 const SANDBOX_PROXY_INBOUND_ALLOW_RULE_NAME: &str = "runseal_sandbox_allow_loopback_proxy_inbound";
+const SANDBOX_PROXY_ALLOW_RULE_NAME: &str = "runseal_sandbox_allow_loopback_proxy";
+const LEGACY_SANDBOX_RULE_NAMES: &[&str] = &[
+    "runseal_sandbox_offline_block_outbound",
+    "runseal_sandbox_offline_block_loopback_tcp",
+    "runseal_sandbox_offline_block_loopback_udp",
+    "runseal_sandbox_online_allow_outbound",
+    "runseal_sandbox_offline_allow_loopback_proxy_inbound",
+    "runseal_sandbox_offline_allow_loopback_proxy",
+    "runseal_sandbox_block_restricted_icmp_v4",
+    "runseal_sandbox_block_restricted_icmp_v6",
+    "runseal_sandbox_block_outbound",
+    "runseal_sandbox_block_icmp_v4",
+    "runseal_sandbox_block_icmp_v6",
+    "runseal_sandbox_block_loopback_tcp",
+    "runseal_sandbox_block_loopback_udp",
+    "runseal_sandbox_owner_block_icmp_v4",
+    "runseal_sandbox_owner_block_icmp_v6",
+    "runseal_workspace_contained_block_outbound",
+    "runseal_workspace_contained_block_loopback_tcp",
+    "runseal_workspace_contained_block_loopback_udp",
+];
 
 // Friendly text shown in the firewall UI.
 const SANDBOX_BLOCK_RULE_FRIENDLY: &str = "RunSeal Sandbox - Block Non-Loopback Outbound";
@@ -43,7 +64,6 @@ const SANDBOX_BLOCK_LOOPBACK_TCP_RULE_FRIENDLY: &str =
 const SANDBOX_BLOCK_LOOPBACK_UDP_RULE_FRIENDLY: &str = "RunSeal Sandbox - Block Loopback UDP";
 const SANDBOX_PROXY_INBOUND_ALLOW_RULE_FRIENDLY: &str =
     "RunSeal Sandbox - Allow Loopback Proxy Inbound";
-const SANDBOX_PROXY_ALLOW_RULE_NAME: &str = "runseal_sandbox_allow_loopback_proxy";
 const LOOPBACK_REMOTE_ADDRESSES: &str = "127.0.0.0/8,::/127";
 const NON_LOOPBACK_REMOTE_ADDRESSES: &str = "0.0.0.0-126.255.255.255,128.0.0.0-255.255.255.255,::,::2-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff";
 
@@ -51,8 +71,7 @@ struct BlockRuleSpec<'a> {
     internal_name: &'a str,
     friendly_desc: &'a str,
     protocol: i32,
-    local_user_spec: &'a str,
-    sandbox_sid: &'a str,
+    local_user_owner: &'a str,
     remote_addresses: Option<&'a str>,
     remote_ports: Option<&'a str>,
 }
@@ -74,8 +93,6 @@ pub fn ensure_sandbox_proxy_allowlist(
     allow_local_binding: bool,
     log: &mut dyn Write,
 ) -> Result<()> {
-    let local_user_spec = format!("O:LSD:(A;;CC;;;{sandbox_sid})");
-
     let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
     if hr.is_err() {
         return Err(anyhow::Error::new(SetupFailure::new(
@@ -117,8 +134,7 @@ pub fn ensure_sandbox_proxy_allowlist(
                     internal_name: SANDBOX_BLOCK_LOOPBACK_UDP_RULE_NAME,
                     friendly_desc: SANDBOX_BLOCK_LOOPBACK_UDP_RULE_FRIENDLY,
                     protocol: NET_FW_IP_PROTOCOL_UDP.0,
-                    local_user_spec: &local_user_spec,
-                    sandbox_sid,
+                    local_user_owner: sandbox_sid,
                     remote_addresses: Some(LOOPBACK_REMOTE_ADDRESSES),
                     remote_ports: None,
                 },
@@ -133,8 +149,7 @@ pub fn ensure_sandbox_proxy_allowlist(
                     internal_name: SANDBOX_BLOCK_LOOPBACK_TCP_RULE_NAME,
                     friendly_desc: SANDBOX_BLOCK_LOOPBACK_TCP_RULE_FRIENDLY,
                     protocol: NET_FW_IP_PROTOCOL_TCP.0,
-                    local_user_spec: &local_user_spec,
-                    sandbox_sid,
+                    local_user_owner: sandbox_sid,
                     remote_addresses: Some(LOOPBACK_REMOTE_ADDRESSES),
                     remote_ports: None,
                 },
@@ -171,8 +186,7 @@ pub fn ensure_sandbox_proxy_allowlist(
                         internal_name: SANDBOX_BLOCK_LOOPBACK_TCP_RULE_NAME,
                         friendly_desc: SANDBOX_BLOCK_LOOPBACK_TCP_RULE_FRIENDLY,
                         protocol: NET_FW_IP_PROTOCOL_TCP.0,
-                        local_user_spec: &local_user_spec,
-                        sandbox_sid,
+                        local_user_owner: sandbox_sid,
                         remote_addresses: Some(LOOPBACK_REMOTE_ADDRESSES),
                         remote_ports: Some(&blocked_remote_ports),
                     },
@@ -190,8 +204,6 @@ pub fn ensure_sandbox_proxy_allowlist(
 }
 
 pub fn ensure_sandbox_outbound_block(sandbox_sid: &str, log: &mut dyn Write) -> Result<()> {
-    let local_user_spec = format!("O:LSD:(A;;CC;;;{sandbox_sid})");
-
     let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
     if hr.is_err() {
         return Err(anyhow::Error::new(SetupFailure::new(
@@ -224,13 +236,50 @@ pub fn ensure_sandbox_outbound_block(sandbox_sid: &str, log: &mut dyn Write) -> 
                     internal_name: SANDBOX_BLOCK_RULE_NAME,
                     friendly_desc: SANDBOX_BLOCK_RULE_FRIENDLY,
                     protocol: NET_FW_IP_PROTOCOL_ANY.0,
-                    local_user_spec: &local_user_spec,
-                    sandbox_sid,
+                    local_user_owner: sandbox_sid,
                     remote_addresses: Some(NON_LOOPBACK_REMOTE_ADDRESSES),
                     remote_ports: None,
                 },
                 log,
             )?;
+            Ok(())
+        })()
+    };
+
+    unsafe {
+        CoUninitialize();
+    }
+    result
+}
+
+pub fn remove_legacy_sandbox_rules(log: &mut dyn Write) -> Result<()> {
+    let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+    if hr.is_err() {
+        return Err(anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperFirewallComInitFailed,
+            format!("CoInitializeEx failed: {hr:?}"),
+        )));
+    }
+
+    let result = unsafe {
+        (|| -> Result<()> {
+            let policy: INetFwPolicy2 = CoCreateInstance(&NetFwPolicy2, None, CLSCTX_INPROC_SERVER)
+                .map_err(|err| {
+                    anyhow::Error::new(SetupFailure::new(
+                        SetupErrorCode::HelperFirewallPolicyAccessFailed,
+                        format!("CoCreateInstance NetFwPolicy2 failed: {err:?}"),
+                    ))
+                })?;
+            let rules = policy.Rules().map_err(|err| {
+                anyhow::Error::new(SetupFailure::new(
+                    SetupErrorCode::HelperFirewallPolicyAccessFailed,
+                    format!("INetFwPolicy2::Rules failed: {err:?}"),
+                ))
+            })?;
+
+            for name in LEGACY_SANDBOX_RULE_NAMES {
+                remove_rule_if_present(&rules, name, log)?;
+            }
             Ok(())
         })()
     };
@@ -355,8 +404,8 @@ fn ensure_block_rule(
     log_line(
         log,
         &format!(
-            "firewall rule configured name={} protocol={} RemoteAddresses={remote_addresses_log} RemotePorts={remote_ports_log} LocalUserAuthorizedList={}",
-            spec.internal_name, spec.protocol, spec.local_user_spec
+            "firewall rule configured name={} protocol={} RemoteAddresses={remote_addresses_log} RemotePorts={remote_ports_log} LocalUserOwner={}",
+            spec.internal_name, spec.protocol, spec.local_user_owner,
         ),
     )?;
     Ok(())
@@ -452,29 +501,50 @@ fn configure_rule(rule: &INetFwRule3, spec: &BlockRuleSpec<'_>) -> Result<()> {
             ))
         })?;
         configure_rule_network_scope(rule, spec)?;
-        rule.SetLocalUserAuthorizedList(&BSTR::from(spec.local_user_spec))
+        rule.SetLocalUserAuthorizedList(&BSTR::new())
             .map_err(|err| {
                 anyhow::Error::new(SetupFailure::new(
                     SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
-                    format!("SetLocalUserAuthorizedList failed: {err:?}"),
+                    format!("clear LocalUserAuthorizedList failed: {err:?}"),
+                ))
+            })?;
+        rule.SetLocalUserOwner(&BSTR::from(spec.local_user_owner))
+            .map_err(|err| {
+                anyhow::Error::new(SetupFailure::new(
+                    SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
+                    format!("SetLocalUserOwner failed: {err:?}"),
                 ))
             })?;
     }
 
-    // Read-back verification: ensure we actually wrote the expected SID scope.
-    let actual = unsafe { rule.LocalUserAuthorizedList() }.map_err(|err| {
+    let actual = unsafe { rule.LocalUserOwner() }.map_err(|err| {
+        anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperFirewallRuleVerifyFailed,
+            format!("LocalUserOwner (read-back) failed: {err:?}"),
+        ))
+    })?;
+    let actual_str = actual.to_string();
+    if !actual_str.eq_ignore_ascii_case(spec.local_user_owner) {
+        return Err(anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperFirewallRuleVerifyFailed,
+            format!(
+                "sandbox firewall rule owner mismatch: expected {}, got {actual_str}",
+                spec.local_user_owner
+            ),
+        )));
+    }
+    let authorized = unsafe { rule.LocalUserAuthorizedList() }.map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperFirewallRuleVerifyFailed,
             format!("LocalUserAuthorizedList (read-back) failed: {err:?}"),
         ))
     })?;
-    let actual_str = actual.to_string();
-    if !actual_str.contains(spec.sandbox_sid) {
+    if !authorized.is_empty() {
         return Err(anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperFirewallRuleVerifyFailed,
             format!(
-                "sandbox firewall rule user scope mismatch: expected SID {}, got {actual_str}",
-                spec.sandbox_sid
+                "sandbox firewall rule retained AppContainer user conditions: {}",
+                authorized
             ),
         )));
     }
@@ -717,8 +787,7 @@ mod tests {
         let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
         assert!(hr.is_ok(), "CoInitializeEx failed: {hr:?}");
 
-        let local_user_spec = "O:LSD:(A;;CC;;;S-1-5-18)";
-        let sandbox_sid = "S-1-5-18";
+        let local_user_owner = "S-1-5-18";
         let blocked_remote_ports =
             blocked_loopback_tcp_remote_ports(&[8080]).expect("proxy-port complement should exist");
         let specs = [
@@ -726,8 +795,7 @@ mod tests {
                 internal_name: SANDBOX_BLOCK_LOOPBACK_UDP_RULE_NAME,
                 friendly_desc: SANDBOX_BLOCK_LOOPBACK_UDP_RULE_FRIENDLY,
                 protocol: NET_FW_IP_PROTOCOL_UDP.0,
-                local_user_spec,
-                sandbox_sid,
+                local_user_owner,
                 remote_addresses: Some(LOOPBACK_REMOTE_ADDRESSES),
                 remote_ports: None,
             },
@@ -735,8 +803,7 @@ mod tests {
                 internal_name: SANDBOX_BLOCK_LOOPBACK_TCP_RULE_NAME,
                 friendly_desc: SANDBOX_BLOCK_LOOPBACK_TCP_RULE_FRIENDLY,
                 protocol: NET_FW_IP_PROTOCOL_TCP.0,
-                local_user_spec,
-                sandbox_sid,
+                local_user_owner,
                 remote_addresses: Some(LOOPBACK_REMOTE_ADDRESSES),
                 remote_ports: Some(&blocked_remote_ports),
             },
@@ -744,8 +811,7 @@ mod tests {
                 internal_name: SANDBOX_BLOCK_RULE_NAME,
                 friendly_desc: SANDBOX_BLOCK_RULE_FRIENDLY,
                 protocol: NET_FW_IP_PROTOCOL_ANY.0,
-                local_user_spec,
-                sandbox_sid,
+                local_user_owner,
                 remote_addresses: Some(NON_LOOPBACK_REMOTE_ADDRESSES),
                 remote_ports: None,
             },

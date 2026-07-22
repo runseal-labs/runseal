@@ -17,6 +17,7 @@ use crate::sandbox_bin_dir;
 
 const DEV_BUILD_VERSION_SENTINEL: &str = "0.0.0";
 pub(crate) const BIN_DIRNAME: &str = "bin";
+const CARGO_DEPS_DIRNAME: &str = "deps";
 pub(crate) const RESOURCES_DIRNAME: &str = "codex-resources";
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -50,6 +51,15 @@ pub(crate) fn helper_bin_dir(codex_home: &Path) -> PathBuf {
     sandbox_bin_dir(codex_home)
 }
 
+pub(crate) fn legacy_lookup(kind: HelperExecutable) -> PathBuf {
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(candidate) = bundled_executable_path_for_exe(&exe, kind.file_name())
+    {
+        return candidate;
+    }
+    PathBuf::from(kind.file_name())
+}
+
 pub(crate) fn resolve_helper_for_launch(
     kind: HelperExecutable,
     codex_home: &Path,
@@ -68,10 +78,10 @@ pub(crate) fn resolve_helper_for_launch(
             path
         }
         Err(err) => {
-            let fallback = helper_bin_dir(codex_home).join(kind.file_name());
+            let fallback = legacy_lookup(kind);
             log_note(
                 &format!(
-                    "helper copy failed for {}: {err:#}; using unavailable sandbox-bin path {}",
+                    "helper copy failed for {}: {err:#}; falling back to legacy path {}",
                     kind.label(),
                     fallback.display()
                 ),
@@ -85,56 +95,26 @@ pub(crate) fn resolve_helper_for_launch(
 pub fn resolve_current_exe_for_launch(codex_home: &Path, fallback_executable: &str) -> PathBuf {
     let source = match std::env::current_exe() {
         Ok(path) => path,
-        Err(_) => return fallback_exe_for_launch(codex_home, fallback_executable),
+        Err(_) => return PathBuf::from(fallback_executable),
     };
-    resolve_exe_for_launch(&source, codex_home)
-}
-
-fn fallback_exe_for_launch(codex_home: &Path, fallback_executable: &str) -> PathBuf {
-    helper_bin_dir(codex_home).join(fallback_executable)
-}
-
-pub fn resolve_exe_for_launch(source: &Path, codex_home: &Path) -> PathBuf {
-    match try_resolve_exe_for_launch(source, codex_home) {
-        Ok(path) => path,
+    let Some(file_name) = source.file_name() else {
+        return source;
+    };
+    let destination = helper_bin_dir(codex_home).join(file_name);
+    match copy_from_source_if_needed(&source, &destination) {
+        Ok(_) => destination,
         Err(err) => {
-            let Some(file_name) = source.file_name() else {
-                return source.to_path_buf();
-            };
-            let destination = helper_bin_dir(codex_home).join(file_name);
             let sandbox_log_dir = crate::sandbox_dir(codex_home);
             log_note(
                 &format!(
-                    "helper copy failed for executable: {err:#}; using unavailable sandbox-bin path {}",
-                    destination.display()
+                    "helper copy failed for current executable: {err:#}; falling back to legacy path {}",
+                    source.display()
                 ),
                 Some(&sandbox_log_dir),
             );
-            destination
+            source
         }
     }
-}
-
-pub(crate) fn try_resolve_exe_for_launch(source: &Path, codex_home: &Path) -> Result<PathBuf> {
-    let Some(file_name) = source.file_name() else {
-        return Ok(source.to_path_buf());
-    };
-    let destination = helper_bin_dir(codex_home).join(file_name);
-    let outcome = copy_from_source_if_needed(source, &destination)?;
-    let action = match outcome {
-        CopyOutcome::Reused => "reused",
-        CopyOutcome::ReCopied => "recopied",
-    };
-    let sandbox_log_dir = crate::sandbox_dir(codex_home);
-    log_note(
-        &format!(
-            "helper copy: {action} executable source={} destination={}",
-            source.display(),
-            destination.display()
-        ),
-        Some(&sandbox_log_dir),
-    );
-    Ok(destination)
 }
 
 pub(crate) fn copy_helper_if_needed(
@@ -221,6 +201,15 @@ pub(crate) fn bundled_executable_path_for_exe(exe: &Path, file_name: &str) -> Op
         let package_resource_candidate = package_dir.join(RESOURCES_DIRNAME).join(file_name);
         if package_resource_candidate.is_file() {
             return Some(package_resource_candidate);
+        }
+    }
+
+    if dir.file_name() == Some(OsStr::new(CARGO_DEPS_DIRNAME))
+        && let Some(target_dir) = dir.parent()
+    {
+        let cargo_test_candidate = target_dir.join(file_name);
+        if cargo_test_candidate.is_file() {
+            return Some(cargo_test_candidate);
         }
     }
 
@@ -378,6 +367,7 @@ fn destination_is_fresh(source: &Path, destination: &Path) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::BIN_DIRNAME;
+    use super::CARGO_DEPS_DIRNAME;
     use super::CopyOutcome;
     use super::DEV_BUILD_VERSION_SENTINEL;
     use super::HelperExecutable;
@@ -386,11 +376,9 @@ mod tests {
     use super::copy_from_source_if_needed;
     use super::destination_is_fresh;
     use super::dev_build_suffix;
-    use super::fallback_exe_for_launch;
     use super::helper_bin_dir;
     use super::helper_version_suffix;
     use super::materialized_file_name;
-    use super::resolve_exe_for_launch;
     use pretty_assertions::assert_eq;
     use std::fs;
     use std::path::Path;
@@ -482,41 +470,14 @@ mod tests {
     }
 
     #[test]
-    fn resolve_exe_for_launch_does_not_fallback_to_source_when_copy_fails() {
-        let tmp = TempDir::new().expect("tempdir");
-        let source = tmp.path().join("runseal-windows-sandbox-setup.exe");
-        let codex_home = tmp.path().join("codex-home");
-        fs::write(&source, b"setup").expect("write setup");
-        fs::write(&codex_home, b"not a directory").expect("block codex home directory");
-
-        let resolved = resolve_exe_for_launch(&source, &codex_home);
-
-        assert_eq!(
-            resolved,
-            helper_bin_dir(&codex_home).join("runseal-windows-sandbox-setup.exe")
-        );
-        assert_ne!(resolved, source);
-    }
-
-    #[test]
-    fn fallback_exe_for_launch_stays_under_sandbox_bin() {
-        let codex_home = Path::new(r"C:\Users\example\.codex");
-
-        assert_eq!(
-            helper_bin_dir(codex_home).join("runseal-windows-sandbox-setup.exe"),
-            fallback_exe_for_launch(codex_home, "runseal-windows-sandbox-setup.exe")
-        );
-    }
-
-    #[test]
     fn helper_source_lookup_checks_resource_dir() {
         let tmp = TempDir::new().expect("tempdir");
         let release_dir = tmp.path().join("release");
         let resources_dir = release_dir.join(RESOURCES_DIRNAME);
         fs::create_dir_all(&resources_dir).expect("create resources dir");
-        let exe = release_dir.join("runseal.exe");
+        let exe = release_dir.join("codex.exe");
         let helper = resources_dir.join("runseal-command-runner.exe");
-        fs::write(&exe, b"runseal").expect("write exe");
+        fs::write(&exe, b"codex").expect("write exe");
         fs::write(&helper, b"runner").expect("write helper");
 
         let resolved =
@@ -534,9 +495,27 @@ mod tests {
         let resources_dir = package_dir.join(RESOURCES_DIRNAME);
         fs::create_dir_all(&bin_dir).expect("create bin dir");
         fs::create_dir_all(&resources_dir).expect("create resources dir");
-        let exe = bin_dir.join("runseal.exe");
+        let exe = bin_dir.join("codex.exe");
         let helper = resources_dir.join("runseal-command-runner.exe");
-        fs::write(&exe, b"runseal").expect("write exe");
+        fs::write(&exe, b"codex").expect("write exe");
+        fs::write(&helper, b"runner").expect("write helper");
+
+        let resolved =
+            bundled_executable_path_for_exe(&exe, /*file_name*/ "runseal-command-runner.exe")
+                .expect("helper path");
+
+        assert_eq!(resolved, helper);
+    }
+
+    #[test]
+    fn helper_source_lookup_checks_cargo_test_parent_dir() {
+        let tmp = TempDir::new().expect("tempdir");
+        let target_dir = tmp.path().join("target").join("debug");
+        let deps_dir = target_dir.join(CARGO_DEPS_DIRNAME);
+        fs::create_dir_all(&deps_dir).expect("create deps dir");
+        let exe = deps_dir.join("codex_windows_sandbox-test.exe");
+        let helper = target_dir.join("runseal-command-runner.exe");
+        fs::write(&exe, b"test harness").expect("write exe");
         fs::write(&helper, b"runner").expect("write helper");
 
         let resolved =
@@ -555,10 +534,10 @@ mod tests {
         let bin_resources_dir = bin_dir.join(RESOURCES_DIRNAME);
         fs::create_dir_all(&package_resources_dir).expect("create package resources dir");
         fs::create_dir_all(&bin_resources_dir).expect("create bin resources dir");
-        let exe = bin_dir.join("runseal.exe");
+        let exe = bin_dir.join("codex.exe");
         let package_helper = package_resources_dir.join("runseal-command-runner.exe");
         let bin_helper = bin_resources_dir.join("runseal-command-runner.exe");
-        fs::write(&exe, b"runseal").expect("write exe");
+        fs::write(&exe, b"codex").expect("write exe");
         fs::write(&package_helper, b"package runner").expect("write package helper");
         fs::write(&bin_helper, b"bin runner").expect("write bin helper");
 
@@ -575,10 +554,10 @@ mod tests {
         let release_dir = tmp.path().join("release");
         let resources_dir = release_dir.join(RESOURCES_DIRNAME);
         fs::create_dir_all(&resources_dir).expect("create resources dir");
-        let exe = release_dir.join("runseal.exe");
+        let exe = release_dir.join("codex.exe");
         let sibling_helper = release_dir.join("runseal-command-runner.exe");
         let resource_helper = resources_dir.join("runseal-command-runner.exe");
-        fs::write(&exe, b"runseal").expect("write exe");
+        fs::write(&exe, b"codex").expect("write exe");
         fs::write(&sibling_helper, b"sibling runner").expect("write sibling helper");
         fs::write(&resource_helper, b"resource runner").expect("write resource helper");
 

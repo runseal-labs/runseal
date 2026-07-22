@@ -2,6 +2,7 @@ use std::ffi::c_void;
 use std::io;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::HANDLE;
+use windows_sys::Win32::Security::SECURITY_CAPABILITIES;
 use windows_sys::Win32::System::Threading::DeleteProcThreadAttributeList;
 use windows_sys::Win32::System::Threading::InitializeProcThreadAttributeList;
 use windows_sys::Win32::System::Threading::LPPROC_THREAD_ATTRIBUTE_LIST;
@@ -9,6 +10,7 @@ use windows_sys::Win32::System::Threading::UpdateProcThreadAttribute;
 
 const PROC_THREAD_ATTRIBUTE_HANDLE_LIST: usize = 0x0002_0002;
 const PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE: usize = 0x0002_0016;
+const PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES: usize = 0x0002_0009;
 
 pub struct ProcThreadAttributeList {
     buffer: Vec<u8>,
@@ -78,6 +80,29 @@ impl ProcThreadAttributeList {
                 PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
                 handle_list.as_mut_ptr().cast(),
                 std::mem::size_of_val(handle_list.as_slice()),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        if ok == 0 {
+            return Err(io::Error::from_raw_os_error(unsafe {
+                GetLastError() as i32
+            }));
+        }
+        Ok(())
+    }
+
+    pub fn set_security_capabilities(
+        &mut self,
+        capabilities: *mut SECURITY_CAPABILITIES,
+    ) -> io::Result<()> {
+        let ok = unsafe {
+            UpdateProcThreadAttribute(
+                self.as_mut_ptr(),
+                0,
+                PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
+                capabilities.cast(),
+                std::mem::size_of::<SECURITY_CAPABILITIES>(),
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
             )
