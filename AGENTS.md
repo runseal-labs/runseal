@@ -11,6 +11,15 @@ The public contract lives in `runseal-labs/rfcs`. This repo implements that cont
 - Implementation details that do not affect public behavior should stay in this repository.
 - Keep README and tests aligned with the current accepted RFCs.
 
+## Product Boundary
+
+- RunSeal is an OS-native, policy-governed environment for safe local command execution.
+- Keep the core contract focused on `Execution`, `SandboxPolicy`, `NetworkPolicy`, `PlatformSandboxPlan`, `SandboxBackend`, and `AuditEvent`.
+- Treat commands, helper processes, and integration adapters as executions that RunSeal can launch, constrain, audit, and fail closed around the OS execution boundary.
+- Do not turn the core runtime into an AI governance platform, organization-wide approval workflow, policy dashboard, SIEM product, compliance reporting system, app ecosystem, tool registry, or general automation framework.
+- Do not implement tool-specific servers or semantic governance for arbitrary tool protocols in the core runtime.
+- Managed proxies may be added later only for selected high-risk boundary controls and must remain optional adapters above the execution boundary.
+
 ## Compatibility Stance
 
 - Treat the current implementation as greenfield until an accepted public compatibility RFC says otherwise.

@@ -2,17 +2,19 @@
 
 [English](README.md)
 
-RunSeal 是面向 AI Agent 的 OS-native 本地沙箱层。
+RunSeal 是 OS-native、受策略约束的本地命令安全执行环境。
 
-它提供稳定的执行协议，把本地命令放进受策略约束的文件系统、进程、资源和网络边界中运行。企业网络访问应通过受控代理出口完成，由代理负责路由控制、边界层认证、敏感信息脱敏和结构化审计。
+它提供稳定的执行协议，把用户自带的命令放进可强制执行的文件系统、进程、资源和网络边界中运行。企业网络访问应通过受控代理出口完成，由代理负责路由控制、边界层认证、敏感信息脱敏和结构化审计。
 
-RunSeal 不是云端 VM 沙箱、Docker Desktop 替代品，也不是 microVM 平台。它是为 agent framework 量身打造的 local-first 执行边界。
+RunSeal 不是 AI governance 平台，不是工具生态，不是云端 VM 沙箱、Docker Desktop 替代品，也不是 microVM 平台。它是为 agent framework 量身打造的 local-first 执行边界。
 
 ## 状态
 
 RunSeal 是当前面向第三方集成的技术预览版本。仓库包含可构建的 CLI/RPC shell、标准策略 profile 归一化、canonical policy hash、backend capability 报告、一等公民的 Windows reference backend、`PlatformSandboxPlan` 摘要、JSONL audit 输出和黑盒 conformance 测试。
 
 当前执行能力刻意保持窄边界：`danger-full-access` 以本地非沙箱方式执行。`read-only` 和 `workspace-write` 在 Windows、macOS、Linux 三个平台都 supported。Windows 仍是当前最完备的平台，因为它还支持 `network.proxy`；`workspace-contained` 仅作为 Windows-only 的 strict compliance 选项，面向必须做 host-read containment 的部署。macOS 和 Linux 不会追求 `workspace-contained`，因为端侧 agent 需要保留实用的 host 工具和桌面集成能力。
+
+产品边界刻意保持简单。RunSeal 提供的是执行环境：启动命令、应用策略、强制 OS-native 边界、输出事件和审计记录，并在请求的控制能力不可用时 fail closed。它不试图变成 AI governance 平台，也不试图变成工具或应用生态。各种集成应保持为同一命令执行契约之上的薄 adapter。
 
 Windows 上，沙箱请求会产生一个 `PlatformSandboxPlan`，涵盖 runtime root、synthetic home、profile root、temp root、setup 要求、受保护文件系统类别、进程边界状态、网络 guard 状态和策略路径规划。reference backend 处理 root 创建与清理、环境重定向、进程清理、文件系统 enforcement、进程隔离，以及 direct network deny 或 proxy guard 的强制执行。
 
@@ -196,14 +198,14 @@ Windows sandbox 支持要求 Windows 10 1809 / build 17763 或更新版本。
 从以下入口之一开始：
 
 - CLI：调用 `runseal exec --json` 或 `runseal exec --events`，处理结构化错误。
-- MCP stdio：当需要把执行能力直接暴露给 AI agent 时，启动 `runseal mcp --stdio --policy <policy> [--network <mode>]`。
+- MCP stdio：只有在需要把 RunSeal 的窄执行 adapter 直接暴露给 AI agent 时，启动 `runseal mcp --stdio --policy <policy> [--network <mode>]`。
 - JSON-RPC stdio：启动 `runseal rpc --stdio`，依次调用 `getVersion`、`getCapabilities`、`execute`。
 - Service stdio：当一个本地进程需要跨 JSON-RPC 请求持有已完成 execution 状态时，启动 `runseal service --stdio`。
 - Conformance：设置 `RUNSEAL_BIN=/path/to/runseal`，运行 `tests/` 下的黑盒测试。
 
 可运行的 stdio JSON-RPC client 示例见 [`examples/stdio-json-rpc`](examples/stdio-json-rpc)。
 
-MCP server 只暴露一个 model-controlled tool：`exec`。服务启动者在启动时固定 `policy` 和 `network`；agent 不能通过 MCP 调用 `capabilities`、解释 policy、切换 network mode、切换 sandbox level 或提供 stdin。tool call 只接受 `command`、必填 `cwd`、可选 `timeout_ms` 和可选字符串 `env` 覆盖。`env` 仍受固定 RunSeal policy 的 scrub 规则约束。这样 MCP 面保留 coding agent 所需的执行能力，但不会让模型给自己放宽权限。
+RunSeal 的 MCP surface 是窄执行 adapter，不是通用 MCP server framework。它只暴露一个 model-controlled tool：`exec`。服务启动者在启动时固定 `policy` 和 `network`；agent 不能通过 MCP 调用 `capabilities`、解释 policy、切换 network mode、切换 sandbox level 或提供 stdin。tool call 只接受 `command`、必填 `cwd`、可选 `timeout_ms` 和可选字符串 `env` 覆盖。`env` 仍受固定 RunSeal policy 的 scrub 规则约束。这样 MCP 面保留 coding agent 所需的执行能力，但不会让模型给自己放宽权限。
 
 最小 MCP host 配置：
 
@@ -280,6 +282,9 @@ RUNSEAL_BIN=target/debug/runseal cargo test
 
 ## 非目标
 
+- 不在 core runtime 内做 AI governance 平台、组织级审批流、policy dashboard、SIEM 产品或合规报表系统。
+- 不实现通用 MCP server，也不承诺理解任意 MCP tool 的语义。
+- 不在 core runtime 内做 universal MCP gateway、tool registry 或 adapter 生态。
 - 不依赖 Docker daemon。
 - 企业默认场景不提供非托管直连网络访问。
 - 不把真实密钥直接注入沙箱进程。

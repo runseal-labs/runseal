@@ -2,17 +2,19 @@
 
 [简体中文](README.zh-CN.md)
 
-RunSeal is an OS-native sandbox layer for AI agents.
+RunSeal is an OS-native, policy-governed environment for safe local command execution.
 
-It exposes a stable execution protocol that runs local commands inside policy-governed filesystem, process, resource, and network boundaries. Enterprise network access routes through a controlled proxy that enforces routes, injects authentication at the boundary, redacts sensitive data, and emits structured audit events.
+It exposes a stable execution protocol that launches user-provided commands inside enforceable filesystem, process, resource, and network boundaries. Enterprise network access routes through a controlled proxy that enforces routes, injects authentication at the boundary, redacts sensitive data, and emits structured audit events.
 
-RunSeal is **not** a cloud VM sandbox, a Docker Desktop replacement, or a microVM platform. It is a local-first execution boundary purpose-built for agent frameworks.
+RunSeal is **not** an AI governance platform, a tool ecosystem, a cloud VM sandbox, a Docker Desktop replacement, or a microVM platform. It is a local-first execution boundary purpose-built for agent frameworks.
 
 ## Status
 
 RunSeal is a technical-preview release for third-party integration. The repository includes a buildable CLI/RPC shell, standard policy profile normalization, canonical policy hashes, backend capability reporting, a first-class Windows reference backend, `PlatformSandboxPlan` summaries, JSONL audit output, and black-box conformance tests.
 
 Execution support is intentionally narrow today: `danger-full-access` runs as local, non-sandboxed execution. `read-only` and `workspace-write` are supported on Windows, macOS, and Linux. Windows remains the most complete platform because it also supports `network.proxy`, while `workspace-contained` is a strict Windows-only compliance option for deployments that require host-read containment. macOS and Linux intentionally do not pursue `workspace-contained` because endpoint agents need practical host-side tool and desktop integration.
+
+The product boundary is deliberately simple. RunSeal provides the execution environment: launch a command, apply policy, enforce OS-native boundaries, emit events and audit records, and fail closed when requested controls are unavailable. It does not try to become an AI governance platform or a tool/application ecosystem. Integrations should remain thin adapters over the same command execution contract.
 
 On Windows, a sandbox request produces a `PlatformSandboxPlan` covering runtime root, synthetic home, profile root, temp root, setup requirements, protected filesystem categories, process boundary state, network guard state, and policy path planning. The reference backend handles root creation and cleanup, environment redirects, process cleanup, filesystem enforcement, process isolation, and direct network deny-or-proxy guard enforcement.
 
@@ -214,14 +216,14 @@ Supported `execute` params: `command` (string array; the program name must be pa
 Start with one of these surfaces:
 
 - CLI: call `runseal exec --json` or `runseal exec --events` and handle structured errors.
-- MCP stdio: launch `runseal mcp --stdio --policy <policy> [--network <mode>]` when exposing execution directly to an AI agent.
+- MCP stdio: launch `runseal mcp --stdio --policy <policy> [--network <mode>]` only when exposing RunSeal's narrow execution adapter directly to an AI agent.
 - JSON-RPC stdio: launch `runseal rpc --stdio`, call `getVersion`, then `getCapabilities`, then `execute`.
 - Service stdio: launch `runseal service --stdio` when one local process should own completed execution state across JSON-RPC requests.
 - Conformance: set `RUNSEAL_BIN=/path/to/runseal` and run the black-box tests in `tests/`.
 
 A runnable stdio JSON-RPC client is available in [`examples/stdio-json-rpc`](examples/stdio-json-rpc).
 
-The MCP server exposes exactly one model-controlled tool, `exec`. The server owner fixes `policy` and `network` at startup; the agent cannot call `capabilities`, explain policy, change network mode, change sandbox level, or provide stdin through MCP. Tool calls accept only `command`, required `cwd`, optional `timeout_ms`, and optional `env` string overrides. `env` is still subject to the fixed RunSeal policy scrub rules. This keeps the MCP surface useful for coding agents while preventing the model from granting itself broader execution permissions.
+RunSeal's MCP surface is a narrow execution adapter, not a general-purpose MCP server framework. It exposes exactly one model-controlled tool, `exec`. The server owner fixes `policy` and `network` at startup; the agent cannot call `capabilities`, explain policy, change network mode, change sandbox level, or provide stdin through MCP. Tool calls accept only `command`, required `cwd`, optional `timeout_ms`, and optional `env` string overrides. `env` is still subject to the fixed RunSeal policy scrub rules. This keeps the MCP surface useful for coding agents while preventing the model from granting itself broader execution permissions.
 
 Minimal MCP host config:
 
@@ -298,6 +300,9 @@ RUNSEAL_BIN=target/debug/runseal cargo test
 
 ## Non-goals
 
+- No AI governance platform, organization-wide approval workflow, policy dashboard, SIEM product, or compliance reporting system in the core runtime.
+- No implementation of general-purpose MCP servers or semantic governance for arbitrary MCP tools.
+- No universal MCP gateway, tool registry, or adapter ecosystem in the core runtime.
 - No Docker daemon dependency.
 - No unmanaged direct network bypass when enterprise network controls are requested.
 - No direct secret injection into sandboxed processes.
