@@ -138,13 +138,16 @@ jobs:
       - name: Generate aggregate checksums
         run: |
           set -euo pipefail
-          find dist -maxdepth 1 -type f \
-            ! -name '*.sha256' \
-            ! -name '*-sbom.cdx.json' \
-            ! -name 'SHA256SUMS' \
-            -printf '%f\0' |
-            sort -z |
-            xargs -0 -I{} sha256sum "dist/{}" > dist/SHA256SUMS
+          (
+            cd dist
+            find . -maxdepth 1 -type f \
+              ! -name '*.sha256' \
+              ! -name '*-sbom.cdx.json' \
+              ! -name 'SHA256SUMS' \
+              -printf '%f\0' |
+              sort -z |
+              xargs -0 -I{} sha256sum "{}"
+          ) > dist/SHA256SUMS
 
       - name: Attest release artifact provenance
         uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
