@@ -17,3 +17,6 @@ results, or reports.
 
 Tier 0 runner coverage should stay minimal and grow one observable lifecycle
 step at a time.
+
+The reproducible Windows contained and network evidence snapshot is documented
+in [`docs/security/2026-07-windows-contained-network-adversarial-report.md`](../../docs/security/2026-07-windows-contained-network-adversarial-report.md).
