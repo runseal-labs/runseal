@@ -199,13 +199,13 @@ fn expected_windows_sandbox_supported() -> bool {
 }
 
 fn expected_proxy_feature_reported() -> bool {
-    cfg!(any(windows, target_os = "macos"))
+    cfg!(any(windows, target_os = "macos", target_os = "linux"))
 }
 
 fn expected_proxy_feature_status() -> &'static str {
     if cfg!(windows) {
         "supported"
-    } else if cfg!(target_os = "macos") {
+    } else if cfg!(any(target_os = "macos", target_os = "linux")) {
         "experimental"
     } else {
         "unsupported"

@@ -5,6 +5,12 @@ use std::env;
 use std::fs;
 use std::io::{ErrorKind, Read, Write};
 use std::net::TcpListener;
+#[cfg(target_os = "linux")]
+use std::net::TcpStream;
+#[cfg(target_os = "linux")]
+use std::os::fd::AsRawFd;
+#[cfg(target_os = "linux")]
+use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::OnceLock;
@@ -537,7 +543,7 @@ fn start_loopback_http_server() -> Result<(u16, thread::JoinHandle<Result<bool>>
     Ok((port, handle))
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn start_loopback_tunnel_server() -> Result<(u16, thread::JoinHandle<Result<bool>>)> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
     listener.set_nonblocking(true)?;
@@ -564,7 +570,7 @@ fn start_loopback_tunnel_server() -> Result<(u16, thread::JoinHandle<Result<bool
     Ok((port, handle))
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn start_loopback_accept_probe() -> Result<(u16, thread::JoinHandle<Result<bool>>)> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
     listener.set_nonblocking(true)?;
@@ -583,6 +589,25 @@ fn start_loopback_accept_probe() -> Result<(u16, thread::JoinHandle<Result<bool>
         }
     });
     Ok((port, handle))
+}
+
+#[cfg(target_os = "linux")]
+fn start_unix_accept_probe(path: &Path) -> Result<thread::JoinHandle<Result<bool>>> {
+    let listener = UnixListener::bind(path)?;
+    listener.set_nonblocking(true)?;
+    Ok(thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match listener.accept() {
+                Ok(_) => return Ok(true),
+                Err(err) if err.kind() == ErrorKind::WouldBlock && Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(err) if err.kind() == ErrorKind::WouldBlock => return Ok(false),
+                Err(err) => return Err(err.into()),
+            }
+        }
+    }))
 }
 
 #[test]
@@ -1269,9 +1294,9 @@ fn network_proxy_blocks_direct_egress_when_supported_or_fails_closed() -> Result
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
-fn macos_network_proxy_blocks_other_loopback_ports() -> Result<()> {
+fn portable_network_proxy_blocks_other_loopback_ports() -> Result<()> {
     let tmp = TempDir::new()?;
     let workspace = tmp.path().join("workspace");
     fs::create_dir_all(&workspace)?;
@@ -1296,6 +1321,147 @@ fn macos_network_proxy_blocks_other_loopback_ports() -> Result<()> {
             .as_str()
             .unwrap_or_default()
             .contains("loopback-bypass-ok")
+    );
+    Ok(())
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn portable_network_proxy_blocks_direct_udp_egress() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let workspace = tmp.path().join("workspace");
+    fs::create_dir_all(&workspace)?;
+    let response = execute_platform_script(
+        "workspace-write",
+        &workspace,
+        Some("proxy"),
+        "import socket; sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); sock.sendto(b'runseal', ('1.1.1.1', 53)); print('direct-udp-ok')".to_string(),
+        String::new(),
+    )?;
+
+    assert_eq!(response["result"]["status"], "finished");
+    assert_ne!(response["result"]["exit_code"], 0);
+    assert!(
+        !response["result"]["stdout"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("direct-udp-ok")
+    );
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_network_proxy_hides_unapproved_host_unix_sockets() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let workspace = tmp.path().join("workspace");
+    fs::create_dir_all(&workspace)?;
+    let host_socket_dir = TempDir::new()?;
+    let host_socket = host_socket_dir.path().join("host.sock");
+    let accept_probe = start_unix_accept_probe(&host_socket)?;
+    let socket_literal = serde_json::to_string(&host_socket.to_string_lossy())?;
+    let response = execute_platform_script(
+        "workspace-write",
+        &workspace,
+        Some("proxy"),
+        format!(
+            "import socket; sock = socket.socket(socket.AF_UNIX); sock.connect({socket_literal}); print('host-unix-socket-ok')"
+        ),
+        String::new(),
+    )?;
+
+    let accepted = accept_probe.join().expect("Unix socket accept probe")?;
+    assert!(!accepted, "{response:#}");
+    assert_eq!(response["result"]["status"], "finished");
+    assert_ne!(response["result"]["exit_code"], 0);
+    assert!(
+        !response["result"]["stdout"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("host-unix-socket-ok")
+    );
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_network_proxy_drops_preopened_network_sockets() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let inherited = TcpStream::connect(listener.local_addr()?)?;
+    let (mut observer, _) = listener.accept()?;
+    observer.set_read_timeout(Some(Duration::from_secs(3)))?;
+    let inherited_fd = inherited.as_raw_fd();
+    let flags = unsafe { libc::fcntl(inherited_fd, libc::F_GETFD) };
+    assert!(flags >= 0);
+    assert_eq!(
+        unsafe { libc::fcntl(inherited_fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) },
+        0
+    );
+
+    let tmp = TempDir::new()?;
+    let workspace = tmp.path().join("workspace");
+    fs::create_dir_all(&workspace)?;
+    let mut child = Command::new(require_runseal_bin()?)
+        .args(["rpc", "--stdio"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("spawn RunSeal with inherited socket")?;
+    let request = rpc_request(
+        "execute",
+        json!({
+            "command": [
+                "/usr/bin/python3",
+                "-c",
+                "import os, socket; socket.socket(fileno=int(os.environ['RUNSEAL_TEST_SOCKET_FD'])).sendall(b'leak'); print('preopened-socket-ok')"
+            ],
+            "cwd": workspace,
+            "policy": "workspace-write",
+            "network": "proxy",
+            "env": {"RUNSEAL_TEST_SOCKET_FD": inherited_fd.to_string()}
+        }),
+    );
+    child
+        .stdin
+        .take()
+        .context("RunSeal stdin")?
+        .write_all(request.as_bytes())?;
+    drop(inherited);
+    let output = child.wait_with_output()?;
+    assert!(output.status.success(), "{output:?}");
+
+    let mut observed = [0_u8; 4];
+    let observed_count = match observer.read(&mut observed) {
+        Ok(count) => count,
+        Err(err)
+            if matches!(
+                err.kind(),
+                ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::UnexpectedEof
+            ) =>
+        {
+            0
+        }
+        Err(err) => return Err(err.into()),
+    };
+    assert_eq!(
+        observed_count,
+        0,
+        "preopened socket leaked bytes: {:?}",
+        &observed[..observed_count]
+    );
+
+    let response = String::from_utf8(output.stdout)?
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .find(|message| message["id"] == 1)
+        .context("execute response")?;
+    assert_ne!(response["result"]["exit_code"], 0, "{response:#}");
+    assert!(
+        !response["result"]["stdout"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("preopened-socket-ok")
     );
     Ok(())
 }
@@ -1549,9 +1715,9 @@ $successText
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
-fn macos_network_proxy_tunnels_connect_bytes() -> Result<()> {
+fn portable_network_proxy_tunnels_connect_bytes() -> Result<()> {
     let tmp = TempDir::new()?;
     let workspace = tmp.path().join("workspace");
     fs::create_dir_all(&workspace)?;

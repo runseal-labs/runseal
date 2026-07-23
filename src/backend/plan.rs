@@ -174,7 +174,7 @@ impl PlatformSandboxPlan {
         let profile_root = runtime_root.join("profile");
         let synthetic_home = runtime_root.join("home");
         let temp_root = runtime_root.join("tmp");
-        Self {
+        let mut plan = Self {
             backend: backend.name(),
             backend_status: backend.status(),
             platform: backend.platform(),
@@ -234,7 +234,11 @@ impl PlatformSandboxPlan {
                 ("TMPDIR".to_string(), path_string(temp_root.as_path())),
             ],
             required_backend_features: policy.required_backend_feature_names(),
+        };
+        if policy.network.mode == NetworkMode::Proxy {
+            plan.network_managed_proxy = "required";
         }
+        plan
     }
 
     pub(super) fn linux_read_only_experimental(

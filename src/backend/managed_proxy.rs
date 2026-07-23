@@ -14,6 +14,16 @@ use std::sync::{
 };
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
+#[cfg(target_os = "linux")]
+use std::{
+    fs::DirBuilder,
+    os::unix::{
+        fs::DirBuilderExt,
+        net::{UnixListener, UnixStream},
+        process::ExitStatusExt,
+    },
+    process::{Command, Stdio},
+};
 #[cfg(windows)]
 use windows_sys::Win32::Foundation::CloseHandle;
 #[cfg(windows)]
@@ -22,6 +32,10 @@ use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject};
 const MAX_HEADER_BYTES: usize = 64 * 1024;
 const NO_PROXY: &str = "";
 const MANAGED_PROXY_PORT: u16 = 43129;
+#[cfg(target_os = "linux")]
+const LINUX_SANDBOX_PROXY_PORT: u16 = 43129;
+#[cfg(target_os = "linux")]
+const LINUX_SANDBOX_PROXY_SOCKET: &str = "/run/runseal-proxy/proxy.sock";
 const MANAGED_PROXY_BIND_RETRY_TIMEOUT: Duration = Duration::from_secs(30);
 const MANAGED_PROXY_BIND_RETRY_INTERVAL: Duration = Duration::from_millis(50);
 const MANAGED_PROXY_HEALTH_HOST: &str = "runseal.local";
@@ -45,6 +59,15 @@ pub(super) struct ManagedSandboxProxy {
     addr: SocketAddr,
     token: String,
     event_path: PathBuf,
+}
+
+#[cfg(target_os = "linux")]
+pub(super) struct LinuxSandboxProxy {
+    managed_proxy: ManagedSandboxProxy,
+    host_dir: PathBuf,
+    host_socket: PathBuf,
+    shutdown: Arc<AtomicBool>,
+    bridge_thread: Option<JoinHandle<()>>,
 }
 
 struct ManagedSandboxProxyState {
@@ -96,7 +119,7 @@ impl ManagedSandboxProxy {
         }
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub(super) fn start() -> io::Result<Self> {
         Self::start_dedicated_on_with_token(
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
@@ -168,7 +191,11 @@ impl ManagedSandboxProxy {
     }
 
     pub(super) fn environment(&self) -> Vec<(String, String)> {
-        let proxy_url = format!("http://runseal:{}@{}", self.token, self.addr);
+        self.environment_for_addr(self.addr)
+    }
+
+    fn environment_for_addr(&self, addr: SocketAddr) -> Vec<(String, String)> {
+        let proxy_url = format!("http://runseal:{}@{addr}", self.token);
         let mut env = vec![
             ("RUNSEAL_NETWORK_PROXY_ACTIVE".to_string(), "1".to_string()),
             (
@@ -201,6 +228,68 @@ impl ManagedSandboxProxy {
 
     pub(super) fn drain_events(&self) -> Vec<Value> {
         drain_proxy_events(&self.event_path).unwrap_or_default()
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl LinuxSandboxProxy {
+    pub(super) fn start() -> io::Result<Self> {
+        let managed_proxy = ManagedSandboxProxy::start()?;
+        let host_dir = create_linux_proxy_bridge_dir()?;
+        let host_socket = host_dir.join("proxy.sock");
+        let listener = match UnixListener::bind(&host_socket) {
+            Ok(listener) => listener,
+            Err(err) => {
+                let _ = fs::remove_dir(&host_dir);
+                return Err(err);
+            }
+        };
+        if let Err(err) = listener.set_nonblocking(true) {
+            let _ = fs::remove_file(&host_socket);
+            let _ = fs::remove_dir(&host_dir);
+            return Err(err);
+        }
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let thread_shutdown = Arc::clone(&shutdown);
+        let target = managed_proxy.addr();
+        let bridge_thread = thread::spawn(move || {
+            linux_proxy_bridge_accept_loop(listener, target, thread_shutdown);
+        });
+        Ok(Self {
+            managed_proxy,
+            host_dir,
+            host_socket,
+            shutdown,
+            bridge_thread: Some(bridge_thread),
+        })
+    }
+
+    pub(super) fn environment(&self) -> Vec<(String, String)> {
+        self.managed_proxy.environment_for_addr(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            LINUX_SANDBOX_PROXY_PORT,
+        ))
+    }
+
+    pub(super) fn host_dir(&self) -> &Path {
+        &self.host_dir
+    }
+
+    pub(super) fn drain_events(&self) -> Vec<Value> {
+        self.managed_proxy.drain_events()
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for LinuxSandboxProxy {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::Relaxed);
+        let _ = UnixStream::connect(&self.host_socket);
+        if let Some(thread) = self.bridge_thread.take() {
+            let _ = thread.join();
+        }
+        let _ = fs::remove_file(&self.host_socket);
+        let _ = fs::remove_dir(&self.host_dir);
     }
 }
 
@@ -299,6 +388,140 @@ fn accept_loop(listener: TcpListener, shutdown: Arc<AtomicBool>, tokens: ProxyTo
             }
             Err(_) => break,
         }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn create_linux_proxy_bridge_dir() -> io::Result<PathBuf> {
+    for _ in 0..16 {
+        let suffix: String = new_proxy_token()?.chars().take(24).collect();
+        let path = std::env::temp_dir().join(format!("runseal-proxy-{suffix}"));
+        match DirBuilder::new().mode(0o700).create(&path) {
+            Ok(()) => return Ok(path),
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(err),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not allocate a private managed proxy bridge directory",
+    ))
+}
+
+#[cfg(target_os = "linux")]
+fn linux_proxy_bridge_accept_loop(
+    listener: UnixListener,
+    target: SocketAddr,
+    shutdown: Arc<AtomicBool>,
+) {
+    while !shutdown.load(Ordering::Relaxed) {
+        match listener.accept() {
+            Ok((client, _)) => {
+                if shutdown.load(Ordering::Relaxed) {
+                    break;
+                }
+                if client.set_nonblocking(false).is_err() {
+                    continue;
+                }
+                thread::spawn(move || {
+                    let Ok(upstream) = TcpStream::connect_timeout(&target, Duration::from_secs(2))
+                    else {
+                        return;
+                    };
+                    let _ = copy_tcp_unix(upstream, client);
+                });
+            }
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(20));
+            }
+            Err(_) => break,
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn run_linux_proxy_relay(command: &[String]) -> Result<i32, String> {
+    let (program, args) = command
+        .split_first()
+        .ok_or_else(|| "internal Linux proxy relay requires a command".to_string())?;
+    let listener =
+        TcpListener::bind((Ipv4Addr::LOCALHOST, LINUX_SANDBOX_PROXY_PORT)).map_err(|_| {
+            "internal Linux proxy relay could not bind its loopback endpoint".to_string()
+        })?;
+    listener.set_nonblocking(true).map_err(|_| {
+        "internal Linux proxy relay could not configure its loopback endpoint".to_string()
+    })?;
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let thread_shutdown = Arc::clone(&shutdown);
+    let relay_thread = thread::spawn(move || {
+        linux_sandbox_relay_accept_loop(listener, thread_shutdown);
+    });
+
+    let status = Command::new(program)
+        .args(args)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status();
+
+    shutdown.store(true, Ordering::Relaxed);
+    let _ = TcpStream::connect((Ipv4Addr::LOCALHOST, LINUX_SANDBOX_PROXY_PORT));
+    let _ = relay_thread.join();
+
+    let status =
+        status.map_err(|_| "internal Linux proxy relay could not start command".to_string())?;
+    Ok(status
+        .code()
+        .unwrap_or_else(|| 128 + status.signal().unwrap_or(1)))
+}
+
+#[cfg(target_os = "linux")]
+fn linux_sandbox_relay_accept_loop(listener: TcpListener, shutdown: Arc<AtomicBool>) {
+    while !shutdown.load(Ordering::Relaxed) {
+        match listener.accept() {
+            Ok((client, _)) => {
+                if shutdown.load(Ordering::Relaxed) {
+                    break;
+                }
+                if client.set_nonblocking(false).is_err() {
+                    continue;
+                }
+                thread::spawn(move || {
+                    let Ok(bridge) = UnixStream::connect(LINUX_SANDBOX_PROXY_SOCKET) else {
+                        return;
+                    };
+                    let _ = copy_tcp_unix(client, bridge);
+                });
+            }
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(20));
+            }
+            Err(_) => break,
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn copy_tcp_unix(mut tcp: TcpStream, mut unix: UnixStream) -> io::Result<()> {
+    let mut tcp_reader = tcp.try_clone()?;
+    let mut unix_writer = unix.try_clone()?;
+    let writer = thread::spawn(move || {
+        let result = io::copy(&mut tcp_reader, &mut unix_writer);
+        let _ = unix_writer.shutdown(Shutdown::Write);
+        result
+    });
+    let reader_result = io::copy(&mut unix, &mut tcp);
+    let _ = tcp.shutdown(Shutdown::Write);
+    let writer_result = writer
+        .join()
+        .map_err(|_| io::Error::other("Linux managed proxy relay thread panicked"))?;
+    match (reader_result, writer_result) {
+        (Ok(_), Ok(_)) => Ok(()),
+        (Err(reader_err), Ok(_)) => Err(reader_err),
+        (Ok(_), Err(writer_err)) => Err(writer_err),
+        (Err(reader_err), Err(writer_err)) => Err(io::Error::other(format!(
+            "Linux managed proxy relay read failed ({reader_err}); write failed ({writer_err})"
+        ))),
     }
 }
 fn handle_client(mut client: TcpStream, tokens: ProxyTokenMap) -> io::Result<()> {
@@ -510,14 +733,18 @@ fn drain_proxy_events(path: &Path) -> io::Result<Vec<Value>> {
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(err) => return Err(err),
     };
-    if contents.is_empty() {
+    if contents.is_empty() || !contents.ends_with('\n') {
         return Ok(Vec::new());
     }
-    let _ = fs::write(path, "");
-    Ok(contents
+    let events = contents
         .lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .collect())
+        .map(serde_json::from_str::<Value>)
+        .collect::<Result<Vec<_>, _>>();
+    let Ok(events) = events else {
+        return Ok(Vec::new());
+    };
+    let _ = fs::write(path, "");
+    Ok(events)
 }
 
 struct ProxyRequestMetadata {

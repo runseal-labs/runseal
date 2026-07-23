@@ -368,8 +368,16 @@ fn linux_skeleton_reports_experimental_disabled_features() {
     assert_eq!(capabilities["features"]["process_cleanup"], true);
     assert_eq!(capabilities["features"]["direct_network_deny"], true);
     assert_eq!(capabilities["features"]["network_disabled"], true);
-    assert_eq!(capabilities["features"]["network_proxy"], false);
-    assert_eq!(capabilities["features"]["managed_proxy"], false);
+    assert_eq!(capabilities["features"]["network_proxy"], true);
+    assert_eq!(capabilities["features"]["managed_proxy"], true);
+    assert_eq!(
+        capabilities["feature_statuses"]["network_proxy"],
+        "experimental"
+    );
+    assert_eq!(
+        capabilities["feature_statuses"]["managed_proxy"],
+        "experimental"
+    );
     assert_eq!(capabilities["features"]["policy_epoch"], true);
     assert_eq!(capabilities["sandbox_levels"]["read-only"], "supported");
     assert_eq!(
@@ -382,7 +390,7 @@ fn linux_skeleton_reports_experimental_disabled_features() {
     );
     assert_eq!(capabilities["network_modes"]["unmanaged"], "supported");
     assert_eq!(capabilities["network_modes"]["disabled"], "supported");
-    assert_eq!(capabilities["network_modes"]["proxy"], "unsupported");
+    assert_eq!(capabilities["network_modes"]["proxy"], "supported");
     let probes = capabilities["capability_probes"].as_array().unwrap();
     assert_eq!(probes.len(), 10);
     assert_probe_schema(&probes[0], "filesystem_policy", "landlock");
@@ -478,6 +486,28 @@ fn linux_skeleton_compiles_experimental_workspace_write_policy() {
     assert_eq!(plan.filesystem_write[0], "workspace");
     assert!(plan.filesystem_write.contains(&"runtime_root".to_string()));
     assert!(plan.filesystem_protected.contains(&"workspace_metadata"));
+}
+
+#[test]
+fn linux_skeleton_compiles_experimental_proxy_policy() {
+    let cwd = PathBuf::from("/workspace");
+    let policy = normalize_policy(
+        &json!({"sandbox_level": "workspace-write", "network": {"mode": "proxy"}}),
+        &cwd,
+        None,
+    )
+    .unwrap();
+
+    let plan = LinuxCommunityBackend
+        .compile_plan("exec_linux_proxy", &cwd, &policy)
+        .unwrap();
+
+    assert_eq!(plan.enforcement, "linux-experimental");
+    assert_eq!(plan.network_mode, "proxy");
+    assert_eq!(plan.network_direct_egress, "deny");
+    assert_eq!(plan.network_managed_proxy, "required");
+    assert!(plan.environment_proxy);
+    assert_eq!(plan.json()["setup"]["requires_managed_proxy"], json!(true));
 }
 
 #[test]

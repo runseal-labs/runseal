@@ -11,7 +11,7 @@ mod core;
 mod error;
 mod execution;
 mod filesystem;
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 mod managed_proxy;
 mod plan;
 #[cfg(windows)]
@@ -21,14 +21,16 @@ mod registry;
 mod runtime;
 mod skeleton;
 mod windows;
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 use crate::events::timestamp_now;
 use filesystem::{
     WindowsFilesystemAclDriver, WindowsFilesystemAclSubject,
     apply_private_filesystem_acl_transaction, new_windows_filesystem_acl_driver,
     validate_private_filesystem_acl_entries, validate_private_filesystem_acl_transaction,
 };
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(target_os = "linux")]
+use managed_proxy::LinuxSandboxProxy;
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 use managed_proxy::ManagedSandboxProxy;
 #[cfg(all(test, windows))]
 use process::WindowsKillOnCloseJob;
@@ -63,7 +65,7 @@ use capability::capabilities_json_for;
 use capability::missing_backend_features;
 pub use core::SandboxBackend;
 pub use error::BackendError;
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 use error::BackendUnavailableError;
 #[cfg(all(test, windows))]
 pub(crate) use error::policy_transition_busy_error_for_test;
@@ -74,6 +76,8 @@ use error::{
 };
 pub(crate) use error::{backend_unavailable_reason, policy_transition_busy_reason};
 pub use execution::{BackendExecutionOutput, ExecutionEnv, ExecutionStdin};
+#[cfg(target_os = "linux")]
+pub(crate) use managed_proxy::run_linux_proxy_relay;
 pub use plan::PlatformSandboxPlan;
 #[cfg(test)]
 use plan::environment_runtime_json;

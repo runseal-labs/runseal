@@ -21,7 +21,8 @@ python3 scripts/portable-probe-smoke.py
 ```
 
 This checks diagnostic probe shape, the supported portable sandbox levels,
-contained host-read and symlink boundaries, macOS managed-proxy enforcement,
+contained host-read and symlink boundaries, macOS/Linux managed-proxy enforcement,
+Linux inherited-socket bypass denial,
 and fail-closed unsupported network modes.
 
 The tests are black-box by design:
@@ -33,7 +34,7 @@ The tests are black-box by design:
   and `feature_statuses`; `features` remains a coarse compatibility map.
 - Windows hosts select the Windows reference backend and run supported sandbox levels through the shared conformance tests.
 - macOS hosts support `read-only`, `workspace-write`, and `workspace-contained` with default unmanaged networking, plus experimental `network.proxy`; unavailable guards still fail closed.
-- Linux hosts support `read-only`, `workspace-write`, and `workspace-contained` with default unmanaged networking; unsupported network modes still fail closed.
+- Linux hosts support `read-only`, `workspace-write`, and `workspace-contained` with default unmanaged networking, plus experimental `network.proxy` through an isolated network namespace and local relay; unavailable guards still fail closed.
 - Windows sandbox plans include runtime root, synthetic home, setup requirements, protected filesystem categories, process boundary state, and network guard planning.
 - Windows filesystem ACL setup must bind rules to a single sandbox user restricted process identity before any rule can be applied.
 - Windows runtime roots can be reported as a verified single capability without making any sandbox level supported by itself.

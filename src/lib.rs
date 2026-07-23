@@ -64,6 +64,10 @@ fn run() -> Result<(), String> {
         }
         [command] if command == "version" => commands::version::print_plain(),
         [command] if command == "capabilities" => commands::capabilities::run(),
+        #[cfg(target_os = "linux")]
+        [command, rest @ ..] if command == "__linux-proxy-relay" => {
+            backend::run_linux_proxy_relay(rest).map(|code| std::process::exit(code))
+        }
         [command, flag] if command == "rpc" && flag == "--stdio" => {
             protocol::rpc_handler::run_rpc_stdio()
         }

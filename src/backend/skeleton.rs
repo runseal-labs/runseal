@@ -108,7 +108,7 @@ impl SandboxBackend for MacosExperimentalBackend {
         payload["network_modes"]["disabled"] = json!(CapabilityStatus::Supported.as_str());
         payload["network_modes"]["proxy"] = json!(CapabilityStatus::Supported.as_str());
         mark_portable_disabled_features_experimental(&mut payload);
-        mark_macos_proxy_features_experimental(&mut payload);
+        mark_proxy_features_experimental(&mut payload);
         payload["capability_probes"] = crate::macos::capability_probe::capability_probes();
         payload
     }
@@ -169,7 +169,9 @@ impl SandboxBackend for LinuxCommunityBackend {
         payload["sandbox_levels"]["workspace-contained"] =
             json!(CapabilityStatus::Supported.as_str());
         payload["network_modes"]["disabled"] = json!(CapabilityStatus::Supported.as_str());
+        payload["network_modes"]["proxy"] = json!(CapabilityStatus::Supported.as_str());
         mark_portable_disabled_features_experimental(&mut payload);
+        mark_proxy_features_experimental(&mut payload);
         payload["capability_probes"] = crate::linux::capability_probe::capability_probes();
         payload
     }
@@ -191,7 +193,7 @@ fn mark_portable_disabled_features_experimental(payload: &mut Value) {
     }
 }
 
-fn mark_macos_proxy_features_experimental(payload: &mut Value) {
+fn mark_proxy_features_experimental(payload: &mut Value) {
     for feature in ["network_proxy", "managed_proxy"] {
         payload["features"][feature] = json!(true);
         payload["feature_statuses"][feature] = json!(CapabilityStatus::Experimental.as_str());
@@ -319,7 +321,7 @@ fn compile_linux_plan(
 fn portable_network_mode(policy: &SandboxPolicy) -> bool {
     matches!(
         policy.network.mode,
-        NetworkMode::Unmanaged | NetworkMode::Disabled
+        NetworkMode::Unmanaged | NetworkMode::Disabled | NetworkMode::Proxy
     )
 }
 
@@ -330,6 +332,7 @@ fn macos_network_mode(policy: &SandboxPolicy) -> bool {
     )
 }
 
+#[cfg(target_os = "linux")]
 fn execute_linux_plan(
     plan: &PlatformSandboxPlan,
     command: &[String],
@@ -348,7 +351,58 @@ fn execute_linux_plan(
         ));
     }
     plan.prepare_runtime_roots()?;
-    let output = spawn_linux_bwrap(plan, command, cwd, stdin, env, timeout);
+    let output = (|| {
+        let managed_proxy = if plan.network_managed_proxy == "required" {
+            Some(LinuxSandboxProxy::start().map_err(|_| {
+                io::Error::other(BackendUnavailableError {
+                    reason: "Linux managed proxy unavailable".to_string(),
+                })
+            })?)
+        } else {
+            None
+        };
+        let mut events = if managed_proxy.is_some() {
+            vec![json!({
+                "type": "execution.network.proxy_ready",
+                "time": timestamp_now(),
+                "decision": "ready",
+                "network": {
+                    "mode": plan.network_mode,
+                    "direct_egress": plan.network_direct_egress,
+                    "managed_proxy": plan.network_managed_proxy,
+                },
+            })]
+        } else {
+            Vec::new()
+        };
+        let mut execution_env = env.clone();
+        if let Some(proxy) = &managed_proxy {
+            execution_env.entries.extend(proxy.environment());
+        }
+        let helper_path = std::env::current_exe().map_err(|_| {
+            io::Error::other(BackendUnavailableError {
+                reason: "Linux managed proxy helper unavailable".to_string(),
+            })
+        })?;
+        let proxy_launch = managed_proxy.as_ref().map(|proxy| LinuxProxyLaunch {
+            host_dir: proxy.host_dir(),
+            helper_path: helper_path.as_path(),
+        });
+        let mut output = spawn_linux_bwrap(
+            plan,
+            command,
+            cwd,
+            stdin,
+            &execution_env,
+            timeout,
+            proxy_launch,
+        )?;
+        if let Some(proxy) = &managed_proxy {
+            events.extend(proxy.drain_events());
+        }
+        output.events.extend(events);
+        Ok(output)
+    })();
     let cleanup = plan.cleanup_runtime_roots();
     match (output, cleanup) {
         (Ok(output), Ok(_)) => Ok(output),
@@ -358,6 +412,24 @@ fn execute_linux_plan(
             "Linux sandbox execution failed ({output_err}); runtime cleanup failed ({cleanup_err})"
         ))),
     }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn execute_linux_plan(
+    plan: &PlatformSandboxPlan,
+    command: &[String],
+    cwd: &Path,
+    stdin: ExecutionStdin,
+    env: &ExecutionEnv,
+    timeout: Option<Duration>,
+) -> io::Result<BackendExecutionOutput> {
+    if !plan.is_sandbox_enforced() {
+        return spawn_local_command(plan, command, cwd, stdin, env, timeout);
+    }
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "Linux sandbox execution is unavailable on this platform",
+    ))
 }
 
 fn execute_macos_plan(
@@ -597,6 +669,18 @@ fn macos_profile_literal(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+#[cfg(target_os = "linux")]
+struct LinuxProxyLaunch<'a> {
+    host_dir: &'a Path,
+    helper_path: &'a Path,
+}
+
+#[cfg(target_os = "linux")]
+const LINUX_PROXY_BRIDGE_DIR: &str = "/run/runseal-proxy";
+#[cfg(target_os = "linux")]
+const LINUX_PROXY_HELPER_PATH: &str = "/run/runseal-proxy-helper";
+
+#[cfg(target_os = "linux")]
 fn spawn_linux_bwrap(
     plan: &PlatformSandboxPlan,
     command: &[String],
@@ -604,6 +688,7 @@ fn spawn_linux_bwrap(
     stdin: ExecutionStdin,
     env: &ExecutionEnv,
     timeout: Option<Duration>,
+    proxy_launch: Option<LinuxProxyLaunch<'_>>,
 ) -> io::Result<BackendExecutionOutput> {
     let mut bwrap_command = vec!["bwrap".to_string()];
     let workspace_contained = plan.sandbox_level == SandboxLevel::WorkspaceContained.as_str();
@@ -629,6 +714,9 @@ fn spawn_linux_bwrap(
     } else {
         bwrap_command.extend(["--ro-bind".to_string(), "/".to_string(), "/".to_string()]);
         bwrap_command.extend(["--tmpfs".to_string(), "/run".to_string()]);
+        if plan.network_direct_egress != "unmanaged" {
+            bwrap_command.extend(["--tmpfs".to_string(), "/tmp".to_string()]);
+        }
     }
 
     bwrap_command.extend([
@@ -660,6 +748,20 @@ fn spawn_linux_bwrap(
     for denied_root in &plan.private_portable_deny_roots {
         push_linux_deny(&mut bwrap_command, Path::new(denied_root))?;
     }
+    if let Some(proxy) = &proxy_launch {
+        push_linux_bind_to(
+            &mut bwrap_command,
+            "--ro-bind",
+            proxy.host_dir,
+            LINUX_PROXY_BRIDGE_DIR,
+        )?;
+        push_linux_bind_to(
+            &mut bwrap_command,
+            "--ro-bind",
+            proxy.helper_path,
+            LINUX_PROXY_HELPER_PATH,
+        )?;
+    }
     if workspace_contained {
         bwrap_command.extend([
             "--remount-ro".to_string(),
@@ -667,6 +769,8 @@ fn spawn_linux_bwrap(
             "--remount-ro".to_string(),
             "/tmp".to_string(),
         ]);
+    } else if plan.network_direct_egress != "unmanaged" {
+        bwrap_command.extend(["--remount-ro".to_string(), "/tmp".to_string()]);
     }
     bwrap_command.extend([
         "--unshare-user".to_string(),
@@ -689,6 +793,12 @@ fn spawn_linux_bwrap(
         bwrap_command.extend(["--setenv".to_string(), key.clone(), value.clone()]);
     }
     bwrap_command.extend(["--chdir".to_string(), path_string(cwd), "--".to_string()]);
+    if proxy_launch.is_some() {
+        bwrap_command.extend([
+            LINUX_PROXY_HELPER_PATH.to_string(),
+            "__linux-proxy-relay".to_string(),
+        ]);
+    }
     bwrap_command.extend(command.iter().cloned());
 
     let mut runner_plan = plan.clone();
@@ -698,6 +808,7 @@ fn spawn_linux_bwrap(
     spawn_local_command(&runner_plan, &bwrap_command, cwd, stdin, env, timeout)
 }
 
+#[cfg(any(target_os = "linux", test))]
 const LINUX_CONTAINED_SYSTEM_READ_ROOTS: &[&str] = &[
     "/bin",
     "/sbin",
@@ -730,6 +841,7 @@ const LINUX_CONTAINED_SYSTEM_READ_ROOTS: &[&str] = &[
     "/mnt/wsl/resolv.conf",
 ];
 
+#[cfg(target_os = "linux")]
 fn push_linux_bind(command: &mut Vec<String>, operation: &str, path: &str) -> io::Result<()> {
     let canonical = std::fs::canonicalize(path)?;
     command.extend([
@@ -740,6 +852,23 @@ fn push_linux_bind(command: &mut Vec<String>, operation: &str, path: &str) -> io
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
+fn push_linux_bind_to(
+    command: &mut Vec<String>,
+    operation: &str,
+    source: &Path,
+    destination: &str,
+) -> io::Result<()> {
+    let canonical = std::fs::canonicalize(source)?;
+    command.extend([
+        operation.to_string(),
+        path_string(&canonical),
+        destination.to_string(),
+    ]);
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
 fn push_linux_deny(command: &mut Vec<String>, path: &Path) -> io::Result<()> {
     if !path.exists() {
         return Ok(());

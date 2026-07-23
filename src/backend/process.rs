@@ -1,3 +1,5 @@
+#[cfg(target_os = "linux")]
+use super::SandboxLevel;
 use super::{
     BackendExecutionOutput, ExecutionEnv, ExecutionStdin, PlatformSandboxPlan,
     matches_environment_scrub_pattern,
@@ -5,6 +7,8 @@ use super::{
 use std::env;
 use std::ffi::OsString;
 use std::io::{self, Read, Write};
+#[cfg(target_os = "linux")]
+use std::os::unix::process::CommandExt;
 #[cfg(windows)]
 use std::os::windows::io::AsRawHandle;
 use std::path::Path;
@@ -52,6 +56,27 @@ pub(super) fn spawn_local_command(
         }
     }
     process.stdout(Stdio::piped()).stderr(Stdio::piped());
+    #[cfg(target_os = "linux")]
+    if plan.sandbox_level != SandboxLevel::DangerFullAccess.as_str() {
+        // SAFETY: the hook only invokes close_range, which is async-signal-safe and does not
+        // allocate. CLOEXEC preserves Rust's spawn error pipe until exec while preventing
+        // caller-owned descriptors from crossing the execution boundary.
+        unsafe {
+            process.pre_exec(|| {
+                let result = libc::syscall(
+                    libc::SYS_close_range,
+                    3_u32,
+                    u32::MAX,
+                    libc::CLOSE_RANGE_CLOEXEC,
+                );
+                if result == 0 {
+                    Ok(())
+                } else {
+                    Err(io::Error::last_os_error())
+                }
+            });
+        }
+    }
 
     let Some(timeout) = timeout else {
         let mut child = process.spawn()?;
