@@ -198,6 +198,24 @@ fn expected_windows_sandbox_supported() -> bool {
     cfg!(windows)
 }
 
+fn expected_proxy_feature_reported() -> bool {
+    cfg!(any(windows, target_os = "macos"))
+}
+
+fn expected_proxy_feature_status() -> &'static str {
+    if cfg!(windows) {
+        "supported"
+    } else if cfg!(target_os = "macos") {
+        "experimental"
+    } else {
+        "unsupported"
+    }
+}
+
+fn expected_network_proxy_status() -> &'static str {
+    expected_status(expected_proxy_feature_reported())
+}
+
 fn expected_resource_limits_supported() -> bool {
     false
 }
@@ -789,11 +807,11 @@ fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
     );
     assert_eq!(
         payload["features"]["managed_proxy"],
-        expected_windows_sandbox_supported()
+        expected_proxy_feature_reported()
     );
     assert_eq!(
         payload["features"]["network_proxy"],
-        expected_windows_sandbox_supported()
+        expected_proxy_feature_reported()
     );
     assert_eq!(
         payload["features"]["network_disabled"],
@@ -820,11 +838,11 @@ fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
     }
     assert_eq!(
         payload["feature_statuses"]["network_proxy"],
-        expected_status(expected_windows_sandbox_supported())
+        expected_proxy_feature_status()
     );
     assert_eq!(
         payload["feature_statuses"]["managed_proxy"],
-        expected_status(expected_windows_sandbox_supported())
+        expected_proxy_feature_status()
     );
     assert_eq!(payload["features"]["setup_readiness"], true);
     assert_eq!(payload["features"]["stdin_bytes"], true);
@@ -850,7 +868,7 @@ fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
     );
     assert_eq!(
         payload["network_modes"]["proxy"],
-        expected_status(expected_windows_sandbox_supported())
+        expected_network_proxy_status()
     );
     assert_eq!(
         payload["network_modes"]["disabled"],

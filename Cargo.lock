@@ -853,6 +853,8 @@ dependencies = [
  "codex-protocol",
  "codex-utils-absolute-path",
  "codex-windows-sandbox",
+ "getrandom 0.4.2",
+ "libc",
  "predicates",
  "serde_json",
  "sha2",

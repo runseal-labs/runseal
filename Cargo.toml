@@ -63,6 +63,7 @@ unwrap_used = "deny"
 
 [dependencies]
 base64 = "0.22"
+getrandom = "0.4"
 serde_json = "1"
 sha2 = "0.10"
 time = { version = "0.3", features = ["formatting", "parsing"] }
@@ -88,3 +89,6 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+[target."cfg(unix)".dependencies]
+libc = "0.2"

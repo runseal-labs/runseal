@@ -264,6 +264,24 @@ fn expected_windows_sandbox_supported() -> bool {
     cfg!(windows)
 }
 
+fn expected_proxy_feature_reported() -> bool {
+    cfg!(any(windows, target_os = "macos"))
+}
+
+fn expected_proxy_feature_status() -> &'static str {
+    if cfg!(windows) {
+        "supported"
+    } else if cfg!(target_os = "macos") {
+        "experimental"
+    } else {
+        "unsupported"
+    }
+}
+
+fn expected_network_proxy_status() -> &'static str {
+    expected_status(expected_proxy_feature_reported())
+}
+
 fn expected_resource_limits_supported() -> bool {
     false
 }
@@ -1361,6 +1379,10 @@ fn get_capabilities_rpc_contract() -> Result<()> {
     );
     assert_eq!(payload["network_modes"]["unmanaged"], "supported");
     assert_eq!(
+        payload["network_modes"]["proxy"],
+        expected_network_proxy_status()
+    );
+    assert_eq!(
         payload["features"]["runtime_roots"],
         expected_disabled_feature_reported()
     );
@@ -1382,11 +1404,11 @@ fn get_capabilities_rpc_contract() -> Result<()> {
     );
     assert_eq!(
         payload["features"]["managed_proxy"],
-        expected_windows_sandbox_supported()
+        expected_proxy_feature_reported()
     );
     assert_eq!(
         payload["features"]["network_proxy"],
-        expected_windows_sandbox_supported()
+        expected_proxy_feature_reported()
     );
     assert_eq!(
         payload["features"]["network_disabled"],
@@ -1413,11 +1435,11 @@ fn get_capabilities_rpc_contract() -> Result<()> {
     }
     assert_eq!(
         payload["feature_statuses"]["network_proxy"],
-        expected_status(expected_windows_sandbox_supported())
+        expected_proxy_feature_status()
     );
     assert_eq!(
         payload["feature_statuses"]["managed_proxy"],
-        expected_status(expected_windows_sandbox_supported())
+        expected_proxy_feature_status()
     );
     assert_eq!(payload["features"]["setup_readiness"], true);
     assert_eq!(payload["features"]["stdin_bytes"], true);

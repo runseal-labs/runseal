@@ -1,24 +1,22 @@
 use crate::events::timestamp_now;
-use base64::{
-    Engine as _,
-    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
-};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
+#[cfg(windows)]
+use std::sync::OnceLock;
 use std::sync::{
-    Arc, Mutex, OnceLock,
+    Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
+#[cfg(windows)]
 use windows_sys::Win32::Foundation::CloseHandle;
-use windows_sys::Win32::Security::Cryptography::{
-    BCRYPT_USE_SYSTEM_PREFERRED_RNG, BCryptGenRandom,
-};
+#[cfg(windows)]
 use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject};
 
 const MAX_HEADER_BYTES: usize = 64 * 1024;
@@ -57,6 +55,7 @@ struct ManagedSandboxProxyState {
 }
 
 impl ManagedSandboxProxy {
+    #[cfg(windows)]
     pub(super) fn start() -> io::Result<Self> {
         static SHARED_PROXY: OnceLock<Mutex<Option<Arc<ManagedSandboxProxyState>>>> =
             OnceLock::new();
@@ -97,6 +96,15 @@ impl ManagedSandboxProxy {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    pub(super) fn start() -> io::Result<Self> {
+        Self::start_dedicated_on_with_token(
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+            new_proxy_token()?,
+        )
+    }
+
+    #[cfg(windows)]
     fn register_owned(inner: Arc<ManagedSandboxProxyState>) -> io::Result<Self> {
         let token = new_proxy_token()?;
         let event_path = managed_proxy_event_path(&token)?;
@@ -110,6 +118,7 @@ impl ManagedSandboxProxy {
         })
     }
 
+    #[cfg(windows)]
     fn register_external(addr: SocketAddr) -> io::Result<Self> {
         let token = new_proxy_token()?;
         let event_path = managed_proxy_event_path(&token)?;
@@ -206,6 +215,7 @@ impl Drop for ManagedSandboxProxy {
 }
 
 impl ManagedSandboxProxyState {
+    #[cfg(windows)]
     fn add_token(&self, token: String, event_path: PathBuf) -> io::Result<()> {
         self.tokens
             .lock()
@@ -244,6 +254,7 @@ fn bind_proxy_listener(addr: SocketAddr) -> io::Result<TcpListener> {
     }
 }
 
+#[cfg(windows)]
 fn managed_proxy_health_check(addr: SocketAddr) -> bool {
     let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(200)) else {
         return false;
@@ -275,6 +286,9 @@ fn accept_loop(listener: TcpListener, shutdown: Arc<AtomicBool>, tokens: ProxyTo
     while !shutdown.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((client, _)) => {
+                if client.set_nonblocking(false).is_err() {
+                    continue;
+                }
                 let tokens = Arc::clone(&tokens);
                 thread::spawn(move || {
                     let _ = handle_client(client, tokens);
@@ -455,6 +469,11 @@ fn process_is_running(pid: u32) -> bool {
     if pid == std::process::id() {
         return true;
     }
+    process_is_running_platform(pid)
+}
+
+#[cfg(windows)]
+fn process_is_running_platform(pid: u32) -> bool {
     const SYNCHRONIZE: u32 = 0x0010_0000;
     const WAIT_TIMEOUT: u32 = 0x102;
     let handle = unsafe { OpenProcess(SYNCHRONIZE, 0, pid) };
@@ -466,6 +485,15 @@ fn process_is_running(pid: u32) -> bool {
         CloseHandle(handle);
     }
     wait == WAIT_TIMEOUT
+}
+
+#[cfg(unix)]
+fn process_is_running_platform(pid: u32) -> bool {
+    let Ok(pid) = i32::try_from(pid) else {
+        return false;
+    };
+    let result = unsafe { libc::kill(pid, 0) };
+    result == 0 || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
 fn append_proxy_event(path: &Path, event: &Value) -> io::Result<()> {
@@ -598,13 +626,23 @@ fn copy_bidirectional(mut client: TcpStream, mut upstream: TcpStream) -> io::Res
     let mut client_to_upstream = client.try_clone()?;
     let mut upstream_for_client = upstream.try_clone()?;
     let writer = thread::spawn(move || {
-        let _ = io::copy(&mut client_to_upstream, &mut upstream_for_client);
+        let result = io::copy(&mut client_to_upstream, &mut upstream_for_client);
         let _ = upstream_for_client.shutdown(Shutdown::Write);
+        result
     });
-    let result = io::copy(&mut upstream, &mut client);
+    let reader_result = io::copy(&mut upstream, &mut client);
     let _ = client.shutdown(Shutdown::Write);
-    let _ = writer.join();
-    result.map(|_| ())
+    let writer_result = writer
+        .join()
+        .map_err(|_| io::Error::other("managed proxy tunnel writer thread panicked"))?;
+    match (reader_result, writer_result) {
+        (Ok(_), Ok(_)) => Ok(()),
+        (Err(reader_err), Ok(_)) => Err(reader_err),
+        (Ok(_), Err(writer_err)) => Err(writer_err),
+        (Err(reader_err), Err(writer_err)) => Err(io::Error::other(format!(
+            "managed proxy tunnel read failed ({reader_err}); write failed ({writer_err})"
+        ))),
+    }
 }
 
 fn rewrite_plain_http_request(
@@ -704,20 +742,8 @@ fn invalid_proxy_request(message: &'static str) -> io::Error {
 
 fn new_proxy_token() -> io::Result<String> {
     let mut bytes = [0_u8; 32];
-    let status = unsafe {
-        BCryptGenRandom(
-            std::ptr::null_mut(),
-            bytes.as_mut_ptr(),
-            bytes.len() as u32,
-            BCRYPT_USE_SYSTEM_PREFERRED_RNG,
-        )
-    };
-    if status != 0 {
-        return Err(io::Error::other(format!(
-            "BCryptGenRandom failed: {status}"
-        )));
-    }
-    Ok(URL_SAFE_NO_PAD.encode(bytes))
+    getrandom::fill(&mut bytes).map_err(io::Error::other)?;
+    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
 }
 
 #[cfg(test)]
@@ -730,17 +756,14 @@ mod tests {
         let env = proxy.environment();
         assert!(env.iter().any(|(key, value)| key == "HTTP_PROXY"
             && value.starts_with("http://runseal:")
-            && value.ends_with(&format!("@127.0.0.1:{MANAGED_PROXY_PORT}"))));
+            && value.ends_with(&format!("@{}", proxy.addr))));
         let proxy_url = env
             .iter()
             .find_map(|(key, value)| (key == "HTTP_PROXY").then_some(value.as_str()))
             .expect("HTTP_PROXY");
         assert_eq!(
             proxy_url,
-            format!(
-                "http://runseal:{}@127.0.0.1:{MANAGED_PROXY_PORT}",
-                proxy.token
-            )
+            format!("http://runseal:{}@{}", proxy.token, proxy.addr)
         );
         assert!(env.iter().any(|(key, value)| {
             key == PROXY_AUTHORIZATION_KEY && value == &proxy_basic_auth_value(&proxy.token)
@@ -776,6 +799,7 @@ mod tests {
         assert!(!env.iter().any(|(key, _)| key.starts_with("CODEX_")));
     }
 
+    #[cfg(windows)]
     #[test]
     fn reuses_active_proxy_listener() {
         let first = ManagedSandboxProxy::start().expect("start first proxy");
@@ -795,6 +819,7 @@ mod tests {
         assert_ne!(first_url, second_url);
     }
 
+    #[cfg(windows)]
     #[test]
     fn shared_proxy_listener_survives_handle_drop() {
         let first = ManagedSandboxProxy::start().expect("start first proxy");
@@ -918,6 +943,43 @@ mod tests {
         assert_eq!(event["scheme"], "http");
         assert_eq!(event["host"], "127.0.0.1");
         assert_eq!(event["path"], "/ok");
+    }
+
+    #[test]
+    fn tunnels_connect_bytes_to_loopback_server() {
+        let upstream = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind upstream");
+        let upstream_addr = upstream.local_addr().expect("upstream address");
+        let upstream_thread = thread::spawn(move || {
+            let (mut connection, _) = upstream.accept().expect("accept upstream");
+            let mut request = [0_u8; 4];
+            connection
+                .read_exact(&mut request)
+                .expect("read tunnel bytes");
+            assert_eq!(&request, b"ping");
+            connection.write_all(b"pong").expect("write tunnel bytes");
+        });
+        let proxy = ManagedSandboxProxy::start_dedicated_ephemeral().expect("start proxy");
+        let mut client = TcpStream::connect(proxy.addr).expect("connect proxy");
+        client
+            .write_all(
+                format!(
+                    "CONNECT {upstream_addr} HTTP/1.1\r\nHost: {upstream_addr}\r\nProxy-Authorization: {}\r\nConnection: close\r\n\r\n",
+                    proxy_basic_auth_value(&proxy.token)
+                )
+                .as_bytes(),
+            )
+            .expect("write CONNECT request");
+        let mut response = [0_u8; 128];
+        let count = client.read(&mut response).expect("read CONNECT response");
+        assert!(
+            String::from_utf8_lossy(&response[..count])
+                .starts_with("HTTP/1.1 200 Connection Established")
+        );
+        client.write_all(b"ping").expect("write tunnel payload");
+        let mut reply = [0_u8; 4];
+        client.read_exact(&mut reply).expect("read tunnel payload");
+        assert_eq!(&reply, b"pong");
+        upstream_thread.join().expect("join upstream");
     }
 
     #[test]

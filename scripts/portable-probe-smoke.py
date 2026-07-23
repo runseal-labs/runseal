@@ -4,9 +4,11 @@ import os
 import platform
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 
@@ -157,7 +159,7 @@ def assert_linux_read_only(payload: dict) -> None:
                 raise SystemExit(f"Linux read-only did not block workspace write: {result}")
             assert_linux_workspace_write(command)
             assert_network_disabled_blocks_direct_egress("Linux", command)
-            assert_portable_proxy_fail_closed("Linux", command)
+            assert_linux_proxy_fail_closed(command)
         elif result.get("error", {}).get("data", {}).get("code") != "BACKEND_UNAVAILABLE":
             raise SystemExit(f"expected Linux backend unavailable without bubblewrap: {result}")
 
@@ -213,7 +215,7 @@ def assert_linux_workspace_write(command: str) -> None:
         assert_portable_workspace_contained("Linux")
 
 
-def assert_portable_proxy_fail_closed(system: str, command: str) -> None:
+def assert_linux_proxy_fail_closed(command: str) -> None:
     with tempfile.TemporaryDirectory(prefix="runseal-portable-proxy-") as cwd:
         _, payload = run_json(
             [
@@ -235,10 +237,7 @@ def assert_portable_proxy_fail_closed(system: str, command: str) -> None:
     data = payload["error"]["data"]
     if data.get("code") != "BACKEND_CAPABILITY_MISSING" or data.get("support") != "unsupported":
         raise SystemExit(f"unexpected portable proxy fail-closed error: {data}")
-    expected_backend = {
-        "Darwin": ("runseal-macos-experimental", "experimental", "macos"),
-        "Linux": ("runseal-linux-community", "experimental", "linux"),
-    }[system]
+    expected_backend = ("runseal-linux-community", "experimental", "linux")
     backend = data.get("backend", {})
     if (backend.get("name"), backend.get("status"), backend.get("platform")) != expected_backend:
         raise SystemExit(f"unexpected portable backend details: {backend}")
@@ -262,6 +261,13 @@ def assert_macos_read_only(payload: dict) -> None:
         raise SystemExit(f"macOS workspace-contained must be supported: {payload}")
     if payload.get("network_modes", {}).get("disabled") != "supported":
         raise SystemExit(f"macOS network.disabled must be supported: {payload}")
+    if payload.get("network_modes", {}).get("proxy") != "supported":
+        raise SystemExit(f"macOS network.proxy must be supported: {payload}")
+    for feature in ["network_proxy", "managed_proxy"]:
+        if payload.get("features", {}).get(feature) is not True:
+            raise SystemExit(f"macOS {feature} must be available: {payload}")
+        if payload.get("feature_statuses", {}).get(feature) != "experimental":
+            raise SystemExit(f"macOS {feature} must remain experimental: {payload}")
 
     command = shutil.which("python3") or shutil.which("python") or sys.executable
     with tempfile.TemporaryDirectory(prefix="runseal-macos-read-only-") as cwd:
@@ -288,7 +294,101 @@ def assert_macos_read_only(payload: dict) -> None:
         assert_macos_workspace_write(command)
         assert_network_disabled_blocks_direct_egress("Darwin", command)
         assert_portable_workspace_contained("Darwin")
-        assert_portable_proxy_fail_closed("Darwin", command)
+        assert_macos_proxy(command)
+
+
+def assert_macos_proxy(command: str) -> None:
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    listener.settimeout(10)
+    port = listener.getsockname()[1]
+    server_result: list[object] = []
+
+    def serve() -> None:
+        try:
+            connection, _ = listener.accept()
+            with connection:
+                request = connection.recv(4096)
+                if not request.startswith(b"GET /proxy-ok HTTP/1.1"):
+                    raise RuntimeError(f"unexpected proxy request: {request!r}")
+                connection.sendall(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\nproxy-ok"
+                )
+            server_result.append(True)
+        except Exception as exc:
+            server_result.append(exc)
+        finally:
+            listener.close()
+
+    server = threading.Thread(target=serve)
+    server.start()
+    code = "\n".join(
+        [
+            "import os, socket, urllib.parse",
+            "proxy = urllib.parse.urlparse(os.environ['HTTP_PROXY'])",
+            "auth = os.environ['RUNSEAL_NETWORK_PROXY_AUTHORIZATION']",
+            f"request = b'GET http://127.0.0.1:{port}/proxy-ok HTTP/1.1\\r\\nHost: 127.0.0.1:{port}\\r\\nProxy-Authorization: ' + auth.encode('ascii') + b'\\r\\nConnection: close\\r\\n\\r\\n'",
+            "with socket.create_connection((proxy.hostname, proxy.port), timeout=2) as stream:",
+            "    stream.sendall(request)",
+            "    response = b''",
+            "    while True:",
+            "        chunk = stream.recv(4096)",
+            "        if not chunk:",
+            "            break",
+            "        response += chunk",
+            "assert b'proxy-ok' in response, response",
+            "print('managed-proxy-ok')",
+        ]
+    )
+    with tempfile.TemporaryDirectory(prefix="runseal-macos-proxy-") as cwd:
+        _, result = run_json(
+            [
+                "exec",
+                "--json",
+                "--policy",
+                "workspace-write",
+                "--network",
+                "proxy",
+                "--cwd",
+                cwd,
+                "--",
+                command,
+                "-c",
+                code,
+            ],
+            expect_success=True,
+        )
+        _, direct = run_json(
+            [
+                "exec",
+                "--json",
+                "--policy",
+                "workspace-write",
+                "--network",
+                "proxy",
+                "--cwd",
+                cwd,
+                "--",
+                command,
+                "-c",
+                "import socket; socket.create_connection(('1.1.1.1', 53), timeout=0.5); print('direct-network-ok')",
+            ],
+            expect_success=True,
+        )
+    server.join(timeout=12)
+    if server.is_alive() or server_result != [True]:
+        raise SystemExit(f"macOS managed proxy did not reach upstream: {server_result}")
+    plan = result.get("platform_plan", {})
+    if (
+        result.get("exit_code") != 0
+        or "managed-proxy-ok" not in result.get("stdout", "")
+        or plan.get("enforcement") != "macos-experimental"
+        or plan.get("network", {}).get("managed_proxy") != "required"
+    ):
+        raise SystemExit(f"macOS managed proxy execution failed: {result}")
+    if direct.get("exit_code") == 0 or "direct-network-ok" in direct.get("stdout", ""):
+        raise SystemExit(f"macOS proxy mode allowed direct egress: {direct}")
 
 
 def assert_macos_workspace_write(command: str) -> None:

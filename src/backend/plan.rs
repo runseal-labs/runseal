@@ -270,9 +270,7 @@ impl PlatformSandboxPlan {
         cwd: &Path,
         policy: &SandboxPolicy,
     ) -> Self {
-        let mut plan = Self::linux_experimental(backend, execution_id, cwd, policy);
-        plan.enforcement = "macos-experimental";
-        plan
+        Self::macos_experimental(backend, execution_id, cwd, policy)
     }
 
     pub(super) fn macos_workspace_write_experimental(
@@ -281,9 +279,7 @@ impl PlatformSandboxPlan {
         cwd: &Path,
         policy: &SandboxPolicy,
     ) -> Self {
-        let mut plan = Self::linux_experimental(backend, execution_id, cwd, policy);
-        plan.enforcement = "macos-experimental";
-        plan
+        Self::macos_experimental(backend, execution_id, cwd, policy)
     }
 
     pub(super) fn macos_workspace_contained_experimental(
@@ -292,8 +288,20 @@ impl PlatformSandboxPlan {
         cwd: &Path,
         policy: &SandboxPolicy,
     ) -> Self {
+        Self::macos_experimental(backend, execution_id, cwd, policy)
+    }
+
+    fn macos_experimental(
+        backend: &dyn SandboxBackend,
+        execution_id: &str,
+        cwd: &Path,
+        policy: &SandboxPolicy,
+    ) -> Self {
         let mut plan = Self::linux_experimental(backend, execution_id, cwd, policy);
         plan.enforcement = "macos-experimental";
+        if policy.network.mode == NetworkMode::Proxy {
+            plan.network_managed_proxy = "required";
+        }
         plan
     }
 

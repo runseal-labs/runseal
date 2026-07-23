@@ -537,6 +537,54 @@ fn start_loopback_http_server() -> Result<(u16, thread::JoinHandle<Result<bool>>
     Ok((port, handle))
 }
 
+#[cfg(target_os = "macos")]
+fn start_loopback_tunnel_server() -> Result<(u16, thread::JoinHandle<Result<bool>>)> {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    listener.set_nonblocking(true)?;
+    let port = listener.local_addr()?.port();
+    let handle = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let mut request = [0_u8; 4];
+                    stream.read_exact(&mut request)?;
+                    assert_eq!(&request, b"ping");
+                    stream.write_all(b"pong")?;
+                    return Ok(true);
+                }
+                Err(err) if err.kind() == ErrorKind::WouldBlock && Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(err) if err.kind() == ErrorKind::WouldBlock => return Ok(false),
+                Err(err) => return Err(err.into()),
+            }
+        }
+    });
+    Ok((port, handle))
+}
+
+#[cfg(target_os = "macos")]
+fn start_loopback_accept_probe() -> Result<(u16, thread::JoinHandle<Result<bool>>)> {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    listener.set_nonblocking(true)?;
+    let port = listener.local_addr()?.port();
+    let handle = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match listener.accept() {
+                Ok(_) => return Ok(true),
+                Err(err) if err.kind() == ErrorKind::WouldBlock && Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(err) if err.kind() == ErrorKind::WouldBlock => return Ok(false),
+                Err(err) => return Err(err.into()),
+            }
+        }
+    });
+    Ok((port, handle))
+}
+
 #[test]
 fn workspace_write_allows_workspace_write_when_supported_or_fails_closed() -> Result<()> {
     let tmp = TempDir::new()?;
@@ -1221,6 +1269,37 @@ fn network_proxy_blocks_direct_egress_when_supported_or_fails_closed() -> Result
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_network_proxy_blocks_other_loopback_ports() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let workspace = tmp.path().join("workspace");
+    fs::create_dir_all(&workspace)?;
+    let (port, accept_probe) = start_loopback_accept_probe()?;
+    let code = format!(
+        "import socket; socket.create_connection(('127.0.0.1', {port}), timeout=0.5); print('loopback-bypass-ok')"
+    );
+    let response = execute_platform_script(
+        "workspace-write",
+        &workspace,
+        Some("proxy"),
+        code,
+        String::new(),
+    )?;
+
+    let accepted = accept_probe.join().expect("loopback accept probe")?;
+    assert!(!accepted, "{response:#}");
+    assert_eq!(response["result"]["status"], "finished");
+    assert_ne!(response["result"]["exit_code"], 0);
+    assert!(
+        !response["result"]["stdout"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("loopback-bypass-ok")
+    );
+    Ok(())
+}
+
 #[test]
 fn network_proxy_blocks_child_process_direct_egress_when_supported_or_fails_closed() -> Result<()> {
     let tmp = TempDir::new()?;
@@ -1326,33 +1405,36 @@ fn network_proxy_allows_http_through_managed_proxy_when_supported_or_fails_close
 
     let (port, upstream) = start_loopback_http_server()?;
     let code = format!(
-        "import os, socket, time, urllib.parse\n\
-         proxy = urllib.parse.urlparse(os.environ['HTTP_PROXY'])\n\
-         proxy_auth = 'Proxy-Authorization: ' + os.environ['RUNSEAL_NETWORK_PROXY_AUTHORIZATION'] + '\\r\\n'\n\
-         request = f'GET http://127.0.0.1:{port}/proxy-ok HTTP/1.1\\r\\nHost: 127.0.0.1:{port}\\r\\n{{proxy_auth}}Connection: close\\r\\n\\r\\n'.encode('ascii')\n\
-         deadline = time.monotonic() + 8\n\
-         last = None\n\
-         while time.monotonic() < deadline:\n\
-             try:\n\
-                 with socket.create_connection((proxy.hostname, proxy.port), timeout=2) as s:\n\
-                     s.settimeout(2)\n\
-                     s.sendall(request)\n\
-                     data = b''\n\
-                     while True:\n\
-                         chunk = s.recv(4096)\n\
-                         if not chunk:\n\
-                             break\n\
-                         data += chunk\n\
-                 text = data.decode('utf-8', 'replace')\n\
-                 if 'proxy-ok' in text:\n\
-                     print(text)\n\
-                     break\n\
-                 last = 'unexpected proxy response: ' + text\n\
-             except Exception as exc:\n\
-                 last = str(exc)\n\
-             time.sleep(0.25)\n\
-         else:\n\
-             raise RuntimeError('proxy request did not reach upstream: ' + str(last))"
+        concat!(
+            "import os, socket, time, urllib.parse\n",
+            "proxy = urllib.parse.urlparse(os.environ['HTTP_PROXY'])\n",
+            "proxy_auth = 'Proxy-Authorization: ' + os.environ['RUNSEAL_NETWORK_PROXY_AUTHORIZATION'] + '\\r\\n'\n",
+            "request = f'GET http://127.0.0.1:{port}/proxy-ok HTTP/1.1\\r\\nHost: 127.0.0.1:{port}\\r\\n{{proxy_auth}}Connection: close\\r\\n\\r\\n'.encode('ascii')\n",
+            "deadline = time.monotonic() + 8\n",
+            "last = None\n",
+            "while time.monotonic() < deadline:\n",
+            "    try:\n",
+            "        with socket.create_connection((proxy.hostname, proxy.port), timeout=2) as s:\n",
+            "            s.settimeout(2)\n",
+            "            s.sendall(request)\n",
+            "            data = b''\n",
+            "            while True:\n",
+            "                chunk = s.recv(4096)\n",
+            "                if not chunk:\n",
+            "                    break\n",
+            "                data += chunk\n",
+            "        text = data.decode('utf-8', 'replace')\n",
+            "        if 'proxy-ok' in text:\n",
+            "            print(text)\n",
+            "            break\n",
+            "        last = 'unexpected proxy response: ' + text\n",
+            "    except Exception as exc:\n",
+            "        last = str(exc)\n",
+            "    time.sleep(0.25)\n",
+            "else:\n",
+            "    raise RuntimeError('proxy request did not reach upstream: ' + str(last))"
+        ),
+        port = port
     );
     let proxy_request = format!(
         "\"GET http://127.0.0.1:{port}/proxy-ok HTTP/1.1`r`nHost: 127.0.0.1:{port}`r`nConnection: close`r`n`r`n\""
@@ -1427,7 +1509,7 @@ $successText
     }
 
     let upstream_hit = upstream.join().expect("upstream server thread")?;
-    assert!(upstream_hit);
+    assert!(upstream_hit, "{response:#}");
     assert_eq!(response["result"]["status"], "finished");
     assert_eq!(response["result"]["exit_code"], 0);
     assert!(
@@ -1467,6 +1549,61 @@ $successText
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_network_proxy_tunnels_connect_bytes() -> Result<()> {
+    let tmp = TempDir::new()?;
+    let workspace = tmp.path().join("workspace");
+    fs::create_dir_all(&workspace)?;
+    let (port, upstream) = start_loopback_tunnel_server()?;
+    let code = format!(
+        concat!(
+            "import os, socket, urllib.parse\n",
+            "proxy = urllib.parse.urlparse(os.environ['HTTP_PROXY'])\n",
+            "auth = os.environ['RUNSEAL_NETWORK_PROXY_AUTHORIZATION']\n",
+            "request = f'CONNECT 127.0.0.1:{port} HTTP/1.1\\r\\nHost: 127.0.0.1:{port}\\r\\nProxy-Authorization: {{auth}}\\r\\nConnection: close\\r\\n\\r\\n'.encode('ascii')\n",
+            "with socket.create_connection((proxy.hostname, proxy.port), timeout=2) as stream:\n",
+            "    stream.sendall(request)\n",
+            "    response = b''\n",
+            "    while b'\\r\\n\\r\\n' not in response:\n",
+            "        response += stream.recv(4096)\n",
+            "    assert response.startswith(b'HTTP/1.1 200 Connection Established'), response\n",
+            "    stream.sendall(b'ping')\n",
+            "    assert stream.recv(4) == b'pong'\n",
+            "print('connect-tunnel-ok')"
+        ),
+        port = port
+    );
+    let response = execute_platform_script(
+        "workspace-write",
+        &workspace,
+        Some("proxy"),
+        code,
+        String::new(),
+    )?;
+
+    let upstream_hit = upstream.join().expect("tunnel upstream server");
+    let audit_path = response["result"]["audit_path"]
+        .as_str()
+        .context("CONNECT response must include audit_path")?;
+    let audit_jsonl = fs::read_to_string(workspace.join(audit_path))?;
+    assert!(
+        upstream_hit.is_ok(),
+        "{upstream_hit:?}\n{audit_jsonl}\n{response:#}"
+    );
+    let upstream_hit = upstream_hit?;
+    assert!(upstream_hit, "{response:#}");
+    assert_eq!(response["result"]["status"], "finished");
+    assert_eq!(response["result"]["exit_code"], 0);
+    assert!(
+        response["result"]["stdout"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("connect-tunnel-ok")
+    );
+    Ok(())
+}
+
 #[test]
 fn network_proxy_overrides_client_proxy_environment_when_supported_or_fails_closed() -> Result<()> {
     let tmp = TempDir::new()?;
@@ -1495,25 +1632,28 @@ fn network_proxy_overrides_client_proxy_environment_when_supported_or_fails_clos
 
     let (port, upstream) = start_loopback_http_server()?;
     let code = format!(
-        "import os, socket, urllib.parse\n\
-         assert 'attacker.invalid' not in os.environ['HTTP_PROXY']\n\
-         assert os.environ.get('NO_PROXY', '') == ''\n\
-         proxy = urllib.parse.urlparse(os.environ['HTTP_PROXY'])\n\
-         auth = os.environ['RUNSEAL_NETWORK_PROXY_AUTHORIZATION']\n\
-         assert auth.startswith('Basic ')\n\
-         request = f'GET http://127.0.0.1:{port}/proxy-ok HTTP/1.1\\r\\nHost: 127.0.0.1:{port}\\r\\nProxy-Authorization: {{auth}}\\r\\nConnection: close\\r\\n\\r\\n'.encode('ascii')\n\
-         with socket.create_connection((proxy.hostname, proxy.port), timeout=2) as s:\n\
-             s.settimeout(2)\n\
-             s.sendall(request)\n\
-             data = b''\n\
-             while True:\n\
-                 chunk = s.recv(4096)\n\
-                 if not chunk:\n\
-                     break\n\
-                 data += chunk\n\
-         text = data.decode('utf-8', 'replace')\n\
-         assert 'proxy-ok' in text, text\n\
-         print(text)"
+        concat!(
+            "import os, socket, urllib.parse\n",
+            "assert 'attacker.invalid' not in os.environ['HTTP_PROXY']\n",
+            "assert os.environ.get('NO_PROXY', '') == ''\n",
+            "proxy = urllib.parse.urlparse(os.environ['HTTP_PROXY'])\n",
+            "auth = os.environ['RUNSEAL_NETWORK_PROXY_AUTHORIZATION']\n",
+            "assert auth.startswith('Basic ')\n",
+            "request = f'GET http://127.0.0.1:{port}/proxy-ok HTTP/1.1\\r\\nHost: 127.0.0.1:{port}\\r\\nProxy-Authorization: {{auth}}\\r\\nConnection: close\\r\\n\\r\\n'.encode('ascii')\n",
+            "with socket.create_connection((proxy.hostname, proxy.port), timeout=2) as s:\n",
+            "    s.settimeout(2)\n",
+            "    s.sendall(request)\n",
+            "    data = b''\n",
+            "    while True:\n",
+            "        chunk = s.recv(4096)\n",
+            "        if not chunk:\n",
+            "            break\n",
+            "        data += chunk\n",
+            "text = data.decode('utf-8', 'replace')\n",
+            "assert 'proxy-ok' in text, text\n",
+            "print(text)"
+        ),
+        port = port
     );
     let proxy_request = format!(
         "\"GET http://127.0.0.1:{port}/proxy-ok HTTP/1.1`r`nHost: 127.0.0.1:{port}`r`nProxy-Authorization: $env:RUNSEAL_NETWORK_PROXY_AUTHORIZATION`r`nConnection: close`r`n`r`n\""
@@ -1573,7 +1713,7 @@ try {
 
     let upstream_hit = upstream.join().expect("upstream server thread")?;
 
-    assert!(upstream_hit);
+    assert!(upstream_hit, "{response:#}");
     assert_eq!(response["result"]["status"], "finished");
     assert_eq!(response["result"]["exit_code"], 0);
     assert!(

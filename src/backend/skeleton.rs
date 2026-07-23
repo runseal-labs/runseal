@@ -106,7 +106,9 @@ impl SandboxBackend for MacosExperimentalBackend {
         payload["sandbox_levels"]["workspace-contained"] =
             json!(CapabilityStatus::Supported.as_str());
         payload["network_modes"]["disabled"] = json!(CapabilityStatus::Supported.as_str());
+        payload["network_modes"]["proxy"] = json!(CapabilityStatus::Supported.as_str());
         mark_portable_disabled_features_experimental(&mut payload);
+        mark_macos_proxy_features_experimental(&mut payload);
         payload["capability_probes"] = crate::macos::capability_probe::capability_probes();
         payload
     }
@@ -188,6 +190,14 @@ fn mark_portable_disabled_features_experimental(payload: &mut Value) {
         payload["feature_statuses"][feature] = json!(CapabilityStatus::Experimental.as_str());
     }
 }
+
+fn mark_macos_proxy_features_experimental(payload: &mut Value) {
+    for feature in ["network_proxy", "managed_proxy"] {
+        payload["features"][feature] = json!(true);
+        payload["feature_statuses"][feature] = json!(CapabilityStatus::Experimental.as_str());
+    }
+}
+
 fn compile_local_execution_or_unsupported(
     backend: &dyn SandboxBackend,
     execution_id: &str,
@@ -220,7 +230,7 @@ fn compile_macos_plan(
             policy,
         ));
     }
-    if policy.sandbox_level == SandboxLevel::ReadOnly && portable_network_mode(policy) {
+    if policy.sandbox_level == SandboxLevel::ReadOnly && macos_network_mode(policy) {
         return Ok(PlatformSandboxPlan::macos_read_only_experimental(
             backend,
             execution_id,
@@ -228,7 +238,7 @@ fn compile_macos_plan(
             policy,
         ));
     }
-    if policy.sandbox_level == SandboxLevel::WorkspaceWrite && portable_network_mode(policy) {
+    if policy.sandbox_level == SandboxLevel::WorkspaceWrite && macos_network_mode(policy) {
         return Ok(PlatformSandboxPlan::macos_workspace_write_experimental(
             backend,
             execution_id,
@@ -236,7 +246,7 @@ fn compile_macos_plan(
             policy,
         ));
     }
-    if policy.sandbox_level == SandboxLevel::WorkspaceContained && portable_network_mode(policy) {
+    if policy.sandbox_level == SandboxLevel::WorkspaceContained && macos_network_mode(policy) {
         return Ok(PlatformSandboxPlan::macos_workspace_contained_experimental(
             backend,
             execution_id,
@@ -313,6 +323,13 @@ fn portable_network_mode(policy: &SandboxPolicy) -> bool {
     )
 }
 
+fn macos_network_mode(policy: &SandboxPolicy) -> bool {
+    matches!(
+        policy.network.mode,
+        NetworkMode::Unmanaged | NetworkMode::Disabled | NetworkMode::Proxy
+    )
+}
+
 fn execute_linux_plan(
     plan: &PlatformSandboxPlan,
     command: &[String],
@@ -361,7 +378,49 @@ fn execute_macos_plan(
         ));
     }
     plan.prepare_runtime_roots()?;
-    let output = spawn_macos_sandbox_exec(plan, command, cwd, stdin, env, timeout);
+    let output = (|| {
+        let managed_proxy = if plan.network_managed_proxy == "required" {
+            Some(ManagedSandboxProxy::start().map_err(|err| {
+                io::Error::other(BackendUnavailableError {
+                    reason: format!("macOS managed proxy unavailable: {err}"),
+                })
+            })?)
+        } else {
+            None
+        };
+        let mut events = if managed_proxy.is_some() {
+            vec![json!({
+                "type": "execution.network.proxy_ready",
+                "time": timestamp_now(),
+                "decision": "ready",
+                "network": {
+                    "mode": plan.network_mode,
+                    "direct_egress": plan.network_direct_egress,
+                    "managed_proxy": plan.network_managed_proxy,
+                },
+            })]
+        } else {
+            Vec::new()
+        };
+        let mut execution_env = env.clone();
+        if let Some(proxy) = &managed_proxy {
+            execution_env.entries.extend(proxy.environment());
+        }
+        let mut output = spawn_macos_sandbox_exec(
+            plan,
+            command,
+            cwd,
+            stdin,
+            &execution_env,
+            timeout,
+            managed_proxy.as_ref(),
+        )?;
+        if let Some(proxy) = &managed_proxy {
+            events.extend(proxy.drain_events());
+        }
+        output.events.extend(events);
+        Ok(output)
+    })();
     let cleanup = plan.cleanup_runtime_roots();
     match (output, cleanup) {
         (Ok(output), Ok(_)) => Ok(output),
@@ -380,8 +439,9 @@ fn spawn_macos_sandbox_exec(
     stdin: ExecutionStdin,
     env: &ExecutionEnv,
     timeout: Option<Duration>,
+    managed_proxy: Option<&ManagedSandboxProxy>,
 ) -> io::Result<BackendExecutionOutput> {
-    let profile = macos_profile(plan, cwd)?;
+    let profile = macos_profile(plan, cwd, managed_proxy.map(ManagedSandboxProxy::addr))?;
     let mut sandbox_command = vec![
         "/usr/bin/sandbox-exec".to_string(),
         "-p".to_string(),
@@ -396,7 +456,11 @@ fn spawn_macos_sandbox_exec(
     spawn_local_command(&runner_plan, &sandbox_command, cwd, stdin, env, timeout)
 }
 
-fn macos_profile(plan: &PlatformSandboxPlan, _cwd: &Path) -> io::Result<String> {
+fn macos_profile(
+    plan: &PlatformSandboxPlan,
+    _cwd: &Path,
+    managed_proxy_addr: Option<std::net::SocketAddr>,
+) -> io::Result<String> {
     let workspace_contained = plan.sandbox_level == SandboxLevel::WorkspaceContained.as_str();
     let mut readable_roots = Vec::new();
     if workspace_contained {
@@ -444,6 +508,24 @@ fn macos_profile(plan: &PlatformSandboxPlan, _cwd: &Path) -> io::Result<String> 
     };
     if plan.network_direct_egress == "unmanaged" {
         profile.push_str("(allow network*)");
+    } else if plan.network_managed_proxy == "required" {
+        let addr = managed_proxy_addr.ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "macOS proxy plan requires a managed proxy endpoint",
+            )
+        })?;
+        if !addr.ip().is_loopback() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "macOS managed proxy endpoint must be loopback",
+            ));
+        }
+        profile.push_str(&format!(
+            "(allow network-outbound (remote ip \"localhost:{}\"))",
+            addr.port()
+        ));
+        profile.push_str(MACOS_PROXY_SUPPORT_POLICY);
     }
     for denied_root in &plan.private_portable_deny_roots {
         let denied_root = Path::new(denied_root);
@@ -456,6 +538,28 @@ fn macos_profile(plan: &PlatformSandboxPlan, _cwd: &Path) -> io::Result<String> 
     }
     Ok(profile)
 }
+
+const MACOS_PROXY_SUPPORT_POLICY: &str = r#"
+(allow system-socket
+  (require-all
+    (socket-domain AF_SYSTEM)
+    (socket-protocol 2)
+  )
+)
+(allow mach-lookup
+  (global-name "com.apple.bsd.dirhelper")
+  (global-name "com.apple.system.opendirectoryd.membership")
+  (global-name "com.apple.SecurityServer")
+  (global-name "com.apple.networkd")
+  (global-name "com.apple.ocspd")
+  (global-name "com.apple.trustd.agent")
+  (global-name "com.apple.SystemConfiguration.DNSConfiguration")
+  (global-name "com.apple.SystemConfiguration.configd")
+)
+(allow sysctl-read
+  (sysctl-name-regex #"^net.routetable")
+)
+"#;
 
 const MACOS_CONTAINED_SYSTEM_READ_RULES: &[&str] = &[
     "(subpath \"/bin\")",
@@ -682,13 +786,40 @@ mod portable_contained_tests {
             .map_err(|err| io::Error::other(format!("{err:?}")))?;
         plan.prepare_runtime_roots()?;
 
-        let profile = macos_profile(&plan, &workspace)?;
+        let profile = macos_profile(&plan, &workspace, None)?;
         assert!(profile.contains("(deny default)"));
         assert!(!profile.contains("(allow file-read*)"));
         assert!(profile.contains("(subpath \"/System\")"));
         assert!(profile.contains(&macos_profile_path_literal(&workspace)?));
         assert!(profile.contains("(deny file-read* file-write*"));
 
+        plan.cleanup_runtime_roots()?;
+        Ok(())
+    }
+
+    #[test]
+    fn macos_proxy_profile_allows_only_managed_loopback_endpoint() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(&workspace)?;
+        let policy = normalize_policy(
+            &json!({"sandbox_level": "workspace-write", "network": {"mode": "proxy"}}),
+            &workspace,
+            None,
+        )
+        .unwrap();
+        let plan = MacosExperimentalBackend
+            .compile_plan("macos_proxy_profile", &workspace, &policy)
+            .unwrap();
+        plan.prepare_runtime_roots()?;
+        let proxy_addr =
+            std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 43129);
+
+        let profile = macos_profile(&plan, &workspace, Some(proxy_addr))?;
+
+        assert!(profile.contains(r#"(allow network-outbound (remote ip "localhost:43129"))"#));
+        assert!(!profile.contains("(allow network*)"));
+        assert!(profile.contains("com.apple.trustd.agent"));
         plan.cleanup_runtime_roots()?;
         Ok(())
     }
