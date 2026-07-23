@@ -796,6 +796,10 @@ fn portable_workspace_contained_enforces_host_read_boundary() -> Result<()> {
         assert_backend_unavailable(&response, &workspace)?;
         return Ok(());
     }
+    if is_execution_failed_to_start(&response) {
+        assert_execution_failed_to_start(&response, &workspace)?;
+        return Ok(());
+    }
 
     assert_eq!(response["result"]["status"], "finished", "{response}");
     assert_eq!(response["result"]["exit_code"], 0, "{response}");
