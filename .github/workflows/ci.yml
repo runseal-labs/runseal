@@ -39,6 +39,19 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes bubblewrap
+          if sysctl -n kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          bwrap \
+            --ro-bind / / \
+            --proc /proc \
+            --dev /dev \
+            --unshare-user \
+            --unshare-pid \
+            --unshare-ipc \
+            --unshare-uts \
+            --die-with-parent \
+            -- /bin/true
 
       - name: Run tests
         run: cargo test
