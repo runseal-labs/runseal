@@ -197,6 +197,11 @@ fn ps_write_text(path: &Path, text: &str) -> String {
     )
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn sh_path(path: &Path) -> String {
+    format!("'{}'", path.to_string_lossy().replace('\'', "'\"'\"'"))
+}
+
 fn stdout_json_lines(output: &Output) -> Result<Vec<Value>> {
     String::from_utf8_lossy(&output.stdout)
         .lines()
@@ -748,6 +753,58 @@ fn workspace_contained_denies_external_read_when_supported_or_fails_closed() -> 
             .unwrap_or_default()
             .contains("outside-secret")
     );
+    Ok(())
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn portable_workspace_contained_enforces_host_read_boundary() -> Result<()> {
+    use std::os::unix::fs::symlink;
+
+    let tmp = TempDir::new()?;
+    let workspace = tmp.path().join("workspace");
+    let protected = workspace.join(".git");
+    fs::create_dir_all(&protected)?;
+    let outside = tmp.path().join("outside-secret.txt");
+    fs::write(&outside, "outside-secret")?;
+    let outside_write = tmp.path().join("outside-write.txt");
+    symlink(tmp.path(), workspace.join("escape"))?;
+    let inside = workspace.join("inside.txt");
+    let protected_target = protected.join("blocked.txt");
+
+    let script = format!(
+        "if cat {} 2>/dev/null; then exit 70; fi; \
+         if cat escape/outside-secret.txt 2>/dev/null; then exit 71; fi; \
+         case \"$HOME\" in \"$PWD\"/.runseal/runtime/*/home) ;; *) exit 72 ;; esac; \
+         case \"$TMPDIR\" in \"$PWD\"/.runseal/runtime/*/tmp) ;; *) exit 73 ;; esac; \
+         if printf blocked > {}; then exit 74; fi; \
+         if printf escaped > {}; then exit 75; fi; \
+         printf inside > {}; printf contained",
+        sh_path(&outside),
+        sh_path(&protected_target),
+        sh_path(&outside_write),
+        sh_path(&inside)
+    );
+    let response = execute_params(json!({
+        "command": ["/bin/sh", "-c", script],
+        "cwd": workspace,
+        "policy": "workspace-contained",
+        "network": {"mode": "disabled"}
+    }))?;
+
+    if is_backend_unavailable(&response) {
+        assert_backend_unavailable(&response, &workspace)?;
+        return Ok(());
+    }
+
+    assert_eq!(response["result"]["status"], "finished", "{response}");
+    assert_eq!(response["result"]["exit_code"], 0, "{response}");
+    assert_eq!(fs::read_to_string(&inside)?, "inside");
+    assert!(!protected_target.exists());
+    assert!(!outside_write.exists());
+    let stdout = response["result"]["stdout"].as_str().unwrap_or_default();
+    assert!(stdout.contains("contained"), "{response}");
+    assert!(!stdout.contains("outside-secret"), "{response}");
     Ok(())
 }
 

@@ -21,6 +21,9 @@ pub struct PlatformSandboxPlan {
     pub filesystem_protected: Vec<&'static str>,
     pub(super) private_filesystem_deny: Vec<String>,
     pub(super) private_filesystem_rules: Vec<WindowsFilesystemRule>,
+    pub(super) private_portable_read_roots: Vec<String>,
+    pub(super) private_portable_write_roots: Vec<String>,
+    pub(super) private_portable_deny_roots: Vec<String>,
     pub process_boundary: &'static str,
     pub process_identity: &'static str,
     pub process_cleanup: &'static str,
@@ -75,6 +78,9 @@ impl PlatformSandboxPlan {
             filesystem_protected: protected_filesystem_labels(policy),
             private_filesystem_deny: Vec::new(),
             private_filesystem_rules: Vec::new(),
+            private_portable_read_roots: Vec::new(),
+            private_portable_write_roots: Vec::new(),
+            private_portable_deny_roots: Vec::new(),
             process_boundary: "local-process",
             process_identity: "current-user",
             process_cleanup: "direct-child",
@@ -133,6 +139,9 @@ impl PlatformSandboxPlan {
             filesystem_protected: protected_filesystem_labels(policy),
             private_filesystem_deny: Vec::new(),
             private_filesystem_rules: Vec::new(),
+            private_portable_read_roots: Vec::new(),
+            private_portable_write_roots: Vec::new(),
+            private_portable_deny_roots: Vec::new(),
             process_boundary: "platform-sandbox",
             process_identity: "current-user",
             process_cleanup: "process-tree",
@@ -189,6 +198,15 @@ impl PlatformSandboxPlan {
             filesystem_protected: protected_filesystem_labels(policy),
             private_filesystem_deny: Vec::new(),
             private_filesystem_rules: Vec::new(),
+            private_portable_read_roots: policy
+                .filesystem
+                .read
+                .iter()
+                .chain(policy.filesystem.read_only.iter())
+                .cloned()
+                .collect(),
+            private_portable_write_roots: policy.filesystem.write.clone(),
+            private_portable_deny_roots: policy.filesystem.deny.clone(),
             process_boundary: "platform-sandbox",
             process_identity: "current-user",
             process_cleanup: "process-tree",
@@ -237,6 +255,15 @@ impl PlatformSandboxPlan {
         Self::linux_experimental(backend, execution_id, cwd, policy)
     }
 
+    pub(super) fn linux_workspace_contained_experimental(
+        backend: &dyn SandboxBackend,
+        execution_id: &str,
+        cwd: &Path,
+        policy: &SandboxPolicy,
+    ) -> Self {
+        Self::linux_experimental(backend, execution_id, cwd, policy)
+    }
+
     pub(super) fn macos_read_only_experimental(
         backend: &dyn SandboxBackend,
         execution_id: &str,
@@ -249,6 +276,17 @@ impl PlatformSandboxPlan {
     }
 
     pub(super) fn macos_workspace_write_experimental(
+        backend: &dyn SandboxBackend,
+        execution_id: &str,
+        cwd: &Path,
+        policy: &SandboxPolicy,
+    ) -> Self {
+        let mut plan = Self::linux_experimental(backend, execution_id, cwd, policy);
+        plan.enforcement = "macos-experimental";
+        plan
+    }
+
+    pub(super) fn macos_workspace_contained_experimental(
         backend: &dyn SandboxBackend,
         execution_id: &str,
         cwd: &Path,

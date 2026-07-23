@@ -104,7 +104,7 @@ impl SandboxBackend for MacosExperimentalBackend {
         payload["sandbox_levels"]["read-only"] = json!(CapabilityStatus::Supported.as_str());
         payload["sandbox_levels"]["workspace-write"] = json!(CapabilityStatus::Supported.as_str());
         payload["sandbox_levels"]["workspace-contained"] =
-            json!(CapabilityStatus::Unsupported.as_str());
+            json!(CapabilityStatus::Supported.as_str());
         payload["network_modes"]["disabled"] = json!(CapabilityStatus::Supported.as_str());
         mark_portable_disabled_features_experimental(&mut payload);
         payload["capability_probes"] = crate::macos::capability_probe::capability_probes();
@@ -165,7 +165,7 @@ impl SandboxBackend for LinuxCommunityBackend {
         payload["sandbox_levels"]["read-only"] = json!(CapabilityStatus::Supported.as_str());
         payload["sandbox_levels"]["workspace-write"] = json!(CapabilityStatus::Supported.as_str());
         payload["sandbox_levels"]["workspace-contained"] =
-            json!(CapabilityStatus::Unsupported.as_str());
+            json!(CapabilityStatus::Supported.as_str());
         payload["network_modes"]["disabled"] = json!(CapabilityStatus::Supported.as_str());
         mark_portable_disabled_features_experimental(&mut payload);
         payload["capability_probes"] = crate::linux::capability_probe::capability_probes();
@@ -236,6 +236,14 @@ fn compile_macos_plan(
             policy,
         ));
     }
+    if policy.sandbox_level == SandboxLevel::WorkspaceContained && portable_network_mode(policy) {
+        return Ok(PlatformSandboxPlan::macos_workspace_contained_experimental(
+            backend,
+            execution_id,
+            cwd,
+            policy,
+        ));
+    }
     Err(BackendError::unsupported_with_plan(
         backend,
         policy,
@@ -272,6 +280,14 @@ fn compile_linux_plan(
     }
     if policy.sandbox_level == SandboxLevel::WorkspaceWrite && portable_network_mode(policy) {
         return Ok(PlatformSandboxPlan::linux_workspace_write_experimental(
+            backend,
+            execution_id,
+            cwd,
+            policy,
+        ));
+    }
+    if policy.sandbox_level == SandboxLevel::WorkspaceContained && portable_network_mode(policy) {
+        return Ok(PlatformSandboxPlan::linux_workspace_contained_experimental(
             backend,
             execution_id,
             cwd,
@@ -380,13 +396,18 @@ fn spawn_macos_sandbox_exec(
     spawn_local_command(&runner_plan, &sandbox_command, cwd, stdin, env, timeout)
 }
 
-fn macos_profile(plan: &PlatformSandboxPlan, cwd: &Path) -> io::Result<String> {
+fn macos_profile(plan: &PlatformSandboxPlan, _cwd: &Path) -> io::Result<String> {
+    let workspace_contained = plan.sandbox_level == SandboxLevel::WorkspaceContained.as_str();
+    let mut readable_roots = Vec::new();
+    if workspace_contained {
+        for root in &plan.private_portable_read_roots {
+            push_unique_macos_subpath(&mut readable_roots, Path::new(root))?;
+        }
+    }
+
     let mut writable_roots = Vec::new();
-    if plan.sandbox_level == SandboxLevel::WorkspaceWrite.as_str() {
-        writable_roots.push(format!(
-            "(subpath \"{}\")",
-            macos_profile_path_literal(cwd)?
-        ));
+    for root in &plan.private_portable_write_roots {
+        push_unique_macos_subpath(&mut writable_roots, Path::new(root))?;
     }
     for root in [
         plan.runtime_root.as_deref(),
@@ -397,10 +418,10 @@ fn macos_profile(plan: &PlatformSandboxPlan, cwd: &Path) -> io::Result<String> {
     .into_iter()
     .flatten()
     {
-        writable_roots.push(format!(
-            "(subpath \"{}\")",
-            macos_profile_path_literal(root)?
-        ));
+        push_unique_macos_subpath(&mut writable_roots, Path::new(root))?;
+        if workspace_contained {
+            push_unique_macos_subpath(&mut readable_roots, Path::new(root))?;
+        }
     }
     if writable_roots.is_empty() {
         return Err(io::Error::new(
@@ -408,25 +429,59 @@ fn macos_profile(plan: &PlatformSandboxPlan, cwd: &Path) -> io::Result<String> {
             "macOS plan requires writable roots",
         ));
     }
-    let mut profile = format!(
-        "(version 1)(deny default)(allow process*)(allow sysctl-read)(allow mach-lookup)(allow file-read*)(allow file-write* {})",
-        writable_roots.join(" ")
-    );
+    let mut profile = if workspace_contained {
+        format!(
+            "(version 1)(deny default)(allow process*)(allow sysctl-read)(allow mach-lookup)(allow file-read-metadata)(allow file-read-data (literal \"/\"))(allow file-read* {} {})(allow file-write* {} (literal \"/dev/null\") (literal \"/dev/zero\") (literal \"/dev/random\") (literal \"/dev/urandom\"))",
+            MACOS_CONTAINED_SYSTEM_READ_RULES.join(" "),
+            readable_roots.join(" "),
+            writable_roots.join(" ")
+        )
+    } else {
+        format!(
+            "(version 1)(deny default)(allow process*)(allow sysctl-read)(allow mach-lookup)(allow file-read*)(allow file-write* {})",
+            writable_roots.join(" ")
+        )
+    };
     if plan.network_direct_egress == "unmanaged" {
         profile.push_str("(allow network*)");
     }
-    if plan.sandbox_level == SandboxLevel::WorkspaceWrite.as_str() {
-        for protected in PROTECTED_WORKSPACE_SUBPATHS {
-            let protected_root = cwd.join(protected);
-            if protected_root.exists() {
-                profile.push_str(&format!(
-                    "(deny file-write* (subpath \"{}\"))",
-                    macos_profile_path_literal(&protected_root)?
-                ));
-            }
+    for denied_root in &plan.private_portable_deny_roots {
+        let denied_root = Path::new(denied_root);
+        if denied_root.exists() {
+            profile.push_str(&format!(
+                "(deny file-read* file-write* (subpath \"{}\"))",
+                macos_profile_path_literal(denied_root)?
+            ));
         }
     }
     Ok(profile)
+}
+
+const MACOS_CONTAINED_SYSTEM_READ_RULES: &[&str] = &[
+    "(subpath \"/bin\")",
+    "(subpath \"/sbin\")",
+    "(subpath \"/usr/bin\")",
+    "(subpath \"/usr/sbin\")",
+    "(subpath \"/usr/lib\")",
+    "(subpath \"/usr/libexec\")",
+    "(subpath \"/usr/share\")",
+    "(subpath \"/System\")",
+    "(subpath \"/Library\")",
+    "(subpath \"/private/etc\")",
+    "(subpath \"/private/var/db/timezone\")",
+    "(subpath \"/private/var/db/dyld\")",
+    "(literal \"/dev/null\")",
+    "(literal \"/dev/zero\")",
+    "(literal \"/dev/random\")",
+    "(literal \"/dev/urandom\")",
+];
+
+fn push_unique_macos_subpath(rules: &mut Vec<String>, path: &Path) -> io::Result<()> {
+    let rule = format!("(subpath \"{}\")", macos_profile_path_literal(path)?);
+    if !rules.contains(&rule) {
+        rules.push(rule);
+    }
+    Ok(())
 }
 
 fn macos_profile_path_literal(path: impl AsRef<Path>) -> io::Result<String> {
@@ -447,9 +502,45 @@ fn spawn_linux_bwrap(
     timeout: Option<Duration>,
 ) -> io::Result<BackendExecutionOutput> {
     let mut bwrap_command = vec!["bwrap".to_string()];
-    bwrap_command.extend(["--ro-bind".to_string(), "/".to_string(), "/".to_string()]);
-    if plan.sandbox_level == SandboxLevel::WorkspaceWrite.as_str() {
-        bwrap_command.extend(["--bind".to_string(), path_string(cwd), path_string(cwd)]);
+    let workspace_contained = plan.sandbox_level == SandboxLevel::WorkspaceContained.as_str();
+    if workspace_contained {
+        bwrap_command.extend([
+            "--tmpfs".to_string(),
+            "/run".to_string(),
+            "--tmpfs".to_string(),
+            "/tmp".to_string(),
+        ]);
+        for root in LINUX_CONTAINED_SYSTEM_READ_ROOTS {
+            bwrap_command.extend([
+                "--ro-bind-try".to_string(),
+                (*root).to_string(),
+                (*root).to_string(),
+            ]);
+        }
+        bwrap_command.extend([
+            "--symlink".to_string(),
+            "/run".to_string(),
+            "/var/run".to_string(),
+        ]);
+    } else {
+        bwrap_command.extend(["--ro-bind".to_string(), "/".to_string(), "/".to_string()]);
+        bwrap_command.extend(["--tmpfs".to_string(), "/run".to_string()]);
+    }
+
+    bwrap_command.extend([
+        "--proc".to_string(),
+        "/proc".to_string(),
+        "--dev".to_string(),
+        "/dev".to_string(),
+    ]);
+
+    if workspace_contained {
+        for root in &plan.private_portable_read_roots {
+            push_linux_bind(&mut bwrap_command, "--ro-bind", root)?;
+        }
+    }
+    for root in &plan.private_portable_write_roots {
+        push_linux_bind(&mut bwrap_command, "--bind", root)?;
     }
     for root in [
         plan.runtime_root.as_deref(),
@@ -460,27 +551,20 @@ fn spawn_linux_bwrap(
     .into_iter()
     .flatten()
     {
-        bwrap_command.extend(["--bind".to_string(), root.to_string(), root.to_string()]);
+        push_linux_bind(&mut bwrap_command, "--bind", root)?;
     }
-    if plan.sandbox_level == SandboxLevel::WorkspaceWrite.as_str() {
-        for protected in PROTECTED_WORKSPACE_SUBPATHS {
-            let protected_root = cwd.join(protected);
-            if protected_root.exists() {
-                bwrap_command.extend([
-                    "--ro-bind".to_string(),
-                    path_string(&protected_root),
-                    path_string(&protected_root),
-                ]);
-            }
-        }
+    for denied_root in &plan.private_portable_deny_roots {
+        push_linux_deny(&mut bwrap_command, Path::new(denied_root))?;
+    }
+    if workspace_contained {
+        bwrap_command.extend([
+            "--remount-ro".to_string(),
+            "/run".to_string(),
+            "--remount-ro".to_string(),
+            "/tmp".to_string(),
+        ]);
     }
     bwrap_command.extend([
-        "--proc".to_string(),
-        "/proc".to_string(),
-        "--dev".to_string(),
-        "/dev".to_string(),
-        "--tmpfs".to_string(),
-        "/run".to_string(),
         "--unshare-user".to_string(),
         "--unshare-pid".to_string(),
         "--unshare-ipc".to_string(),
@@ -508,4 +592,114 @@ fn spawn_linux_bwrap(
     runner_plan.process_boundary = "local-process";
     runner_plan.process_cleanup = "direct-child";
     spawn_local_command(&runner_plan, &bwrap_command, cwd, stdin, env, timeout)
+}
+
+const LINUX_CONTAINED_SYSTEM_READ_ROOTS: &[&str] = &[
+    "/bin",
+    "/sbin",
+    "/lib",
+    "/lib32",
+    "/lib64",
+    "/libx32",
+    "/usr/bin",
+    "/usr/sbin",
+    "/usr/lib",
+    "/usr/lib32",
+    "/usr/lib64",
+    "/usr/libexec",
+    "/usr/share",
+    "/etc/ld.so.cache",
+    "/etc/ld.so.conf",
+    "/etc/ld.so.conf.d",
+    "/etc/nsswitch.conf",
+    "/etc/passwd",
+    "/etc/group",
+    "/etc/hosts",
+    "/etc/resolv.conf",
+    "/etc/localtime",
+    "/etc/ssl",
+    "/etc/ca-certificates",
+    "/etc/pki",
+    "/run/systemd/resolve",
+    "/run/NetworkManager",
+    "/run/resolvconf",
+    "/mnt/wsl/resolv.conf",
+];
+
+fn push_linux_bind(command: &mut Vec<String>, operation: &str, path: &str) -> io::Result<()> {
+    let canonical = std::fs::canonicalize(path)?;
+    command.extend([
+        operation.to_string(),
+        path_string(&canonical),
+        path.to_string(),
+    ]);
+    Ok(())
+}
+
+fn push_linux_deny(command: &mut Vec<String>, path: &Path) -> io::Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let canonical = std::fs::canonicalize(path)?;
+    let destination = path_string(&canonical);
+    if canonical.is_dir() {
+        command.extend([
+            "--tmpfs".to_string(),
+            destination.clone(),
+            "--remount-ro".to_string(),
+            destination,
+        ]);
+    } else {
+        command.extend([
+            "--ro-bind".to_string(),
+            "/dev/null".to_string(),
+            destination,
+        ]);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod portable_contained_tests {
+    use super::*;
+    use crate::normalize_policy;
+    use serde_json::json;
+    use tempfile::TempDir;
+
+    #[test]
+    fn macos_contained_profile_uses_default_deny_reads() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(workspace.join(".git"))?;
+        let policy = normalize_policy(
+            &json!("workspace-contained"),
+            &workspace,
+            Some(NetworkMode::Disabled),
+        )
+        .map_err(|err| io::Error::other(format!("{err:?}")))?;
+        let plan = MacosExperimentalBackend
+            .compile_plan("macos_contained_profile", &workspace, &policy)
+            .map_err(|err| io::Error::other(format!("{err:?}")))?;
+        plan.prepare_runtime_roots()?;
+
+        let profile = macos_profile(&plan, &workspace)?;
+        assert!(profile.contains("(deny default)"));
+        assert!(!profile.contains("(allow file-read*)"));
+        assert!(profile.contains("(subpath \"/System\")"));
+        assert!(profile.contains(&macos_profile_path_literal(&workspace)?));
+        assert!(profile.contains("(deny file-read* file-write*"));
+
+        plan.cleanup_runtime_roots()?;
+        Ok(())
+    }
+
+    #[test]
+    fn portable_contained_linux_baseline_excludes_host_profile_roots() {
+        for excluded in ["/", "/home", "/root", "/opt", "/usr/local", "/var", "/run"] {
+            assert!(
+                !LINUX_CONTAINED_SYSTEM_READ_ROOTS.contains(&excluded),
+                "contained baseline must not expose {excluded}"
+            );
+        }
+    }
 }

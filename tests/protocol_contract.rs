@@ -301,7 +301,9 @@ fn expected_workspace_write_status() -> &'static str {
 }
 
 fn expected_workspace_contained_status() -> &'static str {
-    if cfg!(windows) {
+    if cfg!(any(target_os = "linux", target_os = "macos")) {
+        "supported"
+    } else if cfg!(windows) {
         expected_status(expected_windows_sandbox_supported())
     } else {
         "unsupported"

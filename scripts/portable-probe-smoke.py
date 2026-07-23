@@ -2,6 +2,7 @@
 import json
 import os
 import platform
+import shlex
 import shutil
 import subprocess
 import sys
@@ -127,8 +128,8 @@ def assert_linux_read_only(payload: dict) -> None:
         raise SystemExit(f"Linux network.disabled must be supported: {payload}")
     if payload.get("sandbox_levels", {}).get("workspace-write") != "supported":
         raise SystemExit(f"Linux workspace-write must be supported: {payload}")
-    if payload.get("sandbox_levels", {}).get("workspace-contained") != "unsupported":
-        raise SystemExit(f"Linux workspace-contained must be unsupported: {payload}")
+    if payload.get("sandbox_levels", {}).get("workspace-contained") != "supported":
+        raise SystemExit(f"Linux workspace-contained must be supported: {payload}")
 
     target = "read-only-write.txt"
     command = shutil.which("python3") or shutil.which("python") or sys.executable
@@ -209,7 +210,7 @@ def assert_linux_workspace_write(command: str) -> None:
             )
             if result.get("exit_code") == 0 or target.exists():
                 raise SystemExit(f"Linux workspace-write did not block write to {target}: {result}")
-        assert_portable_workspace_contained_fail_closed("Linux", command)
+        assert_portable_workspace_contained("Linux")
 
 
 def assert_portable_proxy_fail_closed(system: str, command: str) -> None:
@@ -257,8 +258,8 @@ def assert_macos_read_only(payload: dict) -> None:
         raise SystemExit(f"macOS read-only must be supported: {payload}")
     if payload.get("sandbox_levels", {}).get("workspace-write") != "supported":
         raise SystemExit(f"macOS workspace-write must be supported: {payload}")
-    if payload.get("sandbox_levels", {}).get("workspace-contained") != "unsupported":
-        raise SystemExit(f"macOS workspace-contained must be unsupported: {payload}")
+    if payload.get("sandbox_levels", {}).get("workspace-contained") != "supported":
+        raise SystemExit(f"macOS workspace-contained must be supported: {payload}")
     if payload.get("network_modes", {}).get("disabled") != "supported":
         raise SystemExit(f"macOS network.disabled must be supported: {payload}")
 
@@ -286,7 +287,7 @@ def assert_macos_read_only(payload: dict) -> None:
             raise SystemExit(f"macOS read-only did not block workspace write: {result}")
         assert_macos_workspace_write(command)
         assert_network_disabled_blocks_direct_egress("Darwin", command)
-        assert_portable_workspace_contained_fail_closed("Darwin", command)
+        assert_portable_workspace_contained("Darwin")
         assert_portable_proxy_fail_closed("Darwin", command)
 
 
@@ -340,9 +341,26 @@ def assert_macos_workspace_write(command: str) -> None:
                 raise SystemExit(f"macOS workspace-write did not block write to {target}: {result}")
 
 
-def assert_portable_workspace_contained_fail_closed(system: str, command: str) -> None:
-    with tempfile.TemporaryDirectory(prefix="runseal-portable-contained-") as cwd:
-        _, payload = run_json(
+def assert_portable_workspace_contained(system: str) -> None:
+    expected_enforcement = {
+        "Darwin": "macos-experimental",
+        "Linux": "linux-experimental",
+    }[system]
+    with tempfile.TemporaryDirectory(prefix="runseal-portable-contained-") as root:
+        root_path = Path(root)
+        workspace = root_path / "workspace"
+        workspace.mkdir()
+        outside = root_path / "outside-secret.txt"
+        outside.write_text("outside-secret")
+        outside_write = root_path / "outside-write.txt"
+        inside = workspace / "inside.txt"
+
+        script = (
+            f"test ! -r {shlex.quote(str(outside))} && "
+            f"! printf escaped > {shlex.quote(str(outside_write))} && "
+            f"printf inside > {shlex.quote(str(inside))}"
+        )
+        _, result = run_json(
             [
                 "exec",
                 "--json",
@@ -351,27 +369,42 @@ def assert_portable_workspace_contained_fail_closed(system: str, command: str) -
                 "--network",
                 "disabled",
                 "--cwd",
-                cwd,
+                str(workspace),
                 "--",
-                command,
+                "/bin/sh",
                 "-c",
-                "print('must not run')",
+                script,
             ],
-            expect_success=False,
+            expect_success=True,
         )
-    data = payload["error"]["data"]
-    expected_backend = {
-        "Darwin": ("runseal-macos-experimental", "experimental", "macos"),
-        "Linux": ("runseal-linux-community", "experimental", "linux"),
-    }[system]
-    if data.get("code") != "BACKEND_CAPABILITY_MISSING" or data.get("support") != "unsupported":
-        raise SystemExit(f"unexpected workspace-contained fail-closed error: {data}")
-    backend = data.get("backend", {})
-    if (backend.get("name"), backend.get("status"), backend.get("platform")) != expected_backend:
-        raise SystemExit(f"unexpected workspace-contained backend details: {backend}")
-    plan = data.get("platform_plan", {})
-    if plan.get("cwd") != "workspace" or plan.get("runtime_root") != "runtime_root":
-        raise SystemExit(f"workspace-contained preview is not public-safe: {plan}")
+        if result.get("platform_plan", {}).get("enforcement") != expected_enforcement:
+            raise SystemExit(f"unexpected workspace-contained plan: {result}")
+        if result.get("exit_code") != 0 or inside.read_text() != "inside":
+            raise SystemExit(f"{system} workspace-contained boundary failed: {result}")
+        if outside_write.exists():
+            raise SystemExit(f"{system} workspace-contained allowed external write: {result}")
+
+        escape = workspace / "escape"
+        escape.symlink_to(root_path, target_is_directory=True)
+        _, result = run_json(
+            [
+                "exec",
+                "--json",
+                "--policy",
+                "workspace-contained",
+                "--network",
+                "disabled",
+                "--cwd",
+                str(workspace),
+                "--",
+                "/bin/sh",
+                "-c",
+                "cat escape/outside-secret.txt",
+            ],
+            expect_success=True,
+        )
+        if result.get("exit_code") == 0 or "outside-secret" in result.get("stdout", ""):
+            raise SystemExit(f"{system} workspace-contained allowed symlink escape: {result}")
 
 
 def main() -> None:
