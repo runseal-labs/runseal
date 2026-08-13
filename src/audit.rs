@@ -117,31 +117,59 @@ fn redact_audit_value(value: &Value) -> Value {
                 .collect(),
         ),
         Value::Array(items) => Value::Array(items.iter().map(redact_audit_value).collect()),
-        Value::String(value) => Value::String(redact_url_userinfo(value)),
+        Value::String(value) => Value::String(redact_url_value(value)),
         _ => value.clone(),
     }
 }
 
-fn redact_url_userinfo(value: &str) -> String {
-    let Some(scheme_end) = value.find("://") else {
+/// Redact credential-bearing material from a URL-like string value.
+///
+/// Fail-closed rules:
+/// - URL values with userinfo (`user:pass@`), a query, or a fragment are
+///   projected to `scheme://[REDACTED]@host[:port]` (or `scheme://host[:port]`
+///   when there is no userinfo), dropping path, query, and fragment, which are
+///   common credential carriers such as signed-URL and OAuth tokens.
+/// - URL-like values (containing `://`) that cannot be parsed are replaced
+///   entirely with `[REDACTED]`.
+/// - Benign URLs and non-URL strings pass through unchanged.
+fn redact_url_value(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
         return value.to_string();
-    };
-    let authority_start = scheme_end + "://".len();
-    let authority_end = value[authority_start..]
-        .find(['/', '?', '#'])
-        .map(|offset| authority_start + offset)
-        .unwrap_or(value.len());
-    let Some(at_offset) = value[authority_start..authority_end].rfind('@') else {
-        return value.to_string();
-    };
-    let userinfo_end = authority_start + at_offset;
+    }
 
-    format!(
-        "{}{}{}",
-        &value[..authority_start],
-        REDACTED,
-        &value[userinfo_end..]
-    )
+    let Ok(url) = url::Url::parse(trimmed) else {
+        if trimmed.contains("://") {
+            return REDACTED.to_string();
+        }
+        return value.to_string();
+    };
+
+    let has_userinfo = !url.username().is_empty() || url.password().is_some();
+    let has_query = url.query().is_some();
+    let has_fragment = url.fragment().is_some();
+    if !has_userinfo && !has_query && !has_fragment {
+        return value.to_string();
+    }
+
+    let host = match url.host() {
+        Some(url::Host::Domain(domain)) => domain.to_string(),
+        Some(url::Host::Ipv4(address)) => address.to_string(),
+        Some(url::Host::Ipv6(address)) => format!("[{address}]"),
+        None => "<none>".to_string(),
+    };
+    let port = url
+        .port()
+        .map_or_else(String::new, |port| format!(":{port}"));
+
+    let mut redacted = format!("{}://", url.scheme());
+    if has_userinfo {
+        redacted.push_str(REDACTED);
+        redacted.push('@');
+    }
+    redacted.push_str(&host);
+    redacted.push_str(&port);
+    redacted
 }
 
 fn is_sensitive_audit_key(key: &str) -> bool {
@@ -267,9 +295,89 @@ mod tests {
                     {"github_token": REDACTED},
                     {"service_api_key": REDACTED},
                     {"aws_region": REDACTED},
-                    {"proxy_url": "http://[REDACTED]@example.invalid:8080/path"}
+                    {"proxy_url": "http://[REDACTED]@example.invalid:8080"}
                 ]
             })
         );
+    }
+
+    #[test]
+    fn redact_url_value_projects_credential_carriers_to_authority() {
+        let cases = [
+            (
+                "http://user:secret@example.invalid:8080/path",
+                "http://[REDACTED]@example.invalid:8080",
+            ),
+            (
+                "https://user@example.invalid/private",
+                "https://[REDACTED]@example.invalid",
+            ),
+            (
+                "socks5://:secret@proxy.example.test:1080",
+                "socks5://[REDACTED]@proxy.example.test:1080",
+            ),
+            (
+                "http://PERCENT%2DENCODED%2DUSER:PERCENT%2DENCODED%2DPASS@proxy.example.test:8080",
+                "http://[REDACTED]@proxy.example.test:8080",
+            ),
+            (
+                "http://user:secret@[2001:db8::1]:3128/IPV6CANARY",
+                "http://[REDACTED]@[2001:db8::1]:3128",
+            ),
+            (
+                "https://index.example.test/simple?token=QUERYCANARY",
+                "https://index.example.test",
+            ),
+            (
+                "https://index.example.test:8443/simple?X-Amz-Credential=SIGNCANARY&X-Amz-Signature=SIGCANARY",
+                "https://index.example.test:8443",
+            ),
+            (
+                "https://example.test/callback#access_token=FRAGCANARY",
+                "https://example.test",
+            ),
+            (
+                "https://user:secret@example.test/path?token=QUERYCANARY#frag=FRAGCANARY",
+                "https://[REDACTED]@example.test",
+            ),
+        ];
+
+        for (input, expected) in cases {
+            assert_eq!(redact_url_value(input), expected, "input={input}");
+        }
+    }
+
+    #[test]
+    fn redact_url_value_keeps_benign_values_unchanged() {
+        let benign = [
+            "https://example.invalid/docs",
+            "http://127.0.0.1:43128",
+            "https://index.example.test/simple",
+            "file:///private/tmp/simple",
+            "runseal://local",
+            "plain text without urls",
+            "  https://example.invalid  ",
+            "",
+            "no-scheme-value",
+        ];
+
+        for input in benign {
+            assert_eq!(redact_url_value(input), input, "input={input}");
+        }
+    }
+
+    #[test]
+    fn redact_url_value_fails_closed_on_ambiguous_values() {
+        let ambiguous = [
+            "http://user:pass?token=x@example.invalid",
+            "not a url://with spaces",
+            "http://host:notaport/path",
+            "http://[broken ipv6/path",
+            "://missing-scheme",
+        ];
+
+        for input in ambiguous {
+            assert_eq!(redact_url_value(input), REDACTED, "input={input}");
+        }
     }
 }

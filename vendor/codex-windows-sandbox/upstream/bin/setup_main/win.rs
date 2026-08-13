@@ -18,6 +18,7 @@ use codex_windows_sandbox::ensure_allow_mask_aces_with_inheritance;
 use codex_windows_sandbox::ensure_allow_write_aces;
 use codex_windows_sandbox::ensure_appcontainer_loopback_exemption;
 use codex_windows_sandbox::extract_setup_failure;
+use codex_windows_sandbox::fetch_dacl_handle;
 use codex_windows_sandbox::hide_newly_created_users;
 use codex_windows_sandbox::install_wfp_filters;
 use codex_windows_sandbox::is_command_cwd_root;
@@ -39,7 +40,6 @@ use codex_windows_sandbox::write_setup_error_report;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashSet;
-use std::ffi::OsStr;
 use std::ffi::c_void;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -49,10 +49,14 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::process::Stdio;
 use std::sync::mpsc;
-use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::HLOCAL;
 use windows_sys::Win32::Foundation::LocalFree;
+use windows_sys::Win32::Security::ACCESS_ALLOWED_ACE;
+use windows_sys::Win32::Security::ACCESS_DENIED_ACE;
+use windows_sys::Win32::Security::ACE_HEADER;
 use windows_sys::Win32::Security::ACL;
+use windows_sys::Win32::Security::ACL_SIZE_INFORMATION;
+use windows_sys::Win32::Security::AclSizeInformation;
 use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
 use windows_sys::Win32::Security::Authorization::EXPLICIT_ACCESS_W;
 use windows_sys::Win32::Security::Authorization::GRANT_ACCESS;
@@ -63,8 +67,14 @@ use windows_sys::Win32::Security::Authorization::TRUSTEE_IS_SID;
 use windows_sys::Win32::Security::Authorization::TRUSTEE_W;
 use windows_sys::Win32::Security::CONTAINER_INHERIT_ACE;
 use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
+use windows_sys::Win32::Security::EqualSid;
+use windows_sys::Win32::Security::GENERIC_MAPPING;
+use windows_sys::Win32::Security::GetAce;
+use windows_sys::Win32::Security::GetAclInformation;
+use windows_sys::Win32::Security::MapGenericMask;
 use windows_sys::Win32::Security::OBJECT_INHERIT_ACE;
 use windows_sys::Win32::Storage::FileSystem::DELETE;
+use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
 use windows_sys::Win32::Storage::FileSystem::FILE_DELETE_CHILD;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_EXECUTE;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
@@ -72,6 +82,10 @@ use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
 use windows_sys::Win32::System::Diagnostics::Debug::SetErrorMode;
 
 const DENY_ACCESS: i32 = 3;
+const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
+const ACCESS_DENIED_ACE_TYPE: u8 = 1;
+const INHERITED_ACE_FLAG: u8 = 0x10;
+const INHERITANCE_FLAGS_MASK: u8 = 0x0f;
 const SETUP_HELPER_NONINTERACTIVE_ERROR_MODE: u32 = 0x0001 | 0x0002 | 0x8000;
 
 mod sandbox_users;
@@ -470,6 +484,109 @@ fn read_mask_allows_or_log(
     }
 }
 
+#[derive(Clone, Copy)]
+struct LockAclEntry {
+    sid: *mut c_void,
+    mask: u32,
+    access_mode: i32,
+}
+
+unsafe fn dacl_matches_lock_policy(
+    dacl: *mut ACL,
+    expected_entries: &[LockAclEntry],
+    trusted_inherited_allow_sids: &[*mut c_void],
+) -> Result<bool> {
+    if dacl.is_null() {
+        return Ok(false);
+    }
+
+    unsafe {
+        let mut info: ACL_SIZE_INFORMATION = std::mem::zeroed();
+        if GetAclInformation(
+            dacl as *const ACL,
+            &mut info as *mut _ as *mut c_void,
+            std::mem::size_of::<ACL_SIZE_INFORMATION>() as u32,
+            AclSizeInformation,
+        ) == 0
+        {
+            anyhow::bail!("GetAclInformation failed while checking sandbox directory ACL");
+        }
+
+        let mapping = GENERIC_MAPPING {
+            GenericRead: FILE_GENERIC_READ,
+            GenericWrite: FILE_GENERIC_WRITE,
+            GenericExecute: FILE_GENERIC_EXECUTE,
+            GenericAll: FILE_ALL_ACCESS,
+        };
+        let required_inheritance = (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE) as u8;
+        let mut matched = vec![false; expected_entries.len()];
+        for index in 0..info.AceCount {
+            let mut ace_ptr: *mut c_void = std::ptr::null_mut();
+            if GetAce(dacl as *const ACL, index, &mut ace_ptr) == 0 {
+                anyhow::bail!("GetAce failed while checking sandbox directory ACL");
+            }
+            let header = &*(ace_ptr as *const ACE_HEADER);
+            let (access_mode, mut mask) = match header.AceType {
+                ACCESS_ALLOWED_ACE_TYPE => {
+                    (GRANT_ACCESS, (*(ace_ptr as *const ACCESS_ALLOWED_ACE)).Mask)
+                }
+                ACCESS_DENIED_ACE_TYPE => {
+                    (DENY_ACCESS, (*(ace_ptr as *const ACCESS_DENIED_ACE)).Mask)
+                }
+                _ => return Ok(false),
+            };
+            let sid = (ace_ptr as usize
+                + std::mem::size_of::<ACE_HEADER>()
+                + std::mem::size_of::<u32>()) as *mut c_void;
+
+            if header.AceFlags & INHERITED_ACE_FLAG != 0 {
+                let trusted = access_mode == GRANT_ACCESS
+                    && trusted_inherited_allow_sids
+                        .iter()
+                        .any(|trusted_sid| EqualSid(sid, *trusted_sid) != 0);
+                if !trusted {
+                    return Ok(false);
+                }
+                continue;
+            }
+
+            let Some((expected_index, expected)) =
+                expected_entries.iter().enumerate().find(|(_, entry)| {
+                    entry.access_mode == access_mode && EqualSid(sid, entry.sid) != 0
+                })
+            else {
+                return Ok(false);
+            };
+            let mut expected_mask = expected.mask;
+            MapGenericMask(&mut mask, &mapping);
+            MapGenericMask(&mut expected_mask, &mapping);
+            if mask != expected_mask
+                || header.AceFlags & INHERITANCE_FLAGS_MASK != required_inheritance
+            {
+                return Ok(false);
+            }
+            matched[expected_index] = true;
+        }
+
+        Ok(matched.into_iter().all(|entry| entry))
+    }
+}
+
+fn lock_policy_is_current(
+    dir: &Path,
+    expected_entries: &[LockAclEntry],
+    trusted_inherited_allow_sids: &[*mut c_void],
+) -> Result<bool> {
+    unsafe {
+        let (dacl, security_descriptor) = fetch_dacl_handle(dir)?;
+        let result = dacl_matches_lock_policy(dacl, expected_entries, trusted_inherited_allow_sids);
+        if !security_descriptor.is_null() {
+            LocalFree(security_descriptor as HLOCAL);
+        }
+        result
+    }
+}
+
 fn lock_sandbox_dir(
     dir: &Path,
     real_user: &str,
@@ -477,7 +594,7 @@ fn lock_sandbox_dir(
     sandbox_group_access_mode: i32,
     sandbox_group_mask: u32,
     real_user_mask: u32,
-    _log: &mut dyn Write,
+    allow_existing_acl_noop: bool,
 ) -> Result<()> {
     std::fs::create_dir_all(dir)?;
     let system_sid = resolve_sid("SYSTEM")?;
@@ -501,33 +618,49 @@ fn lock_sandbox_dir(
         ),
         (real_sid, real_user_mask, GRANT_ACCESS),
     ];
+    let sids = entries
+        .iter()
+        .map(|(sid_bytes, _, _)| {
+            let sid = string_from_sid_bytes(sid_bytes).map_err(anyhow::Error::msg)?;
+            LocalSid::from_string(&sid)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let expected_entries = entries
+        .iter()
+        .zip(&sids)
+        .map(|((_, mask, access_mode), sid)| LockAclEntry {
+            sid: sid.as_ptr(),
+            mask: *mask,
+            access_mode: *access_mode,
+        })
+        .collect::<Vec<_>>();
+    let trusted_inherited_allow_sids = expected_entries
+        .iter()
+        .skip(1)
+        .map(|entry| entry.sid)
+        .collect::<Vec<_>>();
+    if allow_existing_acl_noop
+        && lock_policy_is_current(dir, &expected_entries, &trusted_inherited_allow_sids)?
+    {
+        return Ok(());
+    }
+
     unsafe {
-        let mut eas: Vec<EXPLICIT_ACCESS_W> = Vec::new();
-        let mut sids: Vec<*mut c_void> = Vec::new();
-        for (sid_bytes, mask, access_mode) in entries.iter().map(|(s, m, a)| (s, *m, *a)) {
-            let sid_str = string_from_sid_bytes(sid_bytes).map_err(anyhow::Error::msg)?;
-            let sid_w = to_wide(OsStr::new(&sid_str));
-            let mut psid: *mut c_void = std::ptr::null_mut();
-            if ConvertStringSidToSidW(sid_w.as_ptr(), &mut psid) == 0 {
-                return Err(anyhow::anyhow!(
-                    "ConvertStringSidToSidW failed: {}",
-                    GetLastError()
-                ));
-            }
-            sids.push(psid);
-            eas.push(EXPLICIT_ACCESS_W {
-                grfAccessPermissions: mask,
-                grfAccessMode: access_mode,
+        let eas = expected_entries
+            .iter()
+            .map(|entry| EXPLICIT_ACCESS_W {
+                grfAccessPermissions: entry.mask,
+                grfAccessMode: entry.access_mode,
                 grfInheritance: OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE,
                 Trustee: TRUSTEE_W {
                     pMultipleTrustee: std::ptr::null_mut(),
                     MultipleTrusteeOperation: 0,
                     TrusteeForm: TRUSTEE_IS_SID,
                     TrusteeType: TRUSTEE_IS_SID,
-                    ptstrName: psid as *mut u16,
+                    ptstrName: entry.sid as *mut u16,
                 },
-            });
-        }
+            })
+            .collect::<Vec<_>>();
         let mut new_dacl: *mut ACL = std::ptr::null_mut();
         let set = SetEntriesInAclW(
             eas.len() as u32,
@@ -550,18 +683,13 @@ fn lock_sandbox_dir(
             new_dacl,
             std::ptr::null_mut(),
         );
+        if !new_dacl.is_null() {
+            LocalFree(new_dacl as HLOCAL);
+        }
         if res != 0 {
             return Err(anyhow::anyhow!(
                 "SetNamedSecurityInfoW sandbox dir failed: {res}",
             ));
-        }
-        if !new_dacl.is_null() {
-            LocalFree(new_dacl as HLOCAL);
-        }
-        for sid in sids {
-            if !sid.is_null() {
-                LocalFree(sid as HLOCAL);
-            }
         }
     }
     Ok(())
@@ -1072,7 +1200,7 @@ fn lock_persistent_sandbox_dirs(
         GRANT_ACCESS,
         FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
         FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE,
-        log,
+        false,
     )
     .map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
@@ -1090,7 +1218,7 @@ fn lock_persistent_sandbox_dirs(
         DENY_ACCESS,
         FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
         FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE,
-        log,
+        false,
     )
     .map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
@@ -1120,7 +1248,7 @@ fn lock_sandbox_bin_dir(
         GRANT_ACCESS,
         FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
         FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
-        log,
+        true,
     )
     .map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
@@ -1609,9 +1737,13 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
 
 #[cfg(test)]
 mod tests {
+    use super::INHERITED_ACE_FLAG;
+    use super::LocalSid;
+    use super::LockAclEntry;
     use super::Payload;
     use super::SETUP_VERSION;
     use super::SetupInvocation;
+    use super::dacl_matches_lock_policy;
     use super::parse_setup_invocation;
     use super::run_payload_file;
     use super::setup_task_request_id;
@@ -1623,6 +1755,20 @@ mod tests {
     use serde_json::json;
     use std::fs;
     use std::path::PathBuf;
+    use windows_sys::Win32::Foundation::HLOCAL;
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::ACL;
+    use windows_sys::Win32::Security::Authorization::EXPLICIT_ACCESS_W;
+    use windows_sys::Win32::Security::Authorization::GRANT_ACCESS;
+    use windows_sys::Win32::Security::Authorization::SetEntriesInAclW;
+    use windows_sys::Win32::Security::Authorization::TRUSTEE_IS_SID;
+    use windows_sys::Win32::Security::Authorization::TRUSTEE_W;
+    use windows_sys::Win32::Security::CONTAINER_INHERIT_ACE;
+    use windows_sys::Win32::Security::OBJECT_INHERIT_ACE;
+    use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
+    use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_EXECUTE;
+    use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
+    use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
 
     fn payload_json() -> serde_json::Value {
         json!({
@@ -1635,6 +1781,151 @@ mod tests {
             "proxy_ports": [],
             "real_user": "User",
         })
+    }
+
+    unsafe fn test_dacl_with_flags(entries: &[(LockAclEntry, u32)]) -> *mut ACL {
+        let explicit_entries = entries
+            .iter()
+            .map(|(entry, inheritance)| EXPLICIT_ACCESS_W {
+                grfAccessPermissions: entry.mask,
+                grfAccessMode: entry.access_mode,
+                grfInheritance: *inheritance,
+                Trustee: TRUSTEE_W {
+                    pMultipleTrustee: std::ptr::null_mut(),
+                    MultipleTrusteeOperation: 0,
+                    TrusteeForm: TRUSTEE_IS_SID,
+                    TrusteeType: TRUSTEE_IS_SID,
+                    ptstrName: entry.sid as *mut u16,
+                },
+            })
+            .collect::<Vec<_>>();
+        let mut dacl: *mut ACL = std::ptr::null_mut();
+        assert_eq!(
+            SetEntriesInAclW(
+                explicit_entries.len() as u32,
+                explicit_entries.as_ptr(),
+                std::ptr::null_mut(),
+                &mut dacl,
+            ),
+            0
+        );
+        dacl
+    }
+
+    unsafe fn test_dacl(entries: &[LockAclEntry]) -> *mut ACL {
+        let entries = entries
+            .iter()
+            .copied()
+            .map(|entry| (entry, OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE))
+            .collect::<Vec<_>>();
+        unsafe { test_dacl_with_flags(&entries) }
+    }
+
+    unsafe fn free_test_dacl(dacl: *mut ACL) {
+        if !dacl.is_null() {
+            unsafe {
+                LocalFree(dacl as HLOCAL);
+            }
+        }
+    }
+
+    fn test_sid(value: &str) -> LocalSid {
+        match LocalSid::from_string(value) {
+            Ok(sid) => sid,
+            Err(err) => panic!("failed to create test SID {value}: {err:#}"),
+        }
+    }
+
+    unsafe fn assert_lock_policy_result(
+        dacl: *mut ACL,
+        expected_entries: &[LockAclEntry],
+        trusted_inherited_allow_sids: &[*mut std::ffi::c_void],
+        expected: bool,
+    ) {
+        let actual = match unsafe {
+            dacl_matches_lock_policy(dacl, expected_entries, trusted_inherited_allow_sids)
+        } {
+            Ok(actual) => actual,
+            Err(err) => panic!("failed to inspect test ACL: {err:#}"),
+        };
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn lock_policy_accepts_exact_acl_and_rejects_broader_or_untrusted_access() {
+        let sandbox_group = test_sid("S-1-5-21-1-2-3-1000");
+        let system = test_sid("S-1-5-18");
+        let administrators = test_sid("S-1-5-32-544");
+        let real_user = test_sid("S-1-5-21-1-2-3-1001");
+        let outsider = test_sid("S-1-1-0");
+        let modify_mask = FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE;
+        let expected = [
+            LockAclEntry {
+                sid: sandbox_group.as_ptr(),
+                mask: FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+                access_mode: GRANT_ACCESS,
+            },
+            LockAclEntry {
+                sid: system.as_ptr(),
+                mask: modify_mask,
+                access_mode: GRANT_ACCESS,
+            },
+            LockAclEntry {
+                sid: administrators.as_ptr(),
+                mask: modify_mask,
+                access_mode: GRANT_ACCESS,
+            },
+            LockAclEntry {
+                sid: real_user.as_ptr(),
+                mask: modify_mask,
+                access_mode: GRANT_ACCESS,
+            },
+        ];
+        let trusted_inherited = [system.as_ptr(), administrators.as_ptr(), real_user.as_ptr()];
+
+        unsafe {
+            let exact = test_dacl(&expected);
+            assert_lock_policy_result(exact, &expected, &trusted_inherited, true);
+            free_test_dacl(exact);
+
+            let mut with_trusted_inheritance = expected
+                .iter()
+                .copied()
+                .map(|entry| (entry, OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE))
+                .collect::<Vec<_>>();
+            with_trusted_inheritance.push((
+                LockAclEntry {
+                    sid: administrators.as_ptr(),
+                    mask: FILE_ALL_ACCESS,
+                    access_mode: GRANT_ACCESS,
+                },
+                OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE | u32::from(INHERITED_ACE_FLAG),
+            ));
+            let with_trusted_inheritance = test_dacl_with_flags(&with_trusted_inheritance);
+            assert_lock_policy_result(
+                with_trusted_inheritance,
+                &expected,
+                &trusted_inherited,
+                true,
+            );
+            free_test_dacl(with_trusted_inheritance);
+
+            let mut broader = expected;
+            broader[0].mask = modify_mask;
+            let broader = test_dacl(&broader);
+            assert_lock_policy_result(broader, &expected, &trusted_inherited, false);
+            free_test_dacl(broader);
+
+            let mut untrusted = expected.to_vec();
+            untrusted.push(LockAclEntry {
+                sid: outsider.as_ptr(),
+                mask: FILE_GENERIC_READ,
+                access_mode: GRANT_ACCESS,
+            });
+            let untrusted = test_dacl(&untrusted);
+            assert_lock_policy_result(untrusted, &expected, &trusted_inherited, false);
+            free_test_dacl(untrusted);
+        }
     }
 
     #[test]

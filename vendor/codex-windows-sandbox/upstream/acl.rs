@@ -30,8 +30,10 @@ use windows_sys::Win32::Security::EqualSid;
 use windows_sys::Win32::Security::GENERIC_MAPPING;
 use windows_sys::Win32::Security::GetAce;
 use windows_sys::Win32::Security::GetAclInformation;
+use windows_sys::Win32::Security::GetSecurityDescriptorControl;
 use windows_sys::Win32::Security::MapGenericMask;
 use windows_sys::Win32::Security::PROTECTED_DACL_SECURITY_INFORMATION;
+use windows_sys::Win32::Security::SE_DACL_PROTECTED;
 use windows_sys::Win32::Storage::FileSystem::CreateFileW;
 use windows_sys::Win32::Storage::FileSystem::DELETE;
 use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
@@ -80,6 +82,22 @@ pub unsafe fn protect_dacl_from_inheritance(path: &Path) -> Result<()> {
     if code != ERROR_SUCCESS {
         anyhow::bail!("GetNamedSecurityInfoW failed: {code}");
     }
+
+    let mut control = 0;
+    let mut revision = 0;
+    if GetSecurityDescriptorControl(security_descriptor, &mut control, &mut revision) == 0 {
+        if !security_descriptor.is_null() {
+            LocalFree(security_descriptor as HLOCAL);
+        }
+        anyhow::bail!("GetSecurityDescriptorControl failed while protecting DACL");
+    }
+    if !dacl_update_required(false, control) {
+        if !security_descriptor.is_null() {
+            LocalFree(security_descriptor as HLOCAL);
+        }
+        return Ok(());
+    }
+
     let result = SetNamedSecurityInfoW(
         to_wide(path).as_ptr() as *mut u16,
         1,
@@ -96,6 +114,15 @@ pub unsafe fn protect_dacl_from_inheritance(path: &Path) -> Result<()> {
         anyhow::bail!("protect DACL from inheritance failed: {result}");
     }
     Ok(())
+}
+
+/// Whether a DACL write is still required given whether untrusted allow ACEs
+/// were removed and the DACL protection control bits of the current descriptor.
+///
+/// Skips rewriting DACLs that are already protected and unchanged, avoiding
+/// redundant security-descriptor churn on every setup or execution pass.
+fn dacl_update_required(removed_untrusted_allow_aces: bool, control: u16) -> bool {
+    removed_untrusted_allow_aces || control & SE_DACL_PROTECTED == 0
 }
 
 /// Fetch DACL via handle-based query; caller must LocalFree the returned SD.
@@ -779,3 +806,16 @@ pub unsafe fn allow_null_device(psid: *mut c_void) {
 }
 const CONTAINER_INHERIT_ACE: u32 = 0x2;
 const OBJECT_INHERIT_ACE: u32 = 0x1;
+
+#[cfg(test)]
+mod tests {
+    use super::dacl_update_required;
+    use windows_sys::Win32::Security::SE_DACL_PROTECTED;
+
+    #[test]
+    fn dacl_update_required_skips_already_protected_noop() {
+        assert!(!dacl_update_required(false, SE_DACL_PROTECTED));
+        assert!(dacl_update_required(true, SE_DACL_PROTECTED));
+        assert!(dacl_update_required(false, 0));
+    }
+}
