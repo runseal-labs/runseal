@@ -548,7 +548,8 @@ fn machine_windows_sandbox_home(cwd: &Path) -> PathBuf {
         // broker agree regardless of each process's working directory. A
         // relative override would point the broker at a different directory
         // than the caller and silently skip setup.
-        return std::path::absolute(PathBuf::from(home)).unwrap_or_else(|_| PathBuf::from(home));
+        let home_path = PathBuf::from(home);
+        return std::path::absolute(home_path.clone()).unwrap_or(home_path);
     }
     std::env::var_os("LOCALAPPDATA")
         .map(|root| PathBuf::from(root).join("RunSeal").join("windows-sandbox"))
