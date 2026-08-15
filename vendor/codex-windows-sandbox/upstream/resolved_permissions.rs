@@ -457,6 +457,53 @@ mod tests {
     }
 
     #[test]
+    fn writable_root_that_is_also_readable_is_not_a_read_only_subpath() {
+        use codex_protocol::models::ManagedFileSystemPermissions;
+        use codex_protocol::permissions::{
+            FileSystemAccessMode, FileSystemPath, FileSystemSandboxEntry, FileSystemSandboxPolicy,
+            NetworkSandboxPolicy,
+        };
+
+        let tmp = TempDir::new().expect("tempdir");
+        let cwd = tmp.path().join("workspace");
+        std::fs::create_dir_all(&cwd).expect("create cwd");
+        let workspace_roots = workspace_roots_for(cwd.as_path());
+        // Read + Write on the same workspace root (RunSeal workspace-contained).
+        let file_system = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: workspace_roots[0].clone(),
+                },
+                access: FileSystemAccessMode::Read,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: workspace_roots[0].clone(),
+                },
+                access: FileSystemAccessMode::Write,
+            },
+        ]);
+        let profile = PermissionProfile::Managed {
+            file_system: ManagedFileSystemPermissions::from_sandbox_policy(&file_system),
+            network: NetworkSandboxPolicy::Restricted,
+        };
+        let permissions =
+            ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_workspace_roots(
+                &profile,
+                workspace_roots.as_slice(),
+            )
+            .expect("permissions");
+        let roots = permissions.writable_roots_for_cwd(&cwd, &HashMap::new());
+
+        assert_eq!(roots.len(), 1);
+        assert!(
+            roots[0].read_only_subpaths.is_empty(),
+            "the writable root itself must not be a read-only subpath: {:?}",
+            roots[0].read_only_subpaths
+        );
+    }
+
+    #[test]
     fn permission_profile_rejects_disabled_profiles() {
         let err = ResolvedWindowsSandboxPermissions::try_from_permission_profile(
             &PermissionProfile::Disabled,

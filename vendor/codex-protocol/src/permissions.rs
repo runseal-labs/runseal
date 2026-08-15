@@ -308,9 +308,14 @@ impl FileSystemSandboxPolicy {
                 continue;
             };
             for writable_root in &mut roots {
+                // Only sub-paths under the writable root are read-only carveouts;
+                // a read entry that equals the writable root itself is the root's
+                // own read access and must not be recorded as a read-only subpath,
+                // or setup would deny writes to the root.
                 if read_only_path
                     .as_path()
                     .starts_with(writable_root.root.as_path())
+                    && read_only_path.as_path() != writable_root.root.as_path()
                 {
                     writable_root
                         .read_only_subpaths
