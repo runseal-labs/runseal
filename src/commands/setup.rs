@@ -150,25 +150,25 @@ fn run_windows_sandbox_setup_inner(
         }
         Err(err) => return Err(err),
     };
-    if !windows_sandbox_setup_requires_setup(&setup_status) {
-        println!("{}", windows_sandbox_setup_success_payload(cwd));
-        return Ok(());
-    }
-    if elevate && setup_status["elevated"].as_bool() == Some(false) {
-        return request_elevated_windows_sandbox_setup(cwd, json_output, setup_status);
-    }
-    if !windows_sandbox_setup_can_run_now(&setup_status) {
-        if elevate {
+    match windows_sandbox_setup_action(&setup_status, elevate) {
+        WindowsSandboxSetupAction::AlreadyReady => {
+            println!("{}", windows_sandbox_setup_success_payload(cwd));
+            return Ok(());
+        }
+        WindowsSandboxSetupAction::RequestElevation => {
             return request_elevated_windows_sandbox_setup(cwd, json_output, setup_status);
         }
-        if json_output {
-            println!(
-                "{}",
-                cli_error_payload(windows_sandbox_setup_failed_error(cwd))
-            );
-            return Err(String::new());
+        WindowsSandboxSetupAction::FailClosed => {
+            if json_output {
+                println!(
+                    "{}",
+                    cli_error_payload(windows_sandbox_setup_failed_error(cwd))
+                );
+                return Err(String::new());
+            }
+            return Err(WINDOWS_SANDBOX_SETUP_FAILED.to_string());
         }
-        return Err(WINDOWS_SANDBOX_SETUP_FAILED.to_string());
+        WindowsSandboxSetupAction::RunSetup => {}
     }
     let sandbox_home = backend::windows_sandbox_home(cwd);
     if let Err(err) = run_windows_sandbox_full_setup(cwd, &sandbox_home) {
@@ -321,7 +321,114 @@ fn wide_os_null(value: &std::ffi::OsStr) -> Vec<u16> {
 
 #[cfg(all(test, windows))]
 mod tests {
-    use super::quote_windows_arg;
+    use super::{
+        WindowsSandboxSetupAction, quote_windows_arg, windows_sandbox_setup_action,
+        windows_sandbox_setup_status_payload,
+    };
+    use serde_json::json;
+
+    #[test]
+    fn windows_setup_action_runs_setup_through_broker_without_uac() {
+        // can_run_setup_now=true (scheduled broker registered) must run setup
+        // directly; --elevate must not shortcut into a UAC prompt.
+        let status = json!({
+            "requires_setup": true,
+            "can_run_setup_now": true,
+            "elevated": false,
+            "broker": "available",
+        });
+        assert_eq!(
+            windows_sandbox_setup_action(&status, true),
+            WindowsSandboxSetupAction::RunSetup
+        );
+        assert_eq!(
+            windows_sandbox_setup_action(&status, false),
+            WindowsSandboxSetupAction::RunSetup
+        );
+    }
+
+    #[test]
+    fn windows_setup_action_is_already_ready_when_setup_complete() {
+        let status = json!({
+            "requires_setup": false,
+            "can_run_setup_now": true,
+            "elevated": false,
+            "broker": "unavailable",
+        });
+        assert_eq!(
+            windows_sandbox_setup_action(&status, true),
+            WindowsSandboxSetupAction::AlreadyReady
+        );
+        assert_eq!(
+            windows_sandbox_setup_action(&status, false),
+            WindowsSandboxSetupAction::AlreadyReady
+        );
+    }
+
+    #[test]
+    fn windows_setup_action_requests_elevation_without_broker_when_requested() {
+        let status = json!({
+            "requires_setup": true,
+            "can_run_setup_now": false,
+            "elevated": false,
+            "broker": "unavailable",
+        });
+        assert_eq!(
+            windows_sandbox_setup_action(&status, true),
+            WindowsSandboxSetupAction::RequestElevation
+        );
+    }
+
+    #[test]
+    fn windows_setup_action_fails_closed_without_broker_or_elevation_request() {
+        let status = json!({
+            "requires_setup": true,
+            "can_run_setup_now": false,
+            "elevated": false,
+            "broker": "unavailable",
+        });
+        assert_eq!(
+            windows_sandbox_setup_action(&status, false),
+            WindowsSandboxSetupAction::FailClosed
+        );
+    }
+
+    #[test]
+    fn windows_setup_status_payload_reports_broker_capable_repair() {
+        let payload = windows_sandbox_setup_status_payload(true, false, true, Some(false));
+        assert_eq!(payload["requires_setup"], true);
+        assert_eq!(payload["broker"], "available");
+        assert_eq!(payload["can_run_setup_now"], true);
+        assert_eq!(payload["can_repair"], true);
+        assert_eq!(payload["next_action"], "run_setup");
+        assert!(
+            !payload["next_command"]
+                .as_str()
+                .expect("next command")
+                .contains("--elevate")
+        );
+    }
+
+    #[test]
+    fn windows_setup_status_payload_opens_elevated_shell_without_broker() {
+        let payload = windows_sandbox_setup_status_payload(true, false, false, Some(false));
+        assert_eq!(payload["broker"], "unavailable");
+        assert_eq!(payload["can_run_setup_now"], false);
+        assert_eq!(payload["next_action"], "open_elevated_shell");
+        assert!(
+            payload["next_command"]
+                .as_str()
+                .expect("next command")
+                .contains("--elevate")
+        );
+    }
+
+    #[test]
+    fn windows_setup_status_payload_is_ready_when_complete() {
+        let payload = windows_sandbox_setup_status_payload(true, true, true, Some(false));
+        assert_eq!(payload["requires_setup"], false);
+        assert_eq!(payload["next_action"], "none");
+    }
 
     #[test]
     fn windows_elevation_args_are_quoted_for_shell_execute() {
@@ -337,7 +444,10 @@ mod tests {
 }
 
 #[cfg(windows)]
-fn run_windows_sandbox_full_setup(cwd: &Path, sandbox_home: &Path) -> Result<(), String> {
+pub(crate) fn run_windows_sandbox_full_setup(
+    cwd: &Path,
+    sandbox_home: &Path,
+) -> Result<(), String> {
     let policy = normalize_policy(&json!("workspace-write"), cwd, Some(NetworkMode::Disabled))
         .map_err(|err| err.reason)?;
     let vendor_profile = WindowsVendorSandboxProfile::from_policy(&policy);
@@ -434,12 +544,15 @@ fn run_windows_sandbox_setup_status(cwd: &Path, json_output: bool) -> Result<(),
 pub(crate) fn windows_sandbox_setup_status_for_cwd(cwd: &Path) -> Result<Value, String> {
     let sandbox_home = backend::windows_sandbox_home(cwd);
     let setup_complete = codex_windows_sandbox::sandbox_setup_is_complete(&sandbox_home);
+    // The broker is the scheduled setup task: when it is registered, setup can
+    // run without an elevated shell, so a fresh workspace never needs UAC.
+    let broker_available = codex_windows_sandbox::scheduled_setup_broker_available(&sandbox_home);
     let elevated = codex_windows_sandbox::current_process_is_elevated()
         .map_err(|err| format!("windows sandbox setup status failed: {err}"))?;
     Ok(windows_sandbox_setup_status_payload(
         true,
         setup_complete,
-        setup_complete,
+        broker_available,
         Some(elevated),
     ))
 }
@@ -475,6 +588,34 @@ fn windows_sandbox_setup_failed_error_with_detail(cwd: &Path, detail: &str) -> R
 #[cfg(windows)]
 fn windows_sandbox_setup_can_run_now(setup_status: &Value) -> bool {
     setup_status["can_run_setup_now"].as_bool().unwrap_or(false)
+}
+
+#[cfg(windows)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WindowsSandboxSetupAction {
+    /// Setup state is already complete; nothing to do.
+    AlreadyReady,
+    /// Run setup in this process: it is elevated, or the scheduled setup
+    /// broker can perform the work without opening UAC.
+    RunSetup,
+    /// Request UAC elevation for a first-time bootstrap.
+    RequestElevation,
+    /// Neither elevated nor broker-backed; fail closed.
+    FailClosed,
+}
+
+#[cfg(windows)]
+fn windows_sandbox_setup_action(setup_status: &Value, elevate: bool) -> WindowsSandboxSetupAction {
+    if !windows_sandbox_setup_requires_setup(setup_status) {
+        return WindowsSandboxSetupAction::AlreadyReady;
+    }
+    if windows_sandbox_setup_can_run_now(setup_status) {
+        return WindowsSandboxSetupAction::RunSetup;
+    }
+    if elevate {
+        return WindowsSandboxSetupAction::RequestElevation;
+    }
+    WindowsSandboxSetupAction::FailClosed
 }
 
 #[cfg(windows)]

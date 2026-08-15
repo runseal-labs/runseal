@@ -972,6 +972,14 @@ fn scheduled_setup_task_matches(broker_home: &Path, setup_exe: &Path) -> bool {
     scheduled_setup_task_xml_matches(&xml, broker_home, setup_exe)
 }
 
+/// Reports whether the scheduled setup broker task is registered for
+/// `codex_home` with the setup helper this process would launch. Adapters
+/// (e.g. the RunSeal CLI) use this to decide whether setup can run without
+/// opening an elevated shell.
+pub fn scheduled_setup_broker_available(codex_home: &Path) -> bool {
+    scheduled_setup_task_matches(codex_home, &find_setup_exe())
+}
+
 fn trigger_scheduled_setup_task() -> Result<()> {
     let output = Command::new("schtasks.exe")
         .args(["/Run", "/TN", SCHEDULED_SETUP_TASK_NAME])
