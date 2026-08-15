@@ -544,7 +544,11 @@ fn required_plan_path(value: Option<&str>, name: &'static str) -> io::Result<Pat
 /// user-level app-data root is available.
 fn machine_windows_sandbox_home(cwd: &Path) -> PathBuf {
     if let Some(home) = std::env::var_os("RUNSEAL_WINDOWS_SANDBOX_HOME") {
-        return PathBuf::from(home);
+        // Resolve once to an absolute path so the caller and the scheduled
+        // broker agree regardless of each process's working directory. A
+        // relative override would point the broker at a different directory
+        // than the caller and silently skip setup.
+        return std::path::absolute(PathBuf::from(home)).unwrap_or_else(|_| PathBuf::from(home));
     }
     std::env::var_os("LOCALAPPDATA")
         .map(|root| PathBuf::from(root).join("RunSeal").join("windows-sandbox"))
@@ -572,10 +576,11 @@ fn prepare_vendor_sandbox_home(cwd: &Path, home: &Path) -> io::Result<()> {
             ),
         ));
     }
-    // The machine-level home lives outside the workspace, so the ancestor
-    // walk below cannot guard it; reject a symlinked home explicitly.
-    validate_runtime_root_not_symlink(home, "prepare")?;
-    validate_runtime_root_ancestors(&expected, cwd, "prepare")?;
+    // The machine-level home lives outside the workspace, so validate its
+    // entire ancestor chain rather than only the workspace-scoped prefix.
+    for ancestor in expected.ancestors() {
+        validate_runtime_root_not_symlink(ancestor, "prepare")?;
+    }
     fs::create_dir_all(home)?;
     validate_runtime_tree_has_no_symlinks(home, "prepare")
 }

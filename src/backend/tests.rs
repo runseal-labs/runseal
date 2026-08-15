@@ -2283,6 +2283,27 @@ fn windows_sandbox_home_defaults_to_machine_level_appdata_location() {
 
 #[cfg(windows)]
 #[test]
+fn windows_sandbox_home_resolves_relative_override_to_absolute_path() {
+    let _test_lock = windows_sandbox_home_test_lock();
+    let workspace = tempfile::tempdir().expect("workspace");
+    let previous = std::env::var_os("RUNSEAL_WINDOWS_SANDBOX_HOME");
+    unsafe {
+        std::env::set_var("RUNSEAL_WINDOWS_SANDBOX_HOME", "relative-sandbox-home");
+    }
+    let home = super::windows_sandbox_home(workspace.path());
+    match previous {
+        Some(value) => unsafe { std::env::set_var("RUNSEAL_WINDOWS_SANDBOX_HOME", value) },
+        None => unsafe { std::env::remove_var("RUNSEAL_WINDOWS_SANDBOX_HOME") },
+    }
+    assert!(
+        home.is_absolute(),
+        "override must resolve to an absolute path: {home:?}"
+    );
+    assert!(home.ends_with("relative-sandbox-home"));
+}
+
+#[cfg(windows)]
+#[test]
 fn windows_sandbox_home_falls_back_to_workspace_when_no_appdata_root() {
     let _test_lock = windows_sandbox_home_test_lock();
     let workspace = tempfile::tempdir().expect("workspace");
