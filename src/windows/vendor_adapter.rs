@@ -4,7 +4,7 @@ use codex_protocol::models::{ManagedFileSystemPermissions, PermissionProfile};
 #[cfg(windows)]
 use codex_protocol::permissions::{
     FileSystemAccessMode, FileSystemPath, FileSystemSandboxEntry, FileSystemSandboxPolicy,
-    NetworkSandboxPolicy,
+    FileSystemSpecialPath, NetworkSandboxPolicy,
 };
 #[cfg(windows)]
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -201,6 +201,16 @@ impl WindowsVendorSandboxProfile {
 fn codex_filesystem_entry(
     entry: &WindowsVendorFilesystemEntry,
 ) -> Result<FileSystemSandboxEntry, String> {
+    // A "*" read root means full-disk read (the codex workspace-write model);
+    // it has no concrete path to resolve.
+    if entry.path == "*" && entry.access == WindowsVendorFilesystemAccess::Read {
+        return Ok(FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            access: FileSystemAccessMode::Read,
+        });
+    }
     let path = AbsolutePathBuf::from_absolute_path_checked(Path::new(&entry.path))
         .map_err(|err| format!("invalid filesystem path {}: {err}", entry.path))?;
     Ok(FileSystemSandboxEntry {
@@ -306,7 +316,7 @@ mod tests {
                 filesystem: WindowsVendorFilesystemPolicy {
                     entries: vec![
                         WindowsVendorFilesystemEntry {
-                            path: cwd.to_string_lossy().to_string(),
+                            path: "*".to_string(),
                             access: WindowsVendorFilesystemAccess::Read,
                         },
                         WindowsVendorFilesystemEntry {
@@ -354,10 +364,7 @@ mod tests {
             profile.network_policy(),
             Some(WindowsVendorNetworkPolicy::Unmanaged)
         );
-        assert_eq!(
-            profile.read_roots(),
-            vec![cwd.to_string_lossy().to_string()]
-        );
+        assert_eq!(profile.read_roots(), vec!["*".to_string()]);
         assert_eq!(
             profile.write_roots(),
             vec![cwd.to_string_lossy().to_string()]

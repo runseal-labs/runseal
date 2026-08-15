@@ -808,7 +808,7 @@ mod tests {
             plan.filesystem.mode,
             WindowsFilesystemMode::WritableRootsCapability
         );
-        assert_eq!(plan.filesystem.read_roots, vec!["/workspace"]);
+        assert_eq!(plan.filesystem.read_roots, vec!["*"]);
         assert_eq!(plan.filesystem.write_roots, vec!["/workspace"]);
         assert!(plan.filesystem.runtime_write_roots.is_empty());
         assert_eq!(plan.filesystem.effective_write_roots(), vec!["/workspace"]);

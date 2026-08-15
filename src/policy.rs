@@ -492,7 +492,18 @@ fn profile_filesystem(cwd: &Path, sandbox_level: SandboxLevel) -> FilesystemPoli
             protect_vcs: false,
             unrestricted: false,
         },
-        SandboxLevel::WorkspaceContained | SandboxLevel::WorkspaceWrite => FilesystemPolicy {
+        SandboxLevel::WorkspaceWrite => FilesystemPolicy {
+            // Full-disk read, workspace-scoped write: matches the codex
+            // workspace-write profile and keeps the restricted-token backend
+            // (system tools stay readable, unlike a workspace-only read root).
+            read: vec!["*".to_string()],
+            read_only: Vec::new(),
+            write: vec![path_string(cwd)],
+            deny: protected_subpaths(cwd),
+            protect_vcs: true,
+            unrestricted: false,
+        },
+        SandboxLevel::WorkspaceContained => FilesystemPolicy {
             read: vec![path_string(cwd)],
             read_only: Vec::new(),
             write: vec![path_string(cwd)],
@@ -517,7 +528,7 @@ fn inline_filesystem(
         )?;
     }
     let read = string_array(filesystem, "read")?.unwrap_or_else(|| match sandbox_level {
-        SandboxLevel::DangerFullAccess => vec!["*".to_string()],
+        SandboxLevel::DangerFullAccess | SandboxLevel::WorkspaceWrite => vec!["*".to_string()],
         _ => vec![path_string(cwd)],
     });
     let read_only = string_array(filesystem, "read_only")?.unwrap_or_default();
