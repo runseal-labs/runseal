@@ -148,7 +148,7 @@ bootstrap 即可覆盖当前及未来的所有 workspace；切换 workspace 后�
 .\target\debug\runseal.exe setup windows-sandbox --cwd C:\path\to\workspace --elevate
 ```
 
-bootstrap 会注册 scheduled setup broker 任务（`\RunSeal\WindowsSandboxSetup`）。
+bootstrap 会注册 scheduled setup broker。
 之后同一命令可以在任何 workspace 下修复或重建 setup state 而不再打开 UAC；
 沙箱 `runseal exec` 在 setup 缺失或过期时也会自动通过 broker 修复，而不是直接失败。
 

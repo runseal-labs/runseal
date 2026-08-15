@@ -836,9 +836,11 @@ fn windows_fail_closed_preview_includes_proxy_network_guard() -> io::Result<()> 
     );
     let private_setup_payload =
         serde_json::from_str::<Value>(plan.private_setup_payload.as_deref().unwrap()).unwrap();
+    // The sandbox home is machine-level (shared across workspaces) when a
+    // user app-data root exists, falling back to the workspace otherwise.
     assert_eq!(
         private_setup_payload["codex_home"],
-        json!(path_string(&cwd.join(".runseal").join("sandbox")))
+        json!(path_string(&super::windows::vendor_sandbox_home(&cwd)))
     );
     assert_ne!(
         private_setup_payload["codex_home"],

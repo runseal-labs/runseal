@@ -166,11 +166,10 @@ cannot run setup directly:
 .\target\debug\runseal.exe setup windows-sandbox --cwd C:\path\to\workspace --elevate
 ```
 
-The bootstrap registers a scheduled setup broker task
-(`\RunSeal\WindowsSandboxSetup`). After that, the same command repairs or
-recreates setup state without opening UAC again, from any workspace, and
-sandboxed `runseal exec` repairs missing or stale setup through the broker
-automatically instead of failing.
+The bootstrap registers a scheduled setup broker. After that, the same
+command repairs or recreates setup state without opening UAC again, from any
+workspace, and sandboxed `runseal exec` repairs missing or stale setup through
+the broker automatically instead of failing.
 
 Use `--json` when an agent needs structured setup failure details.
 Successful setup also includes `setup_status` so automation can verify readiness from the same command.

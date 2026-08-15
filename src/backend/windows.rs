@@ -556,7 +556,7 @@ pub(crate) fn windows_sandbox_home(cwd: &Path) -> PathBuf {
     machine_windows_sandbox_home(cwd)
 }
 
-fn vendor_sandbox_home(cwd: &Path) -> PathBuf {
+pub(crate) fn vendor_sandbox_home(cwd: &Path) -> PathBuf {
     machine_windows_sandbox_home(cwd)
 }
 
