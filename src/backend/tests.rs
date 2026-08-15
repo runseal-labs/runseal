@@ -40,6 +40,16 @@ fn windows_sandbox_gate_test_lock() -> MutexGuard<'static, ()> {
         .unwrap()
 }
 
+/// Serializes tests that mutate the RUNSEAL_WINDOWS_SANDBOX_HOME /
+/// LOCALAPPDATA environment variables used by the machine-level sandbox home.
+#[cfg(windows)]
+fn windows_sandbox_home_test_lock() -> MutexGuard<'static, ()> {
+    static LOCK: OnceLock<std::sync::Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .unwrap()
+}
+
 #[cfg(unix)]
 fn symlink_dir_for_test(target: &Path, link: &Path) -> io::Result<()> {
     std::os::unix::fs::symlink(target, link)
@@ -826,9 +836,11 @@ fn windows_fail_closed_preview_includes_proxy_network_guard() -> io::Result<()> 
     );
     let private_setup_payload =
         serde_json::from_str::<Value>(plan.private_setup_payload.as_deref().unwrap()).unwrap();
+    // The sandbox home is machine-level (shared across workspaces) when a
+    // user app-data root exists, falling back to the workspace otherwise.
     assert_eq!(
         private_setup_payload["codex_home"],
-        json!(path_string(&cwd.join(".runseal").join("sandbox")))
+        json!(path_string(&super::windows::vendor_sandbox_home(&cwd)))
     );
     assert_ne!(
         private_setup_payload["codex_home"],
@@ -2221,4 +2233,94 @@ fn runtime_cleanup_refuses_runtime_parent_symlink() -> io::Result<()> {
     assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
     assert!(outside_runtime.exists());
     Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_sandbox_home_stays_fixed_across_workspaces() {
+    let _test_lock = windows_sandbox_home_test_lock();
+    let workspace_a = tempfile::tempdir().expect("workspace a");
+    let workspace_b = tempfile::tempdir().expect("workspace b");
+    let previous = std::env::var_os("RUNSEAL_WINDOWS_SANDBOX_HOME");
+    unsafe {
+        std::env::set_var("RUNSEAL_WINDOWS_SANDBOX_HOME", "C:\\runseal-test-home");
+    }
+    let home_a = super::windows_sandbox_home(workspace_a.path());
+    let home_b = super::windows_sandbox_home(workspace_b.path());
+    match previous {
+        Some(value) => unsafe { std::env::set_var("RUNSEAL_WINDOWS_SANDBOX_HOME", value) },
+        None => unsafe { std::env::remove_var("RUNSEAL_WINDOWS_SANDBOX_HOME") },
+    }
+    assert_eq!(home_a, PathBuf::from("C:\\runseal-test-home"));
+    assert_eq!(home_a, home_b);
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_sandbox_home_defaults_to_machine_level_appdata_location() {
+    let _test_lock = windows_sandbox_home_test_lock();
+    let workspace = tempfile::tempdir().expect("workspace");
+    let previous = std::env::var_os("LOCALAPPDATA");
+    let previous_home = std::env::var_os("RUNSEAL_WINDOWS_SANDBOX_HOME");
+    unsafe {
+        std::env::remove_var("RUNSEAL_WINDOWS_SANDBOX_HOME");
+        std::env::set_var("LOCALAPPDATA", "C:\\Users\\test\\AppData\\Local");
+    }
+    let home = super::windows_sandbox_home(workspace.path());
+    match previous {
+        Some(value) => unsafe { std::env::set_var("LOCALAPPDATA", value) },
+        None => unsafe { std::env::remove_var("LOCALAPPDATA") },
+    }
+    match previous_home {
+        Some(value) => unsafe { std::env::set_var("RUNSEAL_WINDOWS_SANDBOX_HOME", value) },
+        None => unsafe { std::env::remove_var("RUNSEAL_WINDOWS_SANDBOX_HOME") },
+    }
+    assert_eq!(
+        home,
+        PathBuf::from("C:\\Users\\test\\AppData\\Local\\RunSeal\\windows-sandbox")
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_sandbox_home_resolves_relative_override_to_absolute_path() {
+    let _test_lock = windows_sandbox_home_test_lock();
+    let workspace = tempfile::tempdir().expect("workspace");
+    let previous = std::env::var_os("RUNSEAL_WINDOWS_SANDBOX_HOME");
+    unsafe {
+        std::env::set_var("RUNSEAL_WINDOWS_SANDBOX_HOME", "relative-sandbox-home");
+    }
+    let home = super::windows_sandbox_home(workspace.path());
+    match previous {
+        Some(value) => unsafe { std::env::set_var("RUNSEAL_WINDOWS_SANDBOX_HOME", value) },
+        None => unsafe { std::env::remove_var("RUNSEAL_WINDOWS_SANDBOX_HOME") },
+    }
+    assert!(
+        home.is_absolute(),
+        "override must resolve to an absolute path: {home:?}"
+    );
+    assert!(home.ends_with("relative-sandbox-home"));
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_sandbox_home_falls_back_to_workspace_when_no_appdata_root() {
+    let _test_lock = windows_sandbox_home_test_lock();
+    let workspace = tempfile::tempdir().expect("workspace");
+    let previous = std::env::var_os("LOCALAPPDATA");
+    let previous_home = std::env::var_os("RUNSEAL_WINDOWS_SANDBOX_HOME");
+    unsafe {
+        std::env::remove_var("LOCALAPPDATA");
+        std::env::remove_var("RUNSEAL_WINDOWS_SANDBOX_HOME");
+    }
+    let home = super::windows_sandbox_home(workspace.path());
+    match previous {
+        Some(value) => unsafe { std::env::set_var("LOCALAPPDATA", value) },
+        None => unsafe { std::env::remove_var("LOCALAPPDATA") },
+    }
+    match previous_home {
+        Some(value) => unsafe { std::env::set_var("RUNSEAL_WINDOWS_SANDBOX_HOME", value) },
+        None => unsafe { std::env::remove_var("RUNSEAL_WINDOWS_SANDBOX_HOME") },
+    }
+    assert_eq!(home, workspace.path().join(".runseal").join("sandbox"));
 }

@@ -138,13 +138,19 @@ Windows sandbox 支持要求 Windows 10 1809 / build 17763 或更新版本。
 
 推送 `v*` tag 会触发 `.github/workflows/release.yml`，构建原生 release archives 并发布 `.sha256` 校验文件。手动触发 workflow 并传入已有 tag 可以重新打包。
 
+沙箱状态存放在机器级 home（`%LOCALAPPDATA%\RunSeal\windows-sandbox`，可用
+`RUNSEAL_WINDOWS_SANDBOX_HOME` 覆盖），对所有 workspace 共享。因此一次
+bootstrap 即可覆盖当前及未来的所有 workspace；切换 workspace 后无需再次 setup。
+
 首次 bootstrap 可以用 `--elevate` 请求 UAC：
 
 ```powershell
 .\target\debug\runseal.exe setup windows-sandbox --cwd C:\path\to\workspace --elevate
 ```
 
-安装 scheduled setup broker 后，同一命令可以在不再次打开 UAC 的情况下修复 workspace setup state。
+bootstrap 会注册 scheduled setup broker。
+之后同一命令可以在任何 workspace 下修复或重建 setup state 而不再打开 UAC；
+沙箱 `runseal exec` 在 setup 缺失或过期时也会自动通过 broker 修复，而不是直接失败。
 
 使用 `--json` 让 agent 获得结构化的 setup 失败信息。成功时也包含 `setup_status`，便于自动化从同一命令确认 readiness。
 
@@ -158,7 +164,7 @@ Windows sandbox 支持要求 Windows 10 1809 / build 17763 或更新版本。
 
 `requires_setup` 在 setup marker 和 sandbox user 工件全部完成前保持 true；`broker` 仅报告修复是否无需 elevated shell 即可运行。`can_repair` 在当前进程已 elevated 或 scheduled setup broker 已可用时为 true。
 
-沙箱 `runseal exec` 不会直接拉起 UAC。它使用已安装的 scheduled setup broker；如果 broker 缺失或过期，执行会 fail closed 并返回 `windows sandbox setup unavailable`，直到再次运行 setup 命令。
+沙箱 `runseal exec` 不会直接拉起 UAC。它使用已安装的 scheduled setup broker：setup 缺失或过期时会在执行前自动通过 broker 修复。只有 broker 本身缺失时，执行才会 fail closed 并返回 `windows sandbox setup unavailable`，直到再次运行 setup 命令。
 
 ## 预期协议
 

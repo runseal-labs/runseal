@@ -47,6 +47,9 @@ Local vendor patches:
 - Treat scheduled setup tasks as usable only when their XML explicitly carries
   the exact broker home in `--task-run` arguments; guarded by upstream setup
   helper tests.
+- Expose `scheduled_setup_broker_available` so adapter code can probe the
+  scheduled setup broker without reimplementing task/XML matching; guarded by
+  upstream setup helper tests.
 - Treat scheduled setup broker environment roots as usable only when absolute,
   so task payload/result paths never depend on the caller working directory;
   guarded by upstream setup tests and `tests/vendor_boundary.rs`.

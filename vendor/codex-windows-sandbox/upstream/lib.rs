@@ -281,6 +281,7 @@ pub use setup::sandbox_bin_dir;
 pub use setup::sandbox_dir;
 #[cfg(target_os = "windows")]
 pub use setup::sandbox_secrets_dir;
+pub use setup::scheduled_setup_broker_available;
 #[cfg(target_os = "windows")]
 pub use setup_error::SetupErrorCode;
 #[cfg(target_os = "windows")]

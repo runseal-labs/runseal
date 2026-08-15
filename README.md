@@ -154,6 +154,11 @@ Verify GitHub Artifact Attestations for build provenance and the SBOM without cu
 gh attestation verify runseal-vX.Y.Z-linux-x86_64.tar.gz --repo runseal-labs/runseal
 ```
 
+Sandbox state lives in one machine-level home, `%LOCALAPPDATA%\RunSeal\windows-sandbox`
+(overridable through `RUNSEAL_WINDOWS_SANDBOX_HOME`), shared across every
+workspace. A single bootstrap therefore covers all current and future
+workspaces; switching the active workspace never requires setup again.
+
 Run the first sandbox bootstrap. `--elevate` requests UAC when the current shell
 cannot run setup directly:
 
@@ -161,7 +166,10 @@ cannot run setup directly:
 .\target\debug\runseal.exe setup windows-sandbox --cwd C:\path\to\workspace --elevate
 ```
 
-Once the scheduled setup broker exists, the same command can repair workspace setup state without opening UAC again.
+The bootstrap registers a scheduled setup broker. After that, the same
+command repairs or recreates setup state without opening UAC again, from any
+workspace, and sandboxed `runseal exec` repairs missing or stale setup through
+the broker automatically instead of failing.
 
 Use `--json` when an agent needs structured setup failure details.
 Successful setup also includes `setup_status` so automation can verify readiness from the same command.
@@ -176,7 +184,7 @@ The status payload reports coarse setup readiness: `broker`, `elevated`, `can_re
 
 `requires_setup` stays true until setup marker and sandbox user artifacts are complete; `broker` only reports whether repairs can run without opening an elevated shell. `can_repair` is true when the current process is elevated or when the scheduled setup broker is already available.
 
-Sandboxed `runseal exec` does not invoke UAC directly. It uses the installed scheduled setup broker; if the broker is missing or stale, execution fails closed with `windows sandbox setup unavailable` until the setup command above is run again.
+Sandboxed `runseal exec` does not invoke UAC directly. It uses the installed scheduled setup broker: missing or stale setup is repaired through the broker automatically before execution. Only when the broker itself is missing does execution fail closed with `windows sandbox setup unavailable` until the setup command above is run again.
 
 ## Intended protocol
 

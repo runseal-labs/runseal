@@ -253,14 +253,28 @@ pub(super) fn execute_windows_sandbox_plan(
                 reason: format!("windows sandbox setup unavailable: {err}"),
             })
         })?;
+    let vendor_sandbox_home = vendor_sandbox_home(cwd);
     if setup_status["requires_setup"].as_bool().unwrap_or(true) {
-        return Err(io::Error::other(BackendUnavailableError {
-            reason: public_windows_setup_unavailable_reason("requires_setup"),
-        }));
+        if setup_status["broker"].as_str() != Some("available") {
+            return Err(io::Error::other(BackendUnavailableError {
+                reason: public_windows_setup_unavailable_reason("requires_setup"),
+            }));
+        }
+        // The scheduled setup broker is installed: repair the workspace setup
+        // state through the broker without opening UAC. run_elevated_setup
+        // selects the scheduled-task path internally.
+        crate::commands::setup::run_windows_sandbox_full_setup(cwd, &vendor_sandbox_home).map_err(
+            |err| {
+                io::Error::other(BackendUnavailableError {
+                    reason: format!(
+                        "windows sandbox setup repair through scheduled broker failed: {err}"
+                    ),
+                })
+            },
+        )?;
     }
 
     let _runtime_root = required_plan_path(plan.runtime_root.as_deref(), "runtime_root")?;
-    let vendor_sandbox_home = vendor_sandbox_home(cwd);
     let _execution_guard = windows_sandbox_execution_gate(plan, &vendor_sandbox_home)?;
     let _stdin = stdin;
     let workspace_roots = windows_sandbox_workspace_roots_for_plan(cwd, plan)?;
@@ -521,13 +535,34 @@ fn required_plan_path(value: Option<&str>, name: &'static str) -> io::Result<Pat
     })
 }
 
-#[cfg(windows)]
-pub(crate) fn windows_sandbox_home(cwd: &Path) -> PathBuf {
-    cwd.join(".runseal").join("sandbox")
+/// Machine-level Windows sandbox home, shared across workspaces so a
+/// one-time setup (setup marker, sandbox identity, helper binaries, scheduled
+/// setup broker) applies to every workspace. A workspace-scoped home would
+/// require a fresh UAC elevation each time the active workspace changes.
+/// Overridable through `RUNSEAL_WINDOWS_SANDBOX_HOME` for managed installs
+/// and tests; falls back to the legacy workspace-scoped location only when no
+/// user-level app-data root is available.
+fn machine_windows_sandbox_home(cwd: &Path) -> PathBuf {
+    if let Some(home) = std::env::var_os("RUNSEAL_WINDOWS_SANDBOX_HOME") {
+        // Resolve once to an absolute path so the caller and the scheduled
+        // broker agree regardless of each process's working directory. A
+        // relative override would point the broker at a different directory
+        // than the caller and silently skip setup.
+        let home_path = PathBuf::from(home);
+        return std::path::absolute(home_path.clone()).unwrap_or(home_path);
+    }
+    std::env::var_os("LOCALAPPDATA")
+        .map(|root| PathBuf::from(root).join("RunSeal").join("windows-sandbox"))
+        .unwrap_or_else(|| cwd.join(".runseal").join("sandbox"))
 }
 
-fn vendor_sandbox_home(cwd: &Path) -> PathBuf {
-    cwd.join(".runseal").join("sandbox")
+#[cfg(windows)]
+pub(crate) fn windows_sandbox_home(cwd: &Path) -> PathBuf {
+    machine_windows_sandbox_home(cwd)
+}
+
+pub(crate) fn vendor_sandbox_home(cwd: &Path) -> PathBuf {
+    machine_windows_sandbox_home(cwd)
 }
 
 #[cfg(windows)]
@@ -537,12 +572,16 @@ fn prepare_vendor_sandbox_home(cwd: &Path, home: &Path) -> io::Result<()> {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             format!(
-                "refusing to prepare sandbox home outside planned workspace directory: {}",
+                "refusing to prepare sandbox home outside planned location: {}",
                 home.display()
             ),
         ));
     }
-    validate_runtime_root_ancestors(&expected, cwd, "prepare")?;
+    // The machine-level home lives outside the workspace, so validate its
+    // entire ancestor chain rather than only the workspace-scoped prefix.
+    for ancestor in expected.ancestors() {
+        validate_runtime_root_not_symlink(ancestor, "prepare")?;
+    }
     fs::create_dir_all(home)?;
     validate_runtime_tree_has_no_symlinks(home, "prepare")
 }
