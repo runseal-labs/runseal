@@ -83,6 +83,15 @@ nonzero outer status without retrying or appending another error object. A
 durable terminal records execution completion; it does not acknowledge complete
 result delivery. Check both the outer status and the complete JSON document.
 
+Known limitation: in plain mode, a sandboxed execution whose stdout or stderr is
+a console that keeps its handle open but stops reading cannot cancel the native
+console write worker. The target is still terminated and the execution range,
+runtime roots, and policy binding are still released, but the terminal may report
+`EXECUTION_CLEANUP_FAILED` with the original `requested_termination_reason` (for
+example `backpressure`) instead of the transport cause, and cleanup can take the
+full deployment cleanup deadline. A pipe that closes is unaffected; this is a
+console-specific limitation tracked for a later output-strategy change.
+
 On Windows, console Ctrl-C and Ctrl-Break received by `exec` request cancellation
 through the execution owner. All three output modes return outer 130 after
 verified cleanup, preserving the native exit facts and one audit terminal.

@@ -373,6 +373,8 @@ Windows Console/文件输出现在通过持有独立句柄的有界、可取消�
 
 本地 CLI Console 慢读测试在输出期间保持 child 活动，以实际消费解除退出闸门，确认完整审计字节计数、原生退出码 7 和所有不同的 supplementary 字符，CP437 保持不变。停滞计时跟随实际原生写入完成；关闭进展刷新后，同一用例被误判为 backpressure。
 
+已知限制：plain 模式下，若 sandboxed 执行的 stdout/stderr 是一个句柄保持打开但停止读取的 Console，原生 console 写 worker 无法被取消。目标仍被终止，执行范围、runtime roots 与策略绑定仍被释放，但终态可能以 EXECUTION_CLEANUP_FAILED 报告并保留原始 requested_termination_reason（例如 backpressure），清理也可能耗满部署清理期限。会关闭的 pipe 不受影响；这是 Console 特有的限制，等待后续输出策略改造。
+
 CLI frontend 的输入线程、终端模式、control 端点和输出 worker 现在由生命周期 owner 在提交审计终态前清理。未完成的 frontend 清理会报告 cleanup_failed，并保留原终止原因和真实退出事实。本地进程范围和 frontend 清理回调接收同一宿主截止时间，各 frontend 阶段与 Drop 不续期，未完成 I/O worker 保留 owner。CLI stdout/stderr 和 control 交付在清理期限到达时也停止，持续进展不能续期；本地 Console 慢读用例保留原生退出码 7、报告 frontend 清理未完成，wrapper 退出 125。preparing、通用 observer 交付、helper 和 capture parent 的期限协调、终端模式恢复及完整故障矩阵仍待完成。
 
 Windows runner 的连接、请求写入和增量启动确认现在共享准备预算，并在等待期间检查取消和超时。原生测试验证未 join 的连接 owner 会被保留，安全设置失败后 suspended 进程被终止而目标未执行。capture parent 的 I/O 清理复用宿主绝对截止时间。启动失败仍报告清理未验证，不能以一个 runner 退出推定整个执行边界已释放。原生启动调用现在由 worker 持有，caller 按同一准备预算等待；到期后保留 worker，迟到的挂起进程会被终止而不会恢复执行。原生 setup、迟到启动的恢复、helper 完整期限及完整沙箱启动故障矩阵仍待完成。

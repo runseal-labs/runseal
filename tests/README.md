@@ -839,3 +839,16 @@ sandboxed execution in the same service must admit and finish. The equivalent ca
 is `adv.process.orphan-child-after-cancel.v1`. Classifying the cancelled
 preparation as unverified cleanup instead quarantines the shared binding and
 blocks every later sandboxed execution until an explicit repair.
+
+`cli_stalled_console_output_cleans_owned_range_and_preserves_peer` keeps the
+strict local-execution classification for a stalled console: the target range is
+terminated, the runtime root removed, exactly one audit terminal is written, the
+CLI exits 124/125, and the peer execution survives. The sandboxed variant is a
+recorded known limitation: in plain mode a sandboxed execution whose console
+handle stays open but is never drained cannot cancel the native `WriteConsoleW`
+worker, so the terminal may report `EXECUTION_CLEANUP_FAILED` with
+`requested_termination_reason:backpressure`, and the process can remain blocked
+beyond the cleanup deadline. `sandboxed_stalled_console_output_is_a_known_limitation`
+records that limitation with `#[ignore]`; an ignored case is not a conformance
+pass. The execution range, runtime roots, and policy binding are still released,
+and the limitation is documented in README and RFC-0021.
