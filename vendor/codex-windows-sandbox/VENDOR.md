@@ -16,6 +16,12 @@ tracked as vendor patches.
 
 Local vendor patches:
 
+- Preserve a failed runner launch's native error before restoring error mode,
+  following upstream commit `f35a0fdc5d5fe591fbb2cad7ca6c491c884c3b4b`.
+- Adapt upstream job-first termination and control-disconnect cleanup from
+  `9b33613db6` and `21c58c90f2298587c6519e077d0692ce4c563d37`. Retain the
+  execution-range owner in control workers and keep RunSeal's bounded cleanup
+  confirmation and single-identity model.
 - Replace the legacy workspace-contained finite deny-read ACL path with an
   AppContainer/LowBox execution boundary. The active workspace and runtime
   roots receive only per-execution capability ACLs; setup or spawn failure
@@ -86,3 +92,26 @@ Single-user vendor wiring acceptance criteria:
 - WFP, firewall, proxy, command-runner IPC, restricted-token, and ACL setup must
   all derive from the same single sandbox identity.
 - Public protocol, audit, and capability output must keep the account model private and expose only generic process and sandbox boundary terms.
+
+RunSeal's local native output worker joins and retained-worker reaping require
+confirmed Windows thread termination. Rust function completion alone cannot prove
+native exit callbacks finished. RunSeal native FLS fixtures reproduce that gap
+in the general reaper and in output poll, flush, finish, Drop, and retained-worker
+reaping after a real pipe write. Console and complete frontend fault injection
+remain separate acceptance work.
+
+The duplex control output-close owner follows the same native exit rule. Shared
+endpoint clones preserve the earliest close deadline, and polling releases the
+state mutex so another clone can shorten that deadline. A failed or expired
+close retains its worker through the last endpoint's Drop; reaping joins only
+after native exit. The focused fixture runs the actual socket half-close, then
+holds its native FLS exit callback. This proves close ownership and deadline
+handling, not the complete helper or sandbox cleanup matrix.
+
+Internal runner IPC v11 carries a mandatory cleanup budget validated at frame
+decode. RunSeal passes the frozen host setting through its capture token, including
+capture without an output sink; querying that budget does not start cleanup.
+The runner selects it before process creation and preserves the earliest absolute
+deadline on natural exit, disconnect, and explicit termination. Native wait-only
+process fixtures cover configured expiry without claiming successful termination.
+Full sandbox capture under nondefault budgets remains an acceptance requirement.

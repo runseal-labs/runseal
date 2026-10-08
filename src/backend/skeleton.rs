@@ -1,5 +1,4 @@
 use super::*;
-use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct LocalBackend;
@@ -21,6 +20,17 @@ impl SandboxBackend for LocalBackend {
         &[]
     }
 
+    fn execution_capabilities(&self) -> super::capability::ExecutionCapabilityStatuses {
+        #[cfg(windows)]
+        {
+            super::capability::interactive_execution_capabilities()
+        }
+        #[cfg(not(windows))]
+        {
+            super::capability::baseline_execution_capabilities()
+        }
+    }
+
     fn compile_plan(
         &self,
         execution_id: &str,
@@ -37,9 +47,10 @@ impl SandboxBackend for LocalBackend {
         cwd: &Path,
         stdin: ExecutionStdin,
         env: &ExecutionEnv,
-        timeout: Option<Duration>,
+        options: BackendExecutionOptions,
     ) -> io::Result<BackendExecutionOutput> {
-        spawn_local_command(plan, command, cwd, stdin, env, timeout)
+        let BackendExecutionOptions { timeout, output } = options;
+        spawn_local_command_with_output(plan, command, cwd, stdin, env, timeout, output)
     }
 
     fn capabilities_json(&self) -> Value {
@@ -88,9 +99,9 @@ impl SandboxBackend for MacosExperimentalBackend {
         cwd: &Path,
         stdin: ExecutionStdin,
         env: &ExecutionEnv,
-        timeout: Option<Duration>,
+        options: BackendExecutionOptions,
     ) -> io::Result<BackendExecutionOutput> {
-        execute_macos_plan(plan, command, cwd, stdin, env, timeout)
+        execute_macos_plan(plan, command, cwd, stdin, env, options)
     }
 
     fn capabilities_json(&self) -> Value {
@@ -150,9 +161,9 @@ impl SandboxBackend for LinuxCommunityBackend {
         cwd: &Path,
         stdin: ExecutionStdin,
         env: &ExecutionEnv,
-        timeout: Option<Duration>,
+        options: BackendExecutionOptions,
     ) -> io::Result<BackendExecutionOutput> {
-        execute_linux_plan(plan, command, cwd, stdin, env, timeout)
+        execute_linux_plan(plan, command, cwd, stdin, env, options)
     }
 
     fn capabilities_json(&self) -> Value {
@@ -339,10 +350,14 @@ fn execute_linux_plan(
     cwd: &Path,
     stdin: ExecutionStdin,
     env: &ExecutionEnv,
-    timeout: Option<Duration>,
+    options: BackendExecutionOptions,
 ) -> io::Result<BackendExecutionOutput> {
+    let BackendExecutionOptions {
+        timeout,
+        output: sink,
+    } = options;
     if !plan.is_sandbox_enforced() {
-        return spawn_local_command(plan, command, cwd, stdin, env, timeout);
+        return spawn_local_command_with_output(plan, command, cwd, stdin, env, timeout, sink);
     }
     if plan.enforcement != "linux-experimental" {
         return Err(io::Error::new(
@@ -394,7 +409,10 @@ fn execute_linux_plan(
             cwd,
             stdin,
             &execution_env,
-            timeout,
+            BackendExecutionOptions {
+                timeout,
+                output: sink,
+            },
             proxy_launch,
         )?;
         if let Some(proxy) = &managed_proxy {
@@ -421,10 +439,14 @@ fn execute_linux_plan(
     cwd: &Path,
     stdin: ExecutionStdin,
     env: &ExecutionEnv,
-    timeout: Option<Duration>,
+    options: BackendExecutionOptions,
 ) -> io::Result<BackendExecutionOutput> {
+    let BackendExecutionOptions {
+        timeout,
+        output: sink,
+    } = options;
     if !plan.is_sandbox_enforced() {
-        return spawn_local_command(plan, command, cwd, stdin, env, timeout);
+        return spawn_local_command_with_output(plan, command, cwd, stdin, env, timeout, sink);
     }
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
@@ -438,10 +460,14 @@ fn execute_macos_plan(
     cwd: &Path,
     stdin: ExecutionStdin,
     env: &ExecutionEnv,
-    timeout: Option<Duration>,
+    options: BackendExecutionOptions,
 ) -> io::Result<BackendExecutionOutput> {
+    let BackendExecutionOptions {
+        timeout,
+        output: sink,
+    } = options;
     if !plan.is_sandbox_enforced() {
-        return spawn_local_command(plan, command, cwd, stdin, env, timeout);
+        return spawn_local_command_with_output(plan, command, cwd, stdin, env, timeout, sink);
     }
     if plan.enforcement != "macos-experimental" {
         return Err(io::Error::new(
@@ -484,7 +510,10 @@ fn execute_macos_plan(
             cwd,
             stdin,
             &execution_env,
-            timeout,
+            BackendExecutionOptions {
+                timeout,
+                output: sink,
+            },
             managed_proxy.as_ref(),
         )?;
         if let Some(proxy) = &managed_proxy {
@@ -510,9 +539,13 @@ fn spawn_macos_sandbox_exec(
     cwd: &Path,
     stdin: ExecutionStdin,
     env: &ExecutionEnv,
-    timeout: Option<Duration>,
+    options: BackendExecutionOptions,
     managed_proxy: Option<&ManagedSandboxProxy>,
 ) -> io::Result<BackendExecutionOutput> {
+    let BackendExecutionOptions {
+        timeout,
+        output: sink,
+    } = options;
     let profile = macos_profile(plan, cwd, managed_proxy.map(ManagedSandboxProxy::addr))?;
     let mut sandbox_command = vec![
         "/usr/bin/sandbox-exec".to_string(),
@@ -525,7 +558,15 @@ fn spawn_macos_sandbox_exec(
     runner_plan.enforcement = "local-execution";
     runner_plan.process_boundary = "local-process";
     runner_plan.process_cleanup = "direct-child";
-    spawn_local_command(&runner_plan, &sandbox_command, cwd, stdin, env, timeout)
+    spawn_local_command_with_output(
+        &runner_plan,
+        &sandbox_command,
+        cwd,
+        stdin,
+        env,
+        timeout,
+        sink,
+    )
 }
 
 fn macos_profile(
@@ -687,9 +728,13 @@ fn spawn_linux_bwrap(
     cwd: &Path,
     stdin: ExecutionStdin,
     env: &ExecutionEnv,
-    timeout: Option<Duration>,
+    options: BackendExecutionOptions,
     proxy_launch: Option<LinuxProxyLaunch<'_>>,
 ) -> io::Result<BackendExecutionOutput> {
+    let BackendExecutionOptions {
+        timeout,
+        output: sink,
+    } = options;
     let mut bwrap_command = vec!["bwrap".to_string()];
     let workspace_contained = plan.sandbox_level == SandboxLevel::WorkspaceContained.as_str();
     if workspace_contained {
@@ -805,7 +850,7 @@ fn spawn_linux_bwrap(
     runner_plan.enforcement = "local-execution";
     runner_plan.process_boundary = "local-process";
     runner_plan.process_cleanup = "direct-child";
-    spawn_local_command(&runner_plan, &bwrap_command, cwd, stdin, env, timeout)
+    spawn_local_command_with_output(&runner_plan, &bwrap_command, cwd, stdin, env, timeout, sink)
 }
 
 #[cfg(any(target_os = "linux", test))]

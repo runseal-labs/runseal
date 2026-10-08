@@ -63,23 +63,114 @@ fn run_rpc_with_env(message: &str, envs: &[(&str, &str)]) -> Result<Output> {
         .spawn()
         .context("failed to spawn runseal rpc")?;
 
-    child
-        .stdin
-        .as_mut()
-        .context("stdin unavailable")?
-        .write_all(message.as_bytes())?;
-
-    child
-        .wait_with_output()
-        .context("failed to wait for runseal rpc")
+    struct OwnedRpc(std::process::Child);
+    impl Drop for OwnedRpc {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let mut input = child.stdin.take().context("stdin unavailable")?;
+    let stdout = child.stdout.take().context("stdout unavailable")?;
+    let stderr = child.stderr.take().context("stderr unavailable")?;
+    let diagnostics = std::thread::spawn(move || -> std::io::Result<Vec<u8>> {
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut BufReader::new(stderr), &mut bytes)?;
+        Ok(bytes)
+    });
+    let mut child = OwnedRpc(child);
+    let (sender, lines) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        let mut stdout = BufReader::new(stdout);
+        loop {
+            let mut line = Vec::new();
+            match stdout.read_until(b'\n', &mut line) {
+                Ok(0) => break,
+                Ok(_) => {
+                    if sender.send(Ok(line)).is_err() {
+                        break;
+                    }
+                }
+                Err(err) => {
+                    let _ = sender.send(Err(err));
+                    break;
+                }
+            }
+        }
+    });
+    input.write_all(message.as_bytes())?;
+    input.flush()?;
+    let expected = message
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .filter(|line| {
+            !serde_json::from_str::<Value>(line)
+                .ok()
+                .is_some_and(|request| {
+                    request["jsonrpc"] == "2.0"
+                        && request["method"].is_string()
+                        && request.get("id").is_none()
+                })
+        })
+        .count();
+    let mut responses = 0;
+    let mut active = std::collections::BTreeSet::new();
+    let mut transcript = Vec::new();
+    // The receipt remains a receipt in this raw transcript. Hold the connection open
+    // until every admitted execution publishes its own terminal; EOF would cancel it.
+    while responses < expected || !active.is_empty() {
+        let line = lines
+            .recv_timeout(Duration::from_secs(15))
+            .context("RPC response/terminal watchdog")??;
+        let value: Value = serde_json::from_slice(&line)?;
+        if value.get("id").is_some() {
+            responses += 1;
+            if value["result"]["status"] == "preparing" {
+                active.insert(
+                    value["result"]["execution_id"]
+                        .as_str()
+                        .context("receipt execution ID")?
+                        .to_owned(),
+                );
+            }
+        }
+        if matches!(
+            value["params"]["type"].as_str(),
+            Some("execution.finished" | "execution.failed")
+        ) {
+            active.remove(
+                value["params"]["execution_id"]
+                    .as_str()
+                    .context("terminal execution ID")?,
+            );
+        }
+        transcript.extend_from_slice(&line);
+    }
+    drop(input);
+    let status = child.0.wait()?;
+    reader
+        .join()
+        .map_err(|_| anyhow::anyhow!("RPC reader panicked"))?;
+    for line in lines {
+        transcript.extend_from_slice(&line?);
+    }
+    let stderr = diagnostics
+        .join()
+        .map_err(|_| anyhow::anyhow!("RPC diagnostic reader panicked"))??;
+    Ok(Output {
+        status,
+        stdout: transcript,
+        stderr,
+    })
 }
 
 #[cfg(windows)]
 fn windows_protocol_lock() -> Result<MutexGuard<'static, ()>> {
     static LOCK: Mutex<()> = Mutex::new(());
     // RunSeal MVP: global Windows sandbox state; split by policy if protocol test time matters.
-    LOCK.lock()
-        .map_err(|_| anyhow::anyhow!("windows protocol lock poisoned"))
+    Ok(LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner))
 }
 
 fn python_bin() -> &'static str {
@@ -124,6 +215,50 @@ fn response_with_id(messages: &[Value], id: u64) -> Result<&Value> {
         .iter()
         .find(|message| message.get("id") == Some(&json!(id)))
         .with_context(|| format!("response id {id} must exist"))
+}
+
+fn execution_terminal(messages: &[Value], id: u64) -> Result<&Value> {
+    let receipt = response_with_id(messages, id)?;
+    assert_eq!(receipt["result"]["status"], "preparing");
+    let execution_id = receipt["result"]["execution_id"]
+        .as_str()
+        .context("receipt execution ID")?;
+    let terminals = messages
+        .iter()
+        .filter(|message| {
+            message["params"]["execution_id"] == execution_id
+                && matches!(
+                    message["params"]["type"].as_str(),
+                    Some("execution.finished" | "execution.failed")
+                )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        terminals.len(),
+        1,
+        "each receipt must have exactly one terminal"
+    );
+    Ok(&terminals[0]["params"])
+}
+
+fn stream_bytes(messages: &[Value], event_type: &str) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    for event in messages
+        .iter()
+        .map(|message| &message["params"])
+        .filter(|event| event["type"] == event_type)
+    {
+        assert_eq!(event["stream_offset"], bytes.len());
+        bytes.extend(
+            STANDARD.decode(
+                event["data"]
+                    .as_str()
+                    .and_then(|data| data.strip_prefix("base64:"))
+                    .context("stream bytes")?,
+            )?,
+        );
+    }
+    Ok(bytes)
 }
 
 fn decode_stream_event(event: &Value) -> Result<String> {
@@ -577,7 +712,7 @@ fn get_version_rpc_contract() -> Result<()> {
     assert_eq!(response["id"], 1);
     assert_eq!(
         response["result"]["protocol_version"],
-        "runseal.protocol/v1"
+        "runseal.protocol/v2"
     );
     assert!(
         response["result"]["policy_versions"]
@@ -618,7 +753,7 @@ fn rpc_stdio_replies_before_stdin_eof() -> Result<()> {
     assert_eq!(response["id"], 1);
     assert_eq!(
         response["result"]["protocol_version"],
-        "runseal.protocol/v1"
+        "runseal.protocol/v2"
     );
 
     drop(stdin);
@@ -663,7 +798,7 @@ fn rpc_stdio_reports_parse_error_and_continues() -> Result<()> {
     let (_, ok_response) = read_rpc_response(&mut stdout, 1)?;
     assert_eq!(
         ok_response["result"]["protocol_version"],
-        "runseal.protocol/v1"
+        "runseal.protocol/v2"
     );
 
     drop(stdin);
@@ -705,7 +840,7 @@ fn rpc_stdio_ignores_client_notification_and_continues() -> Result<()> {
     assert_eq!(notifications[0]["error"]["data"]["code"], "INVALID_REQUEST");
     assert_eq!(
         ok_response["result"]["protocol_version"],
-        "runseal.protocol/v1"
+        "runseal.protocol/v2"
     );
 
     drop(stdin);
@@ -743,8 +878,8 @@ fn rpc_stdio_does_not_keep_completed_execution_state() -> Result<()> {
         )
         .as_bytes(),
     )?;
-    let (_, execute_response) = read_rpc_response(&mut stdout, 1)?;
-    let execution_id = execute_response["result"]["execution_id"]
+    let (_, terminal_event) = read_completed_execution(&mut stdout, 1)?;
+    let execution_id = terminal_event["result"]["execution_id"]
         .as_str()
         .context("execute result must include execution_id")?
         .to_string();
@@ -794,8 +929,8 @@ fn service_stdio_lists_execution_summaries() -> Result<()> {
         )
         .as_bytes(),
     )?;
-    let (_, execute_response) = read_rpc_response(&mut stdout, 1)?;
-    let execution_id = execute_response["result"]["execution_id"]
+    let (_, terminal_event) = read_completed_execution(&mut stdout, 1)?;
+    let execution_id = terminal_event["result"]["execution_id"]
         .as_str()
         .context("execute result must include execution_id")?
         .to_string();
@@ -860,8 +995,8 @@ fn service_stdio_returns_audit_events_by_execution() -> Result<()> {
         )
         .as_bytes(),
     )?;
-    let (_, execute_response) = read_rpc_response(&mut stdout, 1)?;
-    let execution_id = execute_response["result"]["execution_id"]
+    let (_, terminal_event) = read_completed_execution(&mut stdout, 1)?;
+    let execution_id = terminal_event["result"]["execution_id"]
         .as_str()
         .context("execute result must include execution_id")?
         .to_string();
@@ -897,17 +1032,15 @@ fn service_stdio_returns_audit_events_by_execution() -> Result<()> {
         .filter_map(|event| event["type"].as_str())
         .collect::<Vec<_>>();
     assert_eq!(event_types, vec!["policy.resolved", "policy.allowed"]);
-    assert!(!audit_response["result"].to_string().contains("audit-query"));
-    assert!(events.iter().all(|event| event.get("metadata").is_none()));
     assert!(
-        !audit_response["result"]
-            .to_string()
-            .contains("audit-query-secret")
+        events
+            .iter()
+            .all(|event| event["metadata"]["Authorization"] == "[REDACTED]")
     );
     assert!(
         !audit_response["result"]
             .to_string()
-            .contains("audit-query-agent")
+            .contains("audit-query-secret")
     );
 
     stdin.write_all(
@@ -924,11 +1057,6 @@ fn service_stdio_returns_audit_events_by_execution() -> Result<()> {
     assert_eq!(stdout_event["type"], "execution.stdout");
     assert!(stdout_event.get("data").is_none());
     assert!(stdout_event.get("text").is_none());
-    assert!(
-        !stdout_audit_response["result"]
-            .to_string()
-            .contains("audit-query")
-    );
 
     stdin.write_all(
         rpc_request_with_id(4, "getAuditEvents", json!({ "execution_id": execution_id }))
@@ -999,7 +1127,7 @@ fn service_stdio_tails_retained_audit_events() -> Result<()> {
         )
         .as_bytes(),
     )?;
-    read_rpc_response(&mut stdout, 1)?;
+    read_completed_execution(&mut stdout, 1)?;
 
     stdin.write_all(
         rpc_request_with_id(2, "tailAudit", json!({ "types": ["policy.*"] })).as_bytes(),
@@ -1021,17 +1149,15 @@ fn service_stdio_tails_retained_audit_events() -> Result<()> {
             .any(|event| event["type"] == "policy.resolved")
     );
     assert!(events.iter().any(|event| event["type"] == "policy.allowed"));
-    assert!(!tail_response["result"].to_string().contains("audit-tail"));
-    assert!(events.iter().all(|event| event.get("metadata").is_none()));
     assert!(
-        !tail_response["result"]
-            .to_string()
-            .contains("audit-tail-secret")
+        events
+            .iter()
+            .all(|event| event["metadata"]["Authorization"] == "[REDACTED]")
     );
     assert!(
         !tail_response["result"]
             .to_string()
-            .contains("audit-tail-agent")
+            .contains("audit-tail-secret")
     );
 
     stdin.write_all(
@@ -1043,11 +1169,6 @@ fn service_stdio_tails_retained_audit_events() -> Result<()> {
     assert_eq!(stdout_event["type"], "execution.stdout");
     assert!(stdout_event.get("data").is_none());
     assert!(stdout_event.get("text").is_none());
-    assert!(
-        !stdout_tail_response["result"]
-            .to_string()
-            .contains("audit-tail")
-    );
 
     stdin.write_all(rpc_request_with_id(4, "tailAudit", json!({})).as_bytes())?;
     let (_, all_tail_response) = read_rpc_response(&mut stdout, 4)?;
@@ -1111,8 +1232,8 @@ fn service_stdio_tail_audit_preserves_execution_record_order() -> Result<()> {
         )
         .as_bytes(),
     )?;
-    let (_, first_response) = read_rpc_response(&mut stdout, 1)?;
-    let first_id = first_response["result"]["execution_id"]
+    let (_, first_terminal) = read_completed_execution(&mut stdout, 1)?;
+    let first_id = first_terminal["result"]["execution_id"]
         .as_str()
         .context("first execution_id must exist")?
         .to_string();
@@ -1129,8 +1250,8 @@ fn service_stdio_tail_audit_preserves_execution_record_order() -> Result<()> {
         )
         .as_bytes(),
     )?;
-    let (_, second_response) = read_rpc_response(&mut stdout, 2)?;
-    let second_id = second_response["result"]["execution_id"]
+    let (_, second_terminal) = read_completed_execution(&mut stdout, 2)?;
+    let second_id = second_terminal["result"]["execution_id"]
         .as_str()
         .context("second execution_id must exist")?
         .to_string();
@@ -1226,8 +1347,8 @@ fn rpc_stdio_returns_no_cross_request_audit_events() -> Result<()> {
         )
         .as_bytes(),
     )?;
-    let (_, execute_response) = read_rpc_response(&mut stdout, 1)?;
-    let execution_id = execute_response["result"]["execution_id"]
+    let (_, terminal_event) = read_completed_execution(&mut stdout, 1)?;
+    let execution_id = terminal_event["result"]["execution_id"]
         .as_str()
         .context("execute result must include execution_id")?
         .to_string();
@@ -1276,30 +1397,43 @@ fn rpc_stdio_tails_no_cross_request_audit_events() -> Result<()> {
 
 #[test]
 fn rpc_stdio_lists_no_cross_request_executions() -> Result<()> {
+    #[cfg(windows)]
+    let _guard = windows_protocol_lock()?;
+
     let tmp = TempDir::new()?;
-    let output = run_rpc(&format!(
-        "{}{}",
+    let mut child = Command::new(require_runseal_bin()?)
+        .args(["rpc", "--stdio"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("failed to spawn runseal rpc")?;
+    let mut stdin = child.stdin.take().context("stdin unavailable")?;
+    let stdout = child.stdout.take().context("stdout unavailable")?;
+    let mut stdout = BufReader::new(stdout);
+
+    stdin.write_all(
         rpc_request_with_id(
             1,
             "execute",
             json!({
-                "command": [python_bin(), "-c", "print('direct-output')"],
+                "command": [python_bin(), "-c", "print('direct-rpc')"],
                 "cwd": tmp.path(),
                 "policy": "danger-full-access",
             }),
-        ),
-        rpc_request_with_id(2, "listExecutions", json!({}))
-    ))?;
+        )
+        .as_bytes(),
+    )?;
+    let _ = read_completed_execution(&mut stdout, 1)?;
 
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let messages = stdout_json_lines(&output)?;
-    let response = response_with_id(&messages, 2)?;
-    assert_eq!(response["result"]["count"], 0);
-    assert_eq!(response["result"]["executions"], json!([]));
+    stdin.write_all(rpc_request_with_id(2, "listExecutions", json!({})).as_bytes())?;
+    let (_, get_response) = read_rpc_response(&mut stdout, 2)?;
+    assert_eq!(get_response["result"]["count"], 0);
+    assert_eq!(get_response["result"]["executions"], json!([]));
+
+    drop(stdin);
+    let status = child.wait().context("failed to wait for runseal rpc")?;
+    assert!(status.success());
     Ok(())
 }
 
@@ -1693,12 +1827,12 @@ fn service_stdio_keeps_completed_execution_state() -> Result<()> {
         )
         .as_bytes(),
     )?;
-    let (execute_events, execute_response) = read_rpc_response(&mut stdout, 1)?;
-    let execution_id = execute_response["result"]["execution_id"]
+    let (execute_events, terminal_event) = read_completed_execution(&mut stdout, 1)?;
+    let execution_id = terminal_event["result"]["execution_id"]
         .as_str()
         .context("execute result must include execution_id")?
         .to_string();
-    let session_id = execute_response["result"]["session_id"]
+    let session_id = terminal_event["result"]["session_id"]
         .as_str()
         .context("execute result must include session_id")?
         .to_string();
@@ -1739,11 +1873,11 @@ fn service_stdio_keeps_completed_execution_state() -> Result<()> {
         rpc_request_with_id(
             3,
             "subscribeEvents",
-            json!({ "execution_id": execution_id, "types": ["execution.*"] }),
+            json!({ "execution_id": execution_id, "types": ["execution.*"],"after_seq":0 }),
         )
         .as_bytes(),
     )?;
-    let (subscription_events, subscribe_response) = read_rpc_response(&mut stdout, 3)?;
+    let (subscription_events, subscribe_response) = read_subscription_replay(&mut stdout, 3)?;
     assert_eq!(subscribe_response["result"]["execution_id"], execution_id);
     assert!(subscription_events.iter().all(|event| {
         event["params"]["type"]
@@ -1761,11 +1895,12 @@ fn service_stdio_keeps_completed_execution_state() -> Result<()> {
         rpc_request_with_id(
             4,
             "subscribeEvents",
-            json!({ "execution_id": execution_id }),
+            json!({ "execution_id": execution_id,"after_seq":0 }),
         )
         .as_bytes(),
     )?;
-    let (all_subscription_events, all_subscribe_response) = read_rpc_response(&mut stdout, 4)?;
+    let (all_subscription_events, all_subscribe_response) =
+        read_subscription_replay(&mut stdout, 4)?;
     assert_eq!(
         all_subscribe_response["result"]["execution_id"],
         execution_id
@@ -1788,7 +1923,7 @@ fn service_stdio_keeps_completed_execution_state() -> Result<()> {
         rpc_request_with_id(
             5,
             "cancelExecution",
-            json!({ "execution_id": execution_id, "reason": "test" }),
+            json!({ "execution_id": execution_id, "reason": "user_requested" }),
         )
         .as_bytes(),
     )?;
@@ -1809,6 +1944,7 @@ fn service_stdio_keeps_completed_execution_state() -> Result<()> {
     let (_, dispose_response) = read_rpc_response(&mut stdout, 6)?;
     assert_eq!(dispose_response["result"]["status"], "disposed");
     assert_eq!(dispose_response["result"]["released_executions"], 0);
+    assert_eq!(dispose_response["result"]["cleanup_complete"], true);
 
     stdin.write_all(
         rpc_request_with_id(7, "getExecution", json!({ "execution_id": execution_id })).as_bytes(),
@@ -1863,24 +1999,24 @@ fn service_stdio_keeps_failed_execution_state() -> Result<()> {
         )
         .as_bytes(),
     )?;
-    let (_, execute_response) = read_rpc_response(&mut stdout, 1)?;
+    let (_, terminal_event) = read_completed_execution(&mut stdout, 1)?;
     assert_eq!(
-        execute_response["error"]["data"]["code"],
+        terminal_event["result"]["error"]["code"],
         "EXECUTION_FAILED_TO_START"
     );
-    let execution_id = execute_response["error"]["data"]["execution_id"]
+    let execution_id = terminal_event["result"]["execution_id"]
         .as_str()
         .context("failed execute response must include execution_id")?
         .to_string();
     assert!(
-        execute_response["error"]["data"]["policy_hash"]
+        terminal_event["result"]["policy_hash"]
             .as_str()
             .unwrap_or_default()
             .starts_with("sha256:")
     );
     assert_eq!(
-        execute_response["error"]["data"]["policy_epoch"],
-        execute_response["error"]["data"]["policy_hash"]
+        terminal_event["result"]["policy_epoch"],
+        terminal_event["result"]["policy_hash"]
     );
 
     stdin.write_all(
@@ -1896,11 +2032,11 @@ fn service_stdio_keeps_failed_execution_state() -> Result<()> {
     assert_eq!(get_response["result"]["policy_id"], "danger-full-access");
     assert_eq!(
         get_response["result"]["policy_hash"],
-        execute_response["error"]["data"]["policy_hash"]
+        terminal_event["result"]["policy_hash"]
     );
     assert_eq!(
         get_response["result"]["policy_epoch"],
-        execute_response["error"]["data"]["policy_epoch"]
+        terminal_event["result"]["policy_epoch"]
     );
 
     stdin.write_all(
@@ -1926,11 +2062,11 @@ fn service_stdio_keeps_failed_execution_state() -> Result<()> {
         rpc_request_with_id(
             4,
             "subscribeEvents",
-            json!({ "execution_id": execution_id, "types": ["execution.*"] }),
+            json!({ "execution_id": execution_id, "types": ["execution.failed"],"after_seq":0 }),
         )
         .as_bytes(),
     )?;
-    let (subscription_events, subscribe_response) = read_rpc_response(&mut stdout, 4)?;
+    let (subscription_events, subscribe_response) = read_subscription_replay(&mut stdout, 4)?;
     assert_eq!(subscribe_response["result"]["execution_id"], execution_id);
     assert_eq!(subscribe_response["result"]["event_count"], 1);
     let failed_event = subscription_events
@@ -1939,13 +2075,16 @@ fn service_stdio_keeps_failed_execution_state() -> Result<()> {
         .context("failed execution subscription must replay execution.failed")?;
     assert_eq!(failed_event["params"]["execution_id"], execution_id);
     assert_eq!(
-        failed_event["params"]["reason"],
+        failed_event["params"]["result"]["error"]["reason"],
         "execution failed to start"
     );
-    assert_eq!(failed_event["params"]["error"], "execution failed to start");
+    assert_eq!(
+        failed_event["params"]["result"]["error"]["code"],
+        "EXECUTION_FAILED_TO_START"
+    );
     assert_eq!(
         failed_event["params"]["policy_hash"],
-        execute_response["error"]["data"]["policy_hash"]
+        terminal_event["result"]["policy_hash"]
     );
 
     drop(stdin);
@@ -2021,6 +2160,62 @@ fn service_stdio_ignores_client_notification_and_continues() -> Result<()> {
     let status = child.wait().context("failed to wait for runseal service")?;
     assert!(status.success());
     Ok(())
+}
+
+fn read_completed_execution(
+    stdout: &mut BufReader<impl std::io::Read>,
+    id: u64,
+) -> Result<(Vec<Value>, Value)> {
+    let (prior, receipt) = read_rpc_response(stdout, id)?;
+    assert!(prior.is_empty(), "admission receipt must precede events");
+    assert_eq!(receipt["result"]["status"], "preparing");
+    let execution_id = receipt["result"]["execution_id"]
+        .as_str()
+        .context("receipt execution ID")?;
+    let mut events = Vec::new();
+    loop {
+        let mut line = String::new();
+        anyhow::ensure!(
+            stdout.read_line(&mut line)? > 0,
+            "EOF before execution terminal"
+        );
+        let message: Value = serde_json::from_str(&line)?;
+        assert_eq!(message["method"], "event");
+        assert_eq!(message["params"]["execution_id"], execution_id);
+        assert_eq!(message["params"]["event_seq"], events.len() + 1);
+        let terminal = matches!(
+            message["params"]["type"].as_str(),
+            Some("execution.finished" | "execution.failed")
+        );
+        let event = message["params"].clone();
+        events.push(message);
+        if terminal {
+            return Ok((events, event));
+        }
+    }
+}
+
+fn read_subscription_replay(
+    stdout: &mut BufReader<impl std::io::Read>,
+    id: u64,
+) -> Result<(Vec<Value>, Value)> {
+    let (prior, receipt) = read_rpc_response(stdout, id)?;
+    assert!(prior.is_empty(), "subscription receipt precedes replay");
+    let count = receipt["result"]["event_count"]
+        .as_u64()
+        .context("replay count")?;
+    let mut events = Vec::new();
+    for _ in 0..count {
+        let mut line = String::new();
+        anyhow::ensure!(
+            stdout.read_line(&mut line)? > 0,
+            "EOF before declared replay completes"
+        );
+        let message: Value = serde_json::from_str(&line)?;
+        assert_eq!(message["method"], "event");
+        events.push(message);
+    }
+    Ok((events, receipt))
 }
 
 fn read_rpc_response(
@@ -2219,7 +2414,7 @@ fn lookup_and_session_methods_reject_overlong_ids() -> Result<()> {
 }
 
 #[test]
-fn dispose_session_is_noop_for_stdio_mvp() -> Result<()> {
+fn dispose_session_without_owned_resources_is_idempotent() -> Result<()> {
     let output = run_rpc(&rpc_request(
         "disposeSession",
         json!({"session_id": "sess_missing"}),
@@ -2235,6 +2430,8 @@ fn dispose_session_is_noop_for_stdio_mvp() -> Result<()> {
 
     assert_eq!(response["result"]["session_id"], "sess_missing");
     assert_eq!(response["result"]["status"], "disposed");
+    assert_eq!(response["result"]["released_executions"], 0);
+    assert_eq!(response["result"]["cleanup_complete"], true);
     Ok(())
 }
 
@@ -2329,18 +2526,12 @@ fn execute_accepts_non_secret_env_and_audits_keys_only() -> Result<()> {
         String::from_utf8_lossy(&output.stderr)
     );
     let messages = stdout_json_lines(&output)?;
-    let response = messages
-        .iter()
-        .find(|message| message.get("id") == Some(&json!(1)))
-        .unwrap();
+    let response = execution_terminal(&messages, 1)?;
 
     assert_eq!(response["result"]["status"], "finished");
     assert_eq!(response["result"]["exit_code"], 0);
     assert!(
-        response["result"]["stdout"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("flag=visible")
+        String::from_utf8(stream_bytes(&messages, "execution.stdout")?)?.contains("flag=visible")
     );
 
     let audit_path = response["result"]["audit_path"]
@@ -2393,17 +2584,11 @@ fn execute_applies_policy_environment_set() -> Result<()> {
         String::from_utf8_lossy(&output.stderr)
     );
     let messages = stdout_json_lines(&output)?;
-    let response = messages
-        .iter()
-        .find(|message| message.get("id") == Some(&json!(1)))
-        .unwrap();
+    let response = execution_terminal(&messages, 1)?;
 
     assert_eq!(response["result"]["status"], "finished");
     assert!(
-        response["result"]["stdout"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("policy:request")
+        String::from_utf8(stream_bytes(&messages, "execution.stdout")?)?.contains("policy:request")
     );
 
     let audit_path = response["result"]["audit_path"]
@@ -2445,15 +2630,12 @@ fn execute_output_limit_returns_stable_error_and_audit_event() -> Result<()> {
         String::from_utf8_lossy(&output.stderr)
     );
     let messages = stdout_json_lines(&output)?;
-    let response = messages
-        .iter()
-        .find(|message| message.get("id") == Some(&json!(1)))
-        .unwrap();
+    let response = execution_terminal(&messages, 1)?;
 
-    assert_eq!(response["error"]["data"]["code"], "OUTPUT_LIMIT_EXCEEDED");
-    assert_eq!(response["error"]["data"]["stdout_bytes"], 6);
-    assert_eq!(response["error"]["data"]["retained_stdout_bytes"], 3);
-    let audit_path = response["error"]["data"]["audit_path"]
+    assert_eq!(response["result"]["error"]["code"], "OUTPUT_LIMIT_EXCEEDED");
+    assert_eq!(response["result"]["stdout_bytes"], 6);
+    assert_eq!(response["result"]["retained_stdout_bytes"], 3);
+    let audit_path = response["result"]["audit_path"]
         .as_str()
         .context("output limit error must include audit_path")?;
     let audit_events = read_audit_events(tmp.path(), audit_path)?;
@@ -2465,7 +2647,8 @@ fn execute_output_limit_returns_stable_error_and_audit_event() -> Result<()> {
             && event["resource"] == "max_output_bytes"
     }));
     assert!(audit_events.iter().any(|event| {
-        event["type"] == "execution.failed" && event["reason"] == "output limit exceeded"
+        event["type"] == "execution.failed"
+            && event["result"]["error"]["code"] == "OUTPUT_LIMIT_EXCEEDED"
     }));
     Ok(())
 }
@@ -2538,10 +2721,7 @@ fn execute_copies_metadata_to_audit_events() -> Result<()> {
         String::from_utf8_lossy(&output.stderr)
     );
     let messages = stdout_json_lines(&output)?;
-    let response = messages
-        .iter()
-        .find(|message| message.get("id") == Some(&json!(1)))
-        .unwrap();
+    let response = execution_terminal(&messages, 1)?;
 
     assert_eq!(response["result"]["status"], "finished");
     assert!(response["result"].get("metadata").is_none());
@@ -2631,10 +2811,7 @@ fn execute_audits_effective_network_routes() -> Result<()> {
         String::from_utf8_lossy(&output.stderr)
     );
     let messages = stdout_json_lines(&output)?;
-    let response = messages
-        .iter()
-        .find(|message| message.get("id") == Some(&json!(1)))
-        .unwrap();
+    let response = execution_terminal(&messages, 1)?;
 
     assert_eq!(response["result"]["status"], "finished");
     assert_eq!(response["result"]["network"]["mode"], "proxy");
@@ -2689,10 +2866,7 @@ fn execute_redacts_sensitive_metadata_in_audit_events() -> Result<()> {
         String::from_utf8_lossy(&output.stderr)
     );
     let messages = stdout_json_lines(&output)?;
-    let response = messages
-        .iter()
-        .find(|message| message.get("id") == Some(&json!(1)))
-        .unwrap();
+    let response = execution_terminal(&messages, 1)?;
 
     assert_eq!(response["result"]["status"], "finished");
     let audit_path = response["result"]["audit_path"]
@@ -2781,18 +2955,12 @@ fn execute_accepts_empty_stdin() -> Result<()> {
         String::from_utf8_lossy(&output.stderr)
     );
     let messages = stdout_json_lines(&output)?;
-    let response = messages
-        .iter()
-        .find(|message| message.get("id") == Some(&json!(1)))
-        .unwrap();
+    let response = execution_terminal(&messages, 1)?;
 
     assert_eq!(response["result"]["status"], "finished");
     assert_eq!(response["result"]["exit_code"], 0);
     assert!(
-        response["result"]["stdout"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("stdin_bytes=0")
+        String::from_utf8(stream_bytes(&messages, "execution.stdout")?)?.contains("stdin_bytes=0")
     );
     Ok(())
 }
@@ -2826,17 +2994,12 @@ fn execute_accepts_bytes_stdin_and_audits_metadata_only() -> Result<()> {
         String::from_utf8_lossy(&output.stderr)
     );
     let messages = stdout_json_lines(&output)?;
-    let response = messages
-        .iter()
-        .find(|message| message.get("id") == Some(&json!(1)))
-        .unwrap();
+    let response = execution_terminal(&messages, 1)?;
 
     assert_eq!(response["result"]["status"], "finished");
     assert_eq!(response["result"]["exit_code"], 0);
     assert!(
-        response["result"]["stdout"]
-            .as_str()
-            .unwrap_or_default()
+        String::from_utf8(stream_bytes(&messages, "execution.stdout")?)?
             .contains(&format!("stdin_bytes={}", stdin_bytes.len()))
     );
 
@@ -2886,17 +3049,12 @@ fn execute_accepts_file_stdin_and_audits_metadata_only() -> Result<()> {
         String::from_utf8_lossy(&output.stderr)
     );
     let messages = stdout_json_lines(&output)?;
-    let response = messages
-        .iter()
-        .find(|message| message.get("id") == Some(&json!(1)))
-        .unwrap();
+    let response = execution_terminal(&messages, 1)?;
 
     assert_eq!(response["result"]["status"], "finished");
     assert_eq!(response["result"]["exit_code"], 0);
     assert!(
-        response["result"]["stdout"]
-            .as_str()
-            .unwrap_or_default()
+        String::from_utf8(stream_bytes(&messages, "execution.stdout")?)?
             .contains(&format!("stdin_bytes={}", stdin_bytes.len()))
     );
 
@@ -3054,35 +3212,34 @@ fn execute_rejects_invalid_bytes_stdin() -> Result<()> {
 }
 
 #[test]
-fn execute_rejects_unimplemented_stdin_modes() -> Result<()> {
+fn execute_rejects_rpc_stdin_inherit() -> Result<()> {
     let tmp = TempDir::new()?;
-    for mode in ["inherit", "stream"] {
-        let output = run_rpc(&rpc_request(
-            "execute",
-            json!({
-                "command": [python_bin(), "-c", "print('must not run')"],
-                "cwd": tmp.path(),
-                "policy": "danger-full-access",
-                "stdin": {"mode": mode}
-            }),
-        ))?;
+    let mode = "inherit";
+    let output = run_rpc(&rpc_request(
+        "execute",
+        json!({
+            "command": [python_bin(), "-c", "print('must not run')"],
+            "cwd": tmp.path(),
+            "policy": "danger-full-access",
+            "stdin": {"mode": mode}
+        }),
+    ))?;
 
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let messages = stdout_json_lines(&output)?;
-        let response = &messages[0];
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let response = &messages[0];
 
-        assert_eq!(response["error"]["data"]["code"], "INVALID_REQUEST");
-        assert!(
-            response["error"]["data"]["reason"]
-                .as_str()
-                .unwrap_or_default()
-                .contains(&format!("params.stdin.mode={mode} is not supported"))
-        );
-    }
+    assert_eq!(response["error"]["data"]["code"], "INVALID_REQUEST");
+    assert!(
+        response["error"]["data"]["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains(&format!("params.stdin.mode={mode} is not supported"))
+    );
     Ok(())
 }
 
@@ -3105,17 +3262,12 @@ fn execute_with_timeout_captures_stdout_when_command_finishes() -> Result<()> {
         String::from_utf8_lossy(&output.stderr)
     );
     let messages = stdout_json_lines(&output)?;
-    let response = messages
-        .iter()
-        .find(|message| message.get("id") == Some(&json!(1)))
-        .unwrap();
+    let response = execution_terminal(&messages, 1)?;
 
     assert_eq!(response["result"]["status"], "finished");
     assert_eq!(response["result"]["exit_code"], 0);
     assert!(
-        response["result"]["stdout"]
-            .as_str()
-            .unwrap_or_default()
+        String::from_utf8(stream_bytes(&messages, "execution.stdout")?)?
             .contains("timeout stdout ok")
     );
     assert!(
@@ -3155,10 +3307,7 @@ fn execute_with_timeout_drains_large_stdout_while_waiting() -> Result<()> {
         String::from_utf8_lossy(&output.stderr)
     );
     let messages = stdout_json_lines(&output)?;
-    let response = messages
-        .iter()
-        .find(|message| message.get("id") == Some(&json!(1)))
-        .unwrap();
+    let response = execution_terminal(&messages, 1)?;
 
     assert_eq!(response["result"]["status"], "finished");
     assert_eq!(response["result"]["exit_code"], 0);
@@ -3192,10 +3341,10 @@ fn execute_timeout_survives_unread_file_stdin() -> Result<()> {
         String::from_utf8_lossy(&output.stderr)
     );
     let messages = stdout_json_lines(&output)?;
-    let response = &messages[0];
+    let response = execution_terminal(&messages, 1)?;
 
-    assert_eq!(response["error"]["data"]["code"], "EXECUTION_TIMEOUT");
-    assert_eq!(response["error"]["data"]["timeout_ms"], 50);
+    assert_eq!(response["result"]["error"]["code"], "EXECUTION_TIMEOUT");
+    assert_eq!(response["result"]["timeout_ms"], 50);
     Ok(())
 }
 
@@ -3218,17 +3367,20 @@ fn execute_timeout_returns_stable_error_and_audit_event() -> Result<()> {
         String::from_utf8_lossy(&output.stderr)
     );
     let messages = stdout_json_lines(&output)?;
-    let response = &messages[0];
+    let response = execution_terminal(&messages, 1)?;
 
-    assert_eq!(response["error"]["data"]["code"], "EXECUTION_TIMEOUT");
-    assert_eq!(response["error"]["data"]["timeout_ms"], 10);
-    let audit_path = response["error"]["data"]["audit_path"]
+    assert_eq!(response["result"]["error"]["code"], "EXECUTION_TIMEOUT");
+    assert_eq!(response["result"]["timeout_ms"], 10);
+    let audit_path = response["result"]["audit_path"]
         .as_str()
         .expect("timeout error must return audit_path");
     let audit_events = read_audit_events(tmp.path(), audit_path)?;
-    assert!(audit_events.iter().any(
-        |event| event["type"] == "execution.failed" && event["reason"] == "execution timed out"
-    ));
+    assert!(
+        audit_events
+            .iter()
+            .any(|event| event["type"] == "execution.failed"
+                && event["result"]["error"]["reason"] == "execution timed out")
+    );
     let failed_event = audit_events
         .iter()
         .find(|event| event["type"] == "execution.failed")
@@ -3263,28 +3415,28 @@ fn execute_start_failure_returns_audit_path_and_failed_event() -> Result<()> {
         String::from_utf8_lossy(&output.stderr)
     );
     let messages = stdout_json_lines(&output)?;
-    let response = &messages[0];
+    let response = execution_terminal(&messages, 1)?;
 
     assert_eq!(
-        response["error"]["data"]["code"],
+        response["result"]["error"]["code"],
         "EXECUTION_FAILED_TO_START"
     );
     assert_eq!(
-        response["error"]["data"]["reason"],
+        response["result"]["error"]["reason"],
         "execution failed to start"
     );
-    assert_eq!(response["error"]["data"]["policy_id"], "danger-full-access");
+    assert_eq!(response["result"]["policy_id"], "danger-full-access");
     assert!(
-        response["error"]["data"]["policy_hash"]
+        response["result"]["policy_hash"]
             .as_str()
             .unwrap_or_default()
             .starts_with("sha256:")
     );
     assert_eq!(
-        response["error"]["data"]["policy_epoch"],
-        response["error"]["data"]["policy_hash"]
+        response["result"]["policy_epoch"],
+        response["result"]["policy_hash"]
     );
-    let audit_path = response["error"]["data"]["audit_path"]
+    let audit_path = response["result"]["audit_path"]
         .as_str()
         .expect("start failure must return audit_path");
     let audit_events = read_audit_events(tmp.path(), audit_path)?;
@@ -3293,7 +3445,10 @@ fn execute_start_failure_returns_audit_path_and_failed_event() -> Result<()> {
         .find(|event| event["type"] == "execution.failed")
         .context("execution.failed audit event must exist")?;
     assert_event_envelope(failed_event)?;
-    assert_eq!(failed_event["reason"], "execution failed to start");
+    assert_eq!(
+        failed_event["result"]["error"]["reason"],
+        "execution failed to start"
+    );
     Ok(())
 }
 
@@ -3319,10 +3474,10 @@ fn execute_uses_policy_resource_timeout() -> Result<()> {
         String::from_utf8_lossy(&output.stderr)
     );
     let messages = stdout_json_lines(&output)?;
-    let response = &messages[0];
+    let response = execution_terminal(&messages, 1)?;
 
-    assert_eq!(response["error"]["data"]["code"], "EXECUTION_TIMEOUT");
-    assert_eq!(response["error"]["data"]["timeout_ms"], 10);
+    assert_eq!(response["result"]["error"]["code"], "EXECUTION_TIMEOUT");
+    assert_eq!(response["result"]["timeout_ms"], 10);
     Ok(())
 }
 
@@ -3888,10 +4043,12 @@ fn sandboxed_policy_uses_platform_backend_or_reports_unavailable() -> Result<()>
         String::from_utf8_lossy(&output.stderr)
     );
     let messages = stdout_json_lines(&output)?;
-    let response = messages
-        .iter()
-        .find(|message| message.get("id") == Some(&json!(1)))
-        .unwrap();
+    let receipt = response_with_id(&messages, 1)?;
+    let response = if receipt.get("error").is_some() {
+        receipt
+    } else {
+        execution_terminal(&messages, 1)?
+    };
 
     if cfg!(windows) {
         if response.get("error").is_some() {
@@ -4007,10 +4164,12 @@ fn workspace_contained_plan_reports_profile_protection_without_private_paths() -
         String::from_utf8_lossy(&output.stderr)
     );
     let messages = stdout_json_lines(&output)?;
-    let response = messages
-        .iter()
-        .find(|message| message.get("id") == Some(&json!(1)))
-        .unwrap();
+    let receipt = response_with_id(&messages, 1)?;
+    let response = if receipt.get("error").is_some() {
+        receipt
+    } else {
+        execution_terminal(&messages, 1)?
+    };
 
     if cfg!(windows) {
         let plan = if response.get("error").is_some() {
@@ -4094,10 +4253,7 @@ fn execute_rpc_streams_events_and_final_result() -> Result<()> {
         .iter()
         .filter(|message| message.get("method") == Some(&json!("event")))
         .collect();
-    let response = messages
-        .iter()
-        .find(|message| message.get("id") == Some(&json!(1)))
-        .unwrap();
+    let response = execution_terminal(&messages, 1)?;
     let event_types: Vec<_> = notifications
         .iter()
         .filter_map(|event| event["params"]["type"].as_str())
@@ -4143,8 +4299,14 @@ fn execute_rpc_streams_events_and_final_result() -> Result<()> {
     assert!(decode_stream_event(stdout_event)?.contains("protocol ok"));
     assert_eq!(response["result"]["status"], "finished");
     assert_eq!(response["result"]["exit_code"], 0);
-    assert_eq!(finished_event["status"], response["result"]["status"]);
-    assert_eq!(finished_event["exit_code"], response["result"]["exit_code"]);
+    assert_eq!(
+        finished_event["result"]["status"],
+        response["result"]["status"]
+    );
+    assert_eq!(
+        finished_event["result"]["exit_code"],
+        response["result"]["exit_code"]
+    );
     assert_eq!(response["result"]["signal"], Value::Null);
     assert_eq!(
         response["result"]["policy_epoch"],
@@ -4187,7 +4349,11 @@ fn execute_rpc_streams_events_and_final_result() -> Result<()> {
     );
     assert_eq!(
         response["result"]["platform_plan"]["process"]["cleanup"],
-        "direct-child"
+        if cfg!(windows) {
+            "process-tree"
+        } else {
+            "direct-child"
+        }
     );
     assert_eq!(
         response["result"]["platform_plan"]["setup"]["requires_runtime_roots"],
@@ -4280,18 +4446,9 @@ fn policy_epoch_tracks_effective_policy() -> Result<()> {
     let first_messages = stdout_json_lines(&first)?;
     let same_messages = stdout_json_lines(&same)?;
     let second_messages = stdout_json_lines(&second)?;
-    let first_result = &first_messages
-        .iter()
-        .find(|message| message.get("id") == Some(&json!(1)))
-        .context("first response with id 1 must exist")?["result"];
-    let same_result = &same_messages
-        .iter()
-        .find(|message| message.get("id") == Some(&json!(1)))
-        .context("same-policy response with id 1 must exist")?["result"];
-    let second_result = &second_messages
-        .iter()
-        .find(|message| message.get("id") == Some(&json!(1)))
-        .context("second response with id 1 must exist")?["result"];
+    let first_result = &execution_terminal(&first_messages, 1)?["result"];
+    let same_result = &execution_terminal(&same_messages, 1)?["result"];
+    let second_result = &execution_terminal(&second_messages, 1)?["result"];
 
     assert_eq!(first_result["status"], "finished");
     assert_eq!(same_result["status"], "finished");
@@ -4331,17 +4488,12 @@ fn execute_uses_minimal_environment() -> Result<()> {
         String::from_utf8_lossy(&output.stderr)
     );
     let messages = stdout_json_lines(&output)?;
-    let response = messages
-        .iter()
-        .find(|message| message.get("id") == Some(&json!(1)))
-        .unwrap();
+    let response = execution_terminal(&messages, 1)?;
 
     assert_eq!(response["result"]["status"], "finished");
     assert_eq!(response["result"]["exit_code"], 0);
     assert!(
-        response["result"]["stdout"]
-            .as_str()
-            .unwrap_or_default()
+        String::from_utf8(stream_bytes(&messages, "execution.stdout")?)?
             .contains("sentinel=missing")
     );
     let scrub = response["result"]["platform_plan"]["environment"]["scrub"]
@@ -4350,5 +4502,110 @@ fn execute_uses_minimal_environment() -> Result<()> {
     for expected in ["*_TOKEN", "*_SECRET", "*_PASSWORD", "*_AUTHORIZATION"] {
         assert!(scrub.iter().any(|pattern| pattern == expected));
     }
+    Ok(())
+}
+
+#[test]
+fn execution_capability_profiles_are_complete_and_consistent() -> Result<()> {
+    let output = run_rpc(&rpc_request("getCapabilities", json!({})))?;
+    anyhow::ensure!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let messages = stdout_json_lines(&output)?;
+    let payload = &messages[0]["result"];
+    let capabilities = payload["execution_capabilities"]
+        .as_object()
+        .context("execution_capabilities must be an object")?;
+    for name in [
+        "streaming_output",
+        "active_execution_query",
+        "execution_cancel",
+        "stdin_bytes",
+        "stdin_file",
+        "stdin_stream",
+        "transparent_exec",
+        "pty",
+        "pty_resize",
+        "pty_interrupt",
+        "control_channel",
+        "same_policy_concurrency",
+        "mixed_policy_concurrency",
+    ] {
+        let status = capabilities
+            .get(name)
+            .and_then(Value::as_str)
+            .with_context(|| format!("execution capability {name} must be reported"))?;
+        assert!(
+            [
+                "supported",
+                "experimental",
+                "unsupported",
+                "unavailable",
+                "requires_setup"
+            ]
+            .contains(&status),
+            "{name}: {status}"
+        );
+    }
+    assert_eq!(capabilities["mixed_policy_concurrency"], "unsupported");
+
+    let profiles = payload["execution_profiles"]
+        .as_array()
+        .context("execution_profiles must be an array")?;
+    let sandbox_levels = payload["sandbox_levels"]
+        .as_object()
+        .context("sandbox_levels must be an object")?;
+    let network_modes = payload["network_modes"]
+        .as_object()
+        .context("network_modes must be an object")?;
+    assert_eq!(
+        profiles.len(),
+        sandbox_levels.len() * network_modes.len() * 2
+    );
+    let mut seen = std::collections::HashSet::new();
+    for profile in profiles {
+        let key = (
+            profile["sandbox_level"]
+                .as_str()
+                .context("profile sandbox_level")?
+                .to_string(),
+            profile["network_mode"]
+                .as_str()
+                .context("profile network_mode")?
+                .to_string(),
+            profile["io_mode"]
+                .as_str()
+                .context("profile io_mode")?
+                .to_string(),
+        );
+        assert!(seen.insert(key.clone()), "duplicate profile {key:?}");
+        assert!(sandbox_levels.contains_key(&key.0));
+        assert!(network_modes.contains_key(&key.1));
+        assert!(key.2 == "pipe" || key.2 == "pty");
+        let status = profile["status"].as_str().context("profile status")?;
+        let features = profile["feature_statuses"]
+            .as_object()
+            .context("profile feature_statuses")?;
+        assert_eq!(features.len(), capabilities.len());
+        assert_eq!(features["mixed_policy_concurrency"], "unsupported");
+        if key.2 == "pty" {
+            assert_eq!(features["stdin_bytes"], "unsupported", "{key:?}");
+            assert_eq!(features["stdin_file"], "unsupported", "{key:?}");
+            assert_eq!(features["control_channel"], "unsupported", "{key:?}");
+        } else {
+            assert_eq!(features["pty"], "unsupported", "{key:?}");
+            assert_eq!(features["pty_resize"], "unsupported", "{key:?}");
+            assert_eq!(features["pty_interrupt"], "unsupported", "{key:?}");
+        }
+        let sandbox = sandbox_levels[&key.0].as_str().context("sandbox status")?;
+        let network = network_modes[&key.1].as_str().context("network status")?;
+        let requestable = sandbox != "unsupported"
+            && network != "unsupported"
+            && (key.2 == "pipe" || capabilities["pty"] != "unsupported");
+        assert_eq!(status != "unsupported", requestable, "{key:?}");
+    }
+    assert_eq!(seen.len(), profiles.len());
     Ok(())
 }

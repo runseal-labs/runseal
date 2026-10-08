@@ -10,6 +10,8 @@ const REDACTED: &str = "[REDACTED]";
 pub struct AuditWriter {
     file: File,
     relative_path: String,
+    #[cfg(test)]
+    read_only_after: Option<(usize, File)>,
 }
 
 impl AuditWriter {
@@ -25,6 +27,8 @@ impl AuditWriter {
         Ok(Self {
             file,
             relative_path: audit_path(session_id),
+            #[cfg(test)]
+            read_only_after: None,
         })
     }
 
@@ -33,9 +37,33 @@ impl AuditWriter {
     }
 
     pub fn write_event(&mut self, event: &Value) -> io::Result<()> {
+        #[cfg(test)]
+        if let Some((remaining, _)) = &mut self.read_only_after {
+            if *remaining == 0 {
+                if let Some((_, read_only)) = self.read_only_after.take() {
+                    self.file = read_only;
+                }
+            } else {
+                *remaining -= 1;
+            }
+        }
         serde_json::to_writer(&mut self.file, event).map_err(io::Error::other)?;
         self.file.write_all(b"\n")?;
-        self.file.flush()
+        self.file.flush()?;
+        self.file.sync_data()
+    }
+
+    #[cfg(all(test, windows))]
+    pub(crate) fn deny_writes_after(
+        &mut self,
+        cwd: &Path,
+        successful_writes: usize,
+    ) -> io::Result<()> {
+        self.read_only_after = Some((
+            successful_writes,
+            File::open(cwd.join(&self.relative_path))?,
+        ));
+        Ok(())
     }
 }
 
@@ -68,19 +96,21 @@ pub(crate) fn create_audit_writer(
     cwd: &Path,
     session_id: &str,
 ) -> Result<AuditWriter, RunSealError> {
-    AuditWriter::create(cwd, session_id).map_err(|err| {
-        RunSealError::new(
+    AuditWriter::create(cwd, session_id).map_err(|_| {
+        RunSealError::with_details(
             "INTERNAL_ERROR",
-            format!("failed to create audit writer: {err}"),
+            "failed to establish required audit record",
+            serde_json::json!({"durable_record_missing":true,"cleanup_complete":true}),
         )
     })
 }
 
 fn write_audit_event(audit: &mut AuditWriter, event: &Value) -> Result<(), RunSealError> {
-    audit.write_event(event).map_err(|err| {
-        RunSealError::new(
+    audit.write_event(event).map_err(|_| {
+        RunSealError::with_details(
             "INTERNAL_ERROR",
-            format!("failed to write audit event: {err}"),
+            "required audit write failed",
+            serde_json::json!({"durable_record_missing":true}),
         )
     })
 }
@@ -101,7 +131,7 @@ pub(crate) fn write_audit_event_with_metadata(
     write_audit_event(audit, &audit_event)
 }
 
-fn redact_audit_value(value: &Value) -> Value {
+pub(crate) fn redact_audit_value(value: &Value) -> Value {
     match value {
         Value::Object(object) => Value::Object(
             object

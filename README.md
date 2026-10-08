@@ -2,6 +2,119 @@
 
 [简体中文](README.zh-CN.md)
 
+`RUNSEAL_MAX_ACTIVE_EXECUTIONS` sets the RPC/service connection's active execution
+limit at startup (decimal 1..64, default 8). `getCapabilities.limits.max_active_executions`
+reports the frozen value. A full connection rejects extra executions with
+`EXECUTION_LIMIT_EXCEEDED` before launching their targets; queries and cancellation
+remain available. Requests still undergoing admission and owned workers awaiting
+cleanup consume the same capacity. Admission validation and resource setup run
+independently of the connection's control requests. Targets wait for delivery of
+the preparing receipt. Invalid configuration is rejected without echoing its value.
+`RUNSEAL_CLEANUP_TIMEOUT_MS` sets the host's total cleanup wait at startup
+(decimal 100..60000 milliseconds, default 10000). `limits.cleanup_timeout_ms`
+reports the frozen value. All host cleanup stages keep the earliest absolute
+deadline; a later phase or Drop cannot restart it. Backend stages may impose
+earlier deadlines. This wait does not extend a command's execution timeout.
+`RUNSEAL_REPLAY_EXECUTION_BYTES` (default 1 MiB, range 64 KiB..64 MiB) and
+`RUNSEAL_REPLAY_CONNECTION_BYTES` (default 8 MiB, range 64 KiB..256 MiB) configure
+resident replay retention in decimal bytes. The connection budget must cover the
+per-execution budget. Both are frozen at startup and reported as
+`limits.replay_execution_bytes` and `limits.replay_connection_bytes`. Eviction
+advances the available history range without changing live output or policy hashes.
+
+Completed-execution and redacted audit-query retention are configured at startup:
+
+| Environment | Default | Accepted range |
+|---|---:|---:|
+| `RUNSEAL_COMPLETED_EXECUTIONS` | 1,024 | 1..65,536 |
+| `RUNSEAL_COMPLETED_EXECUTION_BYTES` | 8 MiB | 64 KiB..256 MiB |
+| `RUNSEAL_AUDIT_CACHE_BYTES` | 8 MiB | 64 KiB..256 MiB |
+
+Byte settings use decimal byte counts. `getCapabilities.limits` reports them as
+`completed_executions`, `completed_execution_bytes`, and `audit_cache_bytes`.
+Summary count and byte budgets both apply; active executions remain available.
+Audit cache eviction reports incomplete history and preserves durable audit files.
+These settings do not change execution policy hashes.
+
+`RUNSEAL_STREAM_CHUNK_BYTES` configures decoded stream/input/control chunks
+(default 64 KiB, range 8 KiB..64 KiB). `RUNSEAL_INPUT_PENDING_BYTES` configures
+each stdin/control pending queue (default 256 KiB, range 8 KiB..16 MiB), including
+bytes awaiting actual write confirmation. Pending capacity must cover one chunk.
+Both use decimal bytes, freeze at startup, and are reported as
+`limits.stream_chunk_bytes` and `limits.input_pending_bytes`. RPC rejects an
+oversized decoded chunk before target delivery; output and plain CLI inputs are
+split into chunks without changing their bytes or offsets. Policy hashes remain
+unchanged. Every deployment limit above is configurable at startup and reported
+through `getCapabilities.limits`.
+
+`RUNSEAL_RPC_FRAME_BYTES` bounds incoming and outgoing JSON-RPC lines, including
+the newline (default 1 MiB, range 128 KiB..1 MiB). `limits.rpc_frame_bytes`
+reports the frozen startup value; `limits.query_response_bytes` reports the
+snapshot envelope budget, `min(256 KiB, rpc_frame_bytes)`. Oversized input is
+drained to its newline and rejected without starting its target; later requests
+can continue. Snapshots retain newest complete records and explicitly report
+truncation. An output frame that cannot fit closes the connection and cleans
+its active executions. This transport setting does not change policy hashes.
+
+`RUNSEAL_MAX_OUTPUT_BYTES` sets the aggregate stdout/stderr/terminal/control limit
+for each execution (default 16 MiB, range 1..16,777,216 decimal bytes).
+`limits.max_output_bytes` reports this startup-frozen deployment cap. Normalization
+writes the effective `resources.max_output_bytes` into canonical policy JSON:
+the deployment cap when omitted, or the smaller requested/deployment value.
+An explicit policy value of zero stays zero. Explain output, policy hashes,
+admission receipts, execution events, and audit records use that effective policy.
+Changing the effective output cap changes its hash; transport-only settings do not.
+Exact-budget output can complete normally; exceeding it reports
+`OUTPUT_LIMIT_EXCEEDED` and cleans the execution range. The engine rejects an
+unnormalized output limit instead of imposing a hidden unhashed fallback.
+
+`runseal exec` reports RunSeal failures as outer exit 125 in plain, JSON, and
+event modes, timeout as 124, and cancellation as 130. Plain diagnostics use
+`[runseal:<CODE>]` on stderr; pre-start JSON/events failures use one structured
+error. Event-mode runtime failures preserve one terminal instead of appending
+another error. Successfully obtained child results retain the child's exit in
+plain mode and use outer 0 in JSON/events, even for child exit 125. A child's
+bytes may contain the diagnostic prefix; use structured results to classify it.
+Unknown option, timeout/network value, and policy refusal diagnostics do not
+repeat arbitrary rejected argument values.
+
+Once final JSON delivery starts, a failed write or output cleanup returns a
+nonzero outer status without retrying or appending another error object. A
+durable terminal records execution completion; it does not acknowledge complete
+result delivery. Check both the outer status and the complete JSON document.
+
+On Windows, console Ctrl-C and Ctrl-Break received by `exec` request cancellation
+through the execution owner. All three output modes return outer 130 after
+verified cleanup, preserving the native exit facts and one audit terminal.
+Conformance covers actual signals in an isolated console, descendant cleanup,
+and a continuing independent peer under `danger-full-access`. Console shutdown
+events, portable host signals, and the sandboxed signal matrix still need evidence.
+
+`RUNSEAL_SENDER_BYTES` freezes the per-connection protocol send budget at startup:
+default 8 MiB, allowed 5 MiB..64 MiB, reported as `limits.sender_bytes`. Two MiB
+remain reserved for controller staging; the remaining writer budget reserves one
+MiB for control frames. Encoded frame storage, node charges, and the in-flight
+write count against enqueue and event-poll limits. This setting changes transport
+backpressure without changing policy hashes or execution output limits. The
+complete resident-memory bound still requires evidence beyond these queue charges.
+
+`RUNSEAL_BACKPRESSURE_MS` sets the no-output-progress grace in milliseconds
+(default 5,000, range 100..60,000), frozen at startup and reported as
+`limits.backpressure_ms`. RPC, CLI output/control, and bounded backend delivery
+use this value. Only actual writes reset the transport writer's progress; an
+idle connection with no pending output does not expire. Backend queue waits also
+stop at the original cleanup deadline. This setting does not change policy hashes
+or replace an execution timeout.
+
+Pending stdin/control byte writes are packed into bounded internal buffers;
+request boundaries do not become permanent queue nodes. The queue discards unused
+caller vector capacity, keeps in-flight bytes charged until actual write ACK,
+rejects over-budget requests before copying, and drains accepted bytes before EOF.
+Capacity tests cover single-byte saturation and oversized caller allocations;
+native stdin/control tests check binary order, rejection, EOF, and metadata-only
+audit. These checks bound this queue's retained buffers and nodes. Validation of
+the entire connection's resident-memory ceiling remains pending.
+
 RunSeal is an OS-native, policy-governed environment for safe local command execution.
 
 It exposes a stable execution protocol that launches user-provided commands inside enforceable filesystem, process, resource, and network boundaries. Enterprise network access routes through a controlled proxy that enforces routes, injects authentication at the boundary, redacts sensitive data, and emits structured audit events.
@@ -50,7 +163,63 @@ deny-by-default host-read containment.
 | Audit/events | Supported | Supported for current portable paths | Supported for current portable paths | Matching execution, denial, setup failure, and network decision events with JSONL audit records that do not expose backend-private details. |
 | Adversarial conformance | Required for reference readiness | Tracked for supported portable claims | Tracked for supported portable claims | RFC-0016 manifest cases must pass with public-safe results for the claimed capability; unsupported gaps must stay explicit and fail closed. |
 
-The protocol and policy version strings are `runseal.protocol/v1` and `runseal.policy/v1`. The Rust package version remains pre-`1.0`; breaking changes to provisional CLI flags, JSON fields, and audit shapes may still land when the RFCs change.
+The protocol and policy version strings are `runseal.protocol/v2` and `runseal.policy/v1`. The v2 implementation is in progress: admission receipts, backend-confirmed start events, live pipe output, streamed stdin, activity queries, cancellation, subscription replacement/replay/unsubscribe, bounded retention, cancellation with a paused protocol reader, queued-notification invalidation, writer-stall cleanup, required-audit admission refusal, numbered live/audit terminal parity, terminal retention-range snapshots, and session disposal that waits for owned process/runtime-root cleanup have targeted Windows pipe conformance evidence. Runtime audit-write failure has a real local-process fault test with a read-only file handle and an explicit missing-durable-record result. Windows local and sandboxed PTY startup, terminal bytes, resize, and foreground interrupt with continued shell/peer liveness have targeted danger-full-access and workspace-write/unmanaged tests. CLI PTY also has real-console input/Unicode, interrupt, resize, exit-code/mode-restoration and input-EOF cleanup tests for those profiles. Control, configurable transport limits, complete cleanup evidence, and the platform/combination conformance matrix remain pending. The Unix protocol writer uses nonblocking output, but that path has not been validated on this Windows host. This checkout is not a completed v2 release candidate.
+
+The standard `read-only` profile permits broad reads and denies workspace writes;
+execution-private runtime roots remain writable. Explicit custom read roots are
+preserved. Windows permission profiles include those runtime roots before choosing
+the isolation mode.
+
+Windows sandboxed pipe executions now verify process-range and runtime-root cleanup
+for natural exit, cancellation, timeout, and output limits before reporting
+`cleanup_complete:true`. Windows explicit local pipe execution also owns and clears
+its process range, with conformance covering natural exit, cancellation, host death,
+and isolation from a peer connection. Local output drains after the owned range is
+empty, and input/output joins share a cleanup deadline. Real tests retain duplicated
+stdout/stdin handles in a foreign peer and verify complete output, prompt completion,
+and peer survival. The sandboxed runner now joins its I/O workers before a successful
+cleanup acknowledgement and reports the actual process exit code after timeout.
+Verified exit facts also survive failed runner cleanup and a later parent input
+cleanup failure. Missing exit confirmation remains unknown, and a known exit
+does not make incomplete range cleanup successful.
+Capture input-source failures use `EXECUTION_INPUT_FAILED` / `input_failed` and
+retain verified exit facts. Successful runner, parent, and runtime-root cleanup reports
+`cleanup_complete:true`; a cleanup failure takes precedence and keeps the first
+accepted termination reason. Native I/O and real local-engine fault regressions
+cover the reporting boundary; the full sandbox fault matrix remains pending.
+Other runtime management failures use `execution_failed` as their first accepted
+cause, preserving the applicable error code. A started backend without trusted
+cleanup facts fails closed with `EXECUTION_CLEANUP_FAILED` and an unknown exit;
+it cannot be reported as a command that failed to start. Real local-process fault
+tests cover range termination, earlier cancellation, and one durable terminal.
+The complete sandbox I/O fault matrix and portable cleanup evidence remain
+pending. A binding left by a dead host is never cleared automatically: dead
+reservations, the native quarantine signal, and the cleanup-failure marker are
+released only by the explicit `runseal repair execution-gates` proof described
+below.
+
+Windows shared execution state now follows the native machine state directory and
+the OS process boundary, rather than caller environment paths or runtime-home
+spelling. Real process tests prove admission refusal across caller path overrides,
+continued owner heartbeat, and successful admission after complete drain. The
+state remains a protected subpath even when its parent is writable; a workspace
+inside it is refused before launch. Coordination waits are bounded. Reservations
+bind their host PID to its native creation time. Dead or unverifiable hosts do
+not acknowledge cleanup: admission fails closed for either policy, and healthy
+peers release only their own records. If writing the cleanup-failure marker fails,
+the failed owner retains its reservation and a protected native quarantine signal;
+another process cannot readmit the binding while that signal remains alive.
+The complete shared-state fault matrix across every backend combination remains
+pending; a dead host binding is restored only through the explicit
+`runseal repair execution-gates` proof.
+
+The Windows capture parent also polls partial IPC frames without blocking on a
+peer that keeps its pipe open. Cancellation, execution timeout, or input-worker
+failure starts a bounded parent cleanup wait shared with its input-worker join.
+An expired wait is not renewed by Drop; unfinished I/O stays owned and prevents
+a successful cleanup report. Real pipe and peer-process regressions cover these
+paths. The complete cleanup deadline across preparing, runner, and frontend
+stages still requires validation and implementation.
 
 The design lives in the RFC repository:
 
@@ -120,6 +289,7 @@ runseal exec --policy danger-full-access -- python skill.py
 Available `exec` flags: `--json`, `--events`, `--policy`, `--network`, `--cwd`, `--timeout-ms`. Omit `--network` for unmanaged direct networking; use `disabled` or `proxy` only when requesting those network controls. Flags must appear before `--`; the command and its arguments follow `--`.
 
 When `runseal exec --json` fails, stdout contains a structured `error` object and the process exits non-zero.
+Plain `exec` forwards child stdout and stderr separately as live binary bytes and preserves the child's exit code. Stdin defaults to empty; use `--stdin inherit` to forward caller input and EOF. Inherit is restricted to plain mode. `--json` returns one final result with `output.stdout` and `output.stderr` objects containing `encoding: "base64"`, `data`, `bytes`, and `truncated`; a child nonzero exit remains in `exit_code` with an outer success status when RunSeal itself completes normally.
 When `runseal exec --events` fails before an event stream completes, stdout contains one structured `error` object line and the process exits non-zero.
 
 ## Windows sandbox setup
@@ -186,6 +356,14 @@ The status payload reports coarse setup readiness: `broker`, `elevated`, `can_re
 
 Sandboxed `runseal exec` does not invoke UAC directly. It uses the installed scheduled setup broker: missing or stale setup is repaired through the broker automatically before execution. Only when the broker itself is missing does execution fail closed with `windows sandbox setup unavailable` until the setup command above is run again.
 
+If a host dies without acknowledging cleanup, its execution binding stays closed and every later sandboxed admission returns `EXECUTION_CLEANUP_FAILED`. Only an explicit repair restores it:
+
+```powershell
+.\target\debug\runseal.exe repair execution-gates --json
+```
+
+The repair refuses unless every recorded reservation owner is gone, no process runs under the sandbox identity, and every recorded runtime root is absent or safely removable. It then drops the reservation, the cleanup-failure marker, and the native quarantine signal for the current machine binding. An uninspectable process token or a reservation that predates runtime-root recording is unverified evidence, so the default repair fails closed; `--accept-unverified-release` proceeds and marks exactly what stayed unverified in the JSON report. Normal admission, a `setup --status` read, and a restart never repair a binding.
+
 ## Intended protocol
 
 ```json
@@ -206,12 +384,12 @@ Sandboxed `runseal exec` does not invoke UAC directly. It uses the installed sch
 The full JSON-RPC method set:
 
 - `getVersion` — package version and protocol/policy version strings
-- `getCapabilities` — backend capabilities, sandbox levels, network modes, feature statuses
+- `getCapabilities` — backend capabilities, sandbox levels, network modes, coarse feature statuses, fine-grained `execution_capabilities`, and `execution_profiles` rows per sandbox level, network mode, and io mode
 - `getServiceStatus` — whether the current stdio control plane is direct or stateful service mode
 - `explainPolicy` — resolve and explain a policy by name or inline definition
 - `getSetupStatus` — query sandbox setup readiness without changing state
 - `execute` — run a command under a sandbox policy
-- `getExecution` — retrieve a completed execution by ID (service mode)
+- `getExecution` — retrieve activity or a retained final execution by ID
 - `listExecutions` — list known executions (service mode)
 - `cancelExecution` — cancel a running execution
 - `subscribeEvents` — subscribe to events for a given execution
@@ -220,6 +398,8 @@ The full JSON-RPC method set:
 - `disposeSession` — release a session and its associated state
 
 Supported `execute` params: `command` (string array; the program name must be path-qualified), `cwd`, `policy`, `network` (string or `{"mode": ...}`), `stdin`, `timeout_ms`, `metadata` (JSON object, max 4096 bytes), `env` (JSON object of key-value pairs).
+
+Windows local and sandboxed PTY requests use `io:{"mode":"pty","rows":24,"cols":80}` with `stdin:{"mode":"stream"}`. Output arrives as `execution.terminal`; the final result includes `terminal_bytes` and `stderr_merged:true`. `resizeExecution` accepts an execution ID and dimensions from 1 to 1000, returning a queue-admission receipt. Pipe EOF requests for PTY input are refused. `signalExecution` accepts `signal:"interrupt"` for an active PTY and queues a terminal Ctrl+C without cancelling the Execution. Tests for danger-full-access and workspace-write prove foreground termination, continued execution in the same shell, and peer liveness. The local profile remains explicit unsandboxed execution. Windows plain CLI supports `--pty --stdin inherit`. It forwards terminal output to stdout, tracks console dimensions, restores console modes on return, and cancels/cleans its Execution when inherited input ends. With redirected output it starts at 80 columns and 24 rows. Real-console tests cover Unicode input, Ctrl+C, resize, native exit 7, and mode restoration; redirected-input EOF tests prove range cleanup and peer liveness. The complete fault/platform matrix remains pending.
 
 ## Third-party integration
 
@@ -318,3 +498,60 @@ RUNSEAL_BIN=target/debug/runseal cargo test
 - No direct secret injection into sandboxed processes.
 - No cloud multi-tenant sandbox control plane in the core runtime.
 - No claim that OS-native sandboxing prevents every kernel-level escape.
+
+Targeted Windows RPC control tests now cover fixed child fd 3 in all four standard
+profiles: three binary rounds, ordered input half-close with reverse output, separate
+stdout/stderr and offsets, cleanup with a live peer, and metadata-only audit records.
+Local and workspace-write tests also cover progress with blocked stdin, bounded
+control input, cancellation, and the shared output limit. The complete control fault/profile matrix remains pending.
+
+Windows plain CLI supports --control-fd 3 for an existing caller-owned local duplex
+endpoint. It forwards binary control independently of stdout/stderr, queues input
+half-close, retains the command's exit code, and bounds stalled control output.
+Local and workspace-write tests cover three rounds, final reverse output after EOF,
+startup refusal for missing endpoints/invalid combinations, and cleanup with a live
+peer when the caller stops reading control. A public Windows API example is included
+in examples/stdio-json-rpc/runseal_control_cli_example.py. Windows redirected CLI stdout/stderr and event output use nonblocking pipe writes.
+Local and workspace-write tests cover paused/closed readers, owned range cleanup,
+durable termination causes, peer liveness, and a timeout winning before a writer
+stall. Native Windows Console/file output uses bounded cancellable writes with owned
+handles. Real tests cover a paused Console reader with range/runtime cleanup and
+peer survival, binary file output, and gated one-byte Unicode chunks with an
+unchanged caller code page. Console renders UTF-8, replacing invalid or final
+incomplete sequences; pipes/files preserve raw bytes. The complete fault/profile
+matrix remains pending.
+
+A paced local CLI Console regression keeps execution active while consuming
+output, verifies native exit 7 and complete audit counts, and preserves every
+supplementary character without changing CP437. The stall timer follows actual
+native completions; disabling that refresh falsely reports backpressure.
+
+Plain inherited Windows Console input now has local/workspace-write evidence for
+Unicode, native backspace editing, raw input, Ctrl+Z EOF, and early command exit
+without a newline. Tests confirm native exit 7, unchanged console modes, and
+retained partial caller input. The complete frontend cleanup fault matrix remains pending.
+
+CLI frontend input, terminal modes, and control endpoint cleanup now run before
+the lifecycle owner commits the terminal audit event. A retained frontend resource
+turns the result into cleanup_failed while preserving the original termination
+cause and actual exit facts. Output worker cleanup also runs before this commit;
+an unjoined worker prevents success. Local process-range and frontend cleanup
+callbacks receive the same host deadline; frontend phases and Drop cannot renew
+it, and unfinished I/O workers retain their owners. CLI stdout/stderr and control
+delivery also stop when that cleanup deadline expires, even with continuing
+progress. A paced local Console test retains native exit 7, reports incomplete
+frontend cleanup, and returns wrapper exit 125. Preparing, general observer
+delivery, helper and capture-parent coordination, terminal-mode recovery, and the full fault matrix
+remain pending.
+
+Windows runner preparation now polls cancellation/timeouts during connections,
+request writes, and incremental startup confirmation under one preparation budget.
+Native fixtures verify retention of unjoined connect owners and termination of a
+suspended process after failed security setup. Capture-parent I/O reuses the host's
+absolute cleanup deadline. A failed startup remains unverified cleanup until the
+entire execution boundary can be proven released; stopping one runner is
+insufficient. Native runner launch now runs in an owned worker under the same
+preparation budget. Expired waiting retains that worker; a late suspended process
+is stopped without resuming the target. Native setup, late-launch recovery,
+the complete helper deadline, and the complete
+sandboxed startup fault matrix remain pending.

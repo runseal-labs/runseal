@@ -3,7 +3,6 @@ use super::windows_common::make_runner_resizer;
 use super::windows_common::start_runner_pipe_writer;
 use super::windows_common::start_runner_stdin_writer;
 use super::windows_common::start_runner_stdout_reader;
-use crate::ipc_framed::EmptyPayload;
 use crate::ipc_framed::FramedMessage;
 use crate::ipc_framed::IPC_PROTOCOL_VERSION;
 use crate::ipc_framed::Message;
@@ -83,6 +82,7 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated_for_permission_profil
     )?;
 
     let spawn_request = SpawnRequest {
+        terminal_size: None,
         command: command.clone(),
         cwd: cwd.to_path_buf(),
         env: env_map.clone(),
@@ -92,8 +92,10 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated_for_permission_profil
         real_codex_home: codex_home.to_path_buf(),
         cap_sids: elevated.cap_sids.clone(),
         timeout_ms,
+        cleanup_budget: crate::CleanupBudget::default(),
         tty,
         stdin_open,
+        control_open: false,
         use_private_desktop,
     };
     let codex_home = codex_home.to_path_buf();
@@ -107,6 +109,8 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated_for_permission_profil
             &sandbox_creds,
             logs_base_dir.as_deref(),
             spawn_request,
+            None,
+            None,
         )
     })
     .await
@@ -130,7 +134,10 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated_for_permission_profil
             let _ = outbound_tx.send(FramedMessage {
                 version: IPC_PROTOCOL_VERSION,
                 message: Message::Terminate {
-                    payload: EmptyPayload::default(),
+                    payload: crate::CleanupDeadlinePayload::new(
+                        std::time::Instant::now() + std::time::Duration::from_secs(10),
+                    )
+                    .unwrap_or_else(|_| crate::CleanupDeadlinePayload::expired()),
                 },
             });
         }) as Box<dyn FnMut() + Send + Sync>)

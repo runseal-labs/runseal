@@ -372,6 +372,23 @@ pub fn normalize_policy(
     cwd: &Path,
     network_override: Option<NetworkMode>,
 ) -> Result<SandboxPolicy, PolicyError> {
+    let mut policy = normalize_requested_policy(input, cwd, network_override)?;
+    let deployment_limit = crate::limits::deployment().max_output_bytes as u64;
+    policy.resources.max_output_bytes = Some(
+        policy
+            .resources
+            .max_output_bytes
+            .unwrap_or(deployment_limit)
+            .min(deployment_limit),
+    );
+    Ok(policy)
+}
+
+fn normalize_requested_policy(
+    input: &Value,
+    cwd: &Path,
+    network_override: Option<NetworkMode>,
+) -> Result<SandboxPolicy, PolicyError> {
     if let Some(profile) = input.as_str() {
         return named_profile(profile, cwd, network_override);
     }
@@ -485,7 +502,7 @@ fn profile_filesystem(cwd: &Path, sandbox_level: SandboxLevel) -> FilesystemPoli
             unrestricted: true,
         },
         SandboxLevel::ReadOnly => FilesystemPolicy {
-            read: vec![path_string(cwd)],
+            read: vec!["*".to_string()],
             read_only: Vec::new(),
             write: Vec::new(),
             deny: Vec::new(),
@@ -528,8 +545,10 @@ fn inline_filesystem(
         )?;
     }
     let read = string_array(filesystem, "read")?.unwrap_or_else(|| match sandbox_level {
-        SandboxLevel::DangerFullAccess | SandboxLevel::WorkspaceWrite => vec!["*".to_string()],
-        _ => vec![path_string(cwd)],
+        SandboxLevel::DangerFullAccess | SandboxLevel::ReadOnly | SandboxLevel::WorkspaceWrite => {
+            vec!["*".to_string()]
+        }
+        SandboxLevel::WorkspaceContained => vec![path_string(cwd)],
     });
     let read_only = string_array(filesystem, "read_only")?.unwrap_or_default();
     let write = string_array(filesystem, "write")?.unwrap_or_else(|| match sandbox_level {
@@ -855,6 +874,11 @@ fn environment_set(
         let value = value.as_str().ok_or_else(|| {
             PolicyError::invalid(format!("environment.set.{key} must be a string"))
         })?;
+        if value.contains('\0') {
+            return Err(PolicyError::invalid(
+                "environment values must not contain NUL",
+            ));
+        }
         if value.len() > MAX_ENV_VALUE_BYTES {
             return Err(PolicyError::invalid(format!(
                 "environment.set.{key} must be at most {MAX_ENV_VALUE_BYTES} bytes"

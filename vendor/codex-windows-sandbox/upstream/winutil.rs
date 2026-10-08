@@ -68,7 +68,24 @@ pub fn quote_windows_arg(arg: &str) -> String {
 #[cfg(target_os = "windows")]
 pub fn argv_to_command_line(argv: &[String]) -> String {
     argv.iter()
-        .map(|arg| quote_windows_arg(arg))
+        .enumerate()
+        .map(|(index, arg)| {
+            // Windows accepts either path separator, but command interpreters
+            // may parse a forward slash in argv[0] as an option.
+            let program;
+            let arg = if index == 0 {
+                program = arg.replace('/', "\\");
+                &program
+            } else {
+                arg
+            };
+            let quoted = quote_windows_arg(arg);
+            if index == 0 && !quoted.starts_with('"') {
+                format!("\"{quoted}\"")
+            } else {
+                quoted
+            }
+        })
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -221,7 +238,7 @@ mod tests {
 
         assert_eq!(
             argv_to_command_line(&argv),
-            "cmd.exe /c \"\\\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\\\" -NoProfile -EncodedCommand abc==\""
+            "\"cmd.exe\" /c \"\\\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\\\" -NoProfile -EncodedCommand abc==\""
         );
     }
 
@@ -235,7 +252,7 @@ mod tests {
 
         assert_eq!(
             argv_to_command_line(&argv),
-            "pwsh.exe -Command \"Write-Output \\\"hello world\\\"\""
+            "\"pwsh.exe\" -Command \"Write-Output \\\"hello world\\\"\""
         );
     }
 }

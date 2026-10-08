@@ -8,10 +8,50 @@ mod ssh_config_dependencies;
 use std::fmt;
 use std::sync::Arc;
 
+#[derive(Debug)]
+pub struct SandboxCleanupError;
+impl fmt::Display for SandboxCleanupError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("execution range cleanup could not be verified")
+    }
+}
+impl std::error::Error for SandboxCleanupError {}
+
+#[derive(Debug)]
+pub struct SandboxCaptureCleanupError {
+    pub exit_code: Option<i32>,
+    pub timed_out: bool,
+}
+impl fmt::Display for SandboxCaptureCleanupError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("execution I/O cleanup could not be verified")
+    }
+}
+impl std::error::Error for SandboxCaptureCleanupError {}
+
+#[derive(Debug)]
+pub struct SandboxCaptureInputError {
+    pub exit_code: i32,
+    pub timed_out: bool,
+}
+impl fmt::Display for SandboxCaptureInputError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("execution input failed after verified cleanup")
+    }
+}
+impl std::error::Error for SandboxCaptureInputError {}
+
 /// Cancellation hook used by Windows sandbox capture backends.
+type CleanupStartedObserver =
+    dyn Fn(std::time::Instant, Option<i32>, bool) -> std::time::Instant + Send + Sync;
+
 #[derive(Clone)]
 pub struct WindowsSandboxCancellationToken {
     is_cancelled: Arc<dyn Fn() -> bool + Send + Sync>,
+    cleanup_deadline: Option<Arc<dyn Fn() -> std::time::Instant + Send + Sync>>,
+    cleanup_started: Option<Arc<CleanupStartedObserver>>,
+    #[cfg(windows)]
+    cleanup_budget: CleanupBudget,
 }
 
 impl WindowsSandboxCancellationToken {
@@ -19,12 +59,63 @@ impl WindowsSandboxCancellationToken {
     pub fn new(is_cancelled: impl Fn() -> bool + Send + Sync + 'static) -> Self {
         Self {
             is_cancelled: Arc::new(is_cancelled),
+            cleanup_deadline: None,
+            cleanup_started: None,
+            #[cfg(windows)]
+            cleanup_budget: CleanupBudget::default(),
         }
     }
 
     /// Returns whether the caller has requested cancellation.
     pub fn is_cancelled(&self) -> bool {
         (self.is_cancelled)()
+    }
+
+    #[cfg(windows)]
+    pub fn with_cleanup_budget(mut self, budget: CleanupBudget) -> Self {
+        self.cleanup_budget = budget;
+        self
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn cleanup_budget(&self) -> CleanupBudget {
+        self.cleanup_budget
+    }
+
+    pub fn with_cleanup_deadline(
+        mut self,
+        deadline: impl Fn() -> std::time::Instant + Send + Sync + 'static,
+    ) -> Self {
+        self.cleanup_deadline = Some(Arc::new(deadline));
+        self
+    }
+
+    pub(crate) fn cleanup_deadline(&self) -> Option<std::time::Instant> {
+        self.cleanup_deadline.as_ref().map(|deadline| deadline())
+    }
+
+    pub fn with_cleanup_started(
+        mut self,
+        observer: impl Fn(std::time::Instant, Option<i32>, bool) -> std::time::Instant
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        self.cleanup_started = Some(Arc::new(observer));
+        self
+    }
+
+    pub(crate) fn adopt_cleanup_deadline(
+        &self,
+        candidate: std::time::Instant,
+        exit_code: Option<i32>,
+        timed_out: bool,
+    ) -> std::time::Instant {
+        let selected = self.cleanup_started.as_ref().map_or(candidate, |observer| {
+            observer(candidate, exit_code, timed_out).min(candidate)
+        });
+        self.cleanup_deadline()
+            .map_or(selected, |previous| previous.min(selected))
     }
 }
 
@@ -46,6 +137,8 @@ mod audit;
 #[cfg(target_os = "windows")]
 mod cap;
 #[cfg(target_os = "windows")]
+mod control;
+#[cfg(target_os = "windows")]
 mod deny_read_state;
 #[cfg(target_os = "windows")]
 mod desktop;
@@ -57,6 +150,8 @@ mod env;
 mod helper_materialization;
 #[cfg(target_os = "windows")]
 mod hide_users;
+#[cfg(windows)]
+mod host_coordinator;
 #[cfg(target_os = "windows")]
 mod identity;
 #[cfg(target_os = "windows")]
@@ -65,6 +160,16 @@ mod logging;
 mod path_normalization;
 #[cfg(target_os = "windows")]
 mod process;
+#[cfg(target_os = "windows")]
+pub use control::{DuplexControl, InheritedControlEndpoint};
+#[cfg(windows)]
+pub use host_coordinator::create_host_coordinator_event;
+#[cfg(target_os = "windows")]
+mod output_pipe;
+#[cfg(windows)]
+pub use output_pipe::CancellableOutput;
+#[cfg(target_os = "windows")]
+pub use output_pipe::NonblockingOutputPipe;
 #[cfg(target_os = "windows")]
 mod resolved_permissions;
 #[cfg(target_os = "windows")]
@@ -185,8 +290,10 @@ pub use dpapi::protect as dpapi_protect;
 pub use dpapi::unprotect as dpapi_unprotect;
 #[cfg(target_os = "windows")]
 pub use elevated_impl::ElevatedSandboxProfileCaptureRequest;
+pub use elevated_impl::SandboxOutputObserver;
 #[cfg(target_os = "windows")]
 pub use elevated_impl::run_windows_sandbox_capture_for_permission_profile as run_windows_sandbox_capture_for_permission_profile_elevated;
+pub use elevated_impl::{SandboxInputPoll, SandboxInputSource};
 #[cfg(target_os = "windows")]
 pub use helper_materialization::resolve_current_exe_for_launch;
 #[cfg(target_os = "windows")]
@@ -197,6 +304,12 @@ pub use hide_users::hide_newly_created_users;
 pub use identity::require_logon_sandbox_creds;
 #[cfg(target_os = "windows")]
 pub use identity::sandbox_setup_is_complete;
+#[cfg(target_os = "windows")]
+pub use ipc_framed::CleanupBudget;
+#[cfg(target_os = "windows")]
+pub use ipc_framed::CleanupDeadlinePayload;
+#[cfg(target_os = "windows")]
+pub use ipc_framed::CleanupStartedPayload;
 #[cfg(target_os = "windows")]
 pub use ipc_framed::ErrorPayload;
 #[cfg(target_os = "windows")]
@@ -217,6 +330,7 @@ pub use ipc_framed::ResizePayload;
 pub use ipc_framed::SpawnReady;
 #[cfg(target_os = "windows")]
 pub use ipc_framed::SpawnRequest;
+pub use ipc_framed::StdinAcknowledgedPayload;
 #[cfg(target_os = "windows")]
 pub use ipc_framed::decode_bytes;
 #[cfg(target_os = "windows")]
@@ -225,6 +339,8 @@ pub use ipc_framed::encode_bytes;
 pub use ipc_framed::read_frame;
 #[cfg(target_os = "windows")]
 pub use ipc_framed::write_frame;
+#[cfg(target_os = "windows")]
+pub use ipc_framed::{FramePoll, PipeFrameReader};
 #[cfg(target_os = "windows")]
 pub use logging::current_log_file_path;
 #[cfg(target_os = "windows")]
@@ -240,17 +356,22 @@ pub use path_normalization::canonical_path_key;
 #[cfg(target_os = "windows")]
 pub use path_normalization::canonicalize_path;
 #[cfg(target_os = "windows")]
+pub use process::LocalExecutionProcess;
+#[cfg(target_os = "windows")]
 pub use process::PipeSpawnHandles;
 #[cfg(target_os = "windows")]
 pub use process::StderrMode;
 #[cfg(target_os = "windows")]
 pub use process::StdinMode;
+pub use process::available_pipe_bytes;
 #[cfg(target_os = "windows")]
 pub use process::create_process_as_user;
 #[cfg(target_os = "windows")]
 pub use process::read_handle_loop;
 #[cfg(target_os = "windows")]
-pub use process::spawn_process_with_pipes;
+pub use process::terminate_process_range_and_wait;
+#[cfg(target_os = "windows")]
+pub use process::{spawn_process_with_pipes, spawn_process_with_pipes_and_control};
 #[cfg(target_os = "windows")]
 pub use resolved_permissions::ResolvedWindowsSandboxPermissions;
 #[cfg(target_os = "windows")]

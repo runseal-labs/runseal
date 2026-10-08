@@ -11,6 +11,9 @@ pub(crate) struct CliExecRequest {
     pub(crate) network: Option<NetworkMode>,
     pub(crate) cwd: PathBuf,
     pub(crate) timeout: Option<Duration>,
+    pub(crate) stdin_inherit: bool,
+    pub(crate) pty: bool,
+    pub(crate) control_fd3: bool,
     pub(crate) command: Vec<String>,
 }
 
@@ -28,6 +31,9 @@ pub(crate) fn parse_exec_args(args: &[String]) -> Result<CliExecRequest, String>
     let mut network = None;
     let mut cwd = current_dir();
     let mut timeout = None;
+    let mut stdin_inherit = false;
+    let mut pty = false;
+    let mut control_fd3 = false;
     let mut index = 0;
 
     while index < args.len() {
@@ -68,10 +74,44 @@ pub(crate) fn parse_exec_args(args: &[String]) -> Result<CliExecRequest, String>
                 timeout = Some(parse_timeout_ms(value)?);
                 index += 2;
             }
+            "--control-fd" => {
+                if args.get(index + 1).map(String::as_str) != Some("3") {
+                    return Err("--control-fd requires 3".to_string());
+                }
+                control_fd3 = true;
+                index += 2;
+            }
+            "--pty" => {
+                pty = true;
+                index += 1;
+            }
+            "--stdin" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| "--stdin requires a value".to_string())?;
+                stdin_inherit = match value.as_str() {
+                    "empty" => false,
+                    "inherit" => true,
+                    _ => return Err("--stdin must be empty or inherit".to_string()),
+                };
+                index += 2;
+            }
             "--" => {
                 let command = args[index + 1..].to_vec();
                 if command.is_empty() {
                     return Err("exec requires a command after --".to_string());
+                }
+                if json && events {
+                    return Err("--json and --events are mutually exclusive".to_string());
+                }
+                if control_fd3 && (pty || json || events) {
+                    return Err("--control-fd requires plain pipe output".to_string());
+                }
+                if pty && (!stdin_inherit || json || events) {
+                    return Err("--pty requires --stdin inherit and plain output".to_string());
+                }
+                if stdin_inherit && (json || events) {
+                    return Err("--stdin inherit requires plain output".to_string());
                 }
                 return Ok(CliExecRequest {
                     json,
@@ -80,10 +120,13 @@ pub(crate) fn parse_exec_args(args: &[String]) -> Result<CliExecRequest, String>
                     network,
                     cwd,
                     timeout,
+                    stdin_inherit,
+                    pty,
+                    control_fd3,
                     command,
                 });
             }
-            other => return Err(format!("unknown exec argument: {other}")),
+            _ => return Err("unknown exec argument".to_string()),
         }
     }
 
@@ -132,13 +175,13 @@ pub(crate) fn parse_policy_args(args: &[String]) -> Result<CliPolicyRequest, Str
 
 fn parse_network_mode(value: &str) -> Result<NetworkMode, String> {
     NetworkMode::from_str(value)
-        .ok_or_else(|| format!("network mode must be unmanaged, disabled, or proxy, got {value}"))
+        .ok_or_else(|| "network mode must be unmanaged, disabled, or proxy".to_string())
 }
 
 fn parse_timeout_ms(value: &str) -> Result<Duration, String> {
     let timeout_ms = value
         .parse::<u64>()
-        .map_err(|_| format!("timeout must be an integer in milliseconds, got {value}"))?;
+        .map_err(|_| "timeout must be an integer in milliseconds".to_string())?;
     Ok(Duration::from_millis(timeout_ms))
 }
 

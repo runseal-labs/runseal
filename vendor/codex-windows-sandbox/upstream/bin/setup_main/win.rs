@@ -57,7 +57,6 @@ use windows_sys::Win32::Security::ACE_HEADER;
 use windows_sys::Win32::Security::ACL;
 use windows_sys::Win32::Security::ACL_SIZE_INFORMATION;
 use windows_sys::Win32::Security::AclSizeInformation;
-use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
 use windows_sys::Win32::Security::Authorization::EXPLICIT_ACCESS_W;
 use windows_sys::Win32::Security::Authorization::GRANT_ACCESS;
 use windows_sys::Win32::Security::Authorization::SE_FILE_OBJECT;
@@ -1191,7 +1190,7 @@ fn ensure_scheduled_setup_task(codex_home: &Path, log: &mut dyn Write) -> Result
 fn lock_persistent_sandbox_dirs(
     payload: &Payload,
     sandbox_group_sid: &[u8],
-    log: &mut dyn Write,
+    _log: &mut dyn Write,
 ) -> Result<()> {
     lock_sandbox_dir(
         &sandbox_dir(&payload.codex_home),
@@ -1239,7 +1238,7 @@ fn lock_persistent_sandbox_dirs(
 fn lock_sandbox_bin_dir(
     payload: &Payload,
     sandbox_group_sid: &[u8],
-    log: &mut dyn Write,
+    _log: &mut dyn Write,
 ) -> Result<()> {
     lock_sandbox_dir(
         &sandbox_bin_dir(&payload.codex_home),
@@ -1801,12 +1800,14 @@ mod tests {
             .collect::<Vec<_>>();
         let mut dacl: *mut ACL = std::ptr::null_mut();
         assert_eq!(
-            SetEntriesInAclW(
-                explicit_entries.len() as u32,
-                explicit_entries.as_ptr(),
-                std::ptr::null_mut(),
-                &mut dacl,
-            ),
+            unsafe {
+                SetEntriesInAclW(
+                    explicit_entries.len() as u32,
+                    explicit_entries.as_ptr(),
+                    std::ptr::null_mut(),
+                    &mut dacl,
+                )
+            },
             0
         );
         dacl

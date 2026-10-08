@@ -114,6 +114,14 @@ impl WindowsVendorSandboxProfile {
 
     #[cfg(windows)]
     pub(crate) fn permission_profile(&self) -> Result<PermissionProfile, String> {
+        self.permission_profile_with_runtime_roots(&[])
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn permission_profile_with_runtime_roots(
+        &self,
+        runtime_write_roots: &[String],
+    ) -> Result<PermissionProfile, String> {
         let Self::Managed {
             filesystem,
             network,
@@ -123,11 +131,17 @@ impl WindowsVendorSandboxProfile {
             return Ok(PermissionProfile::Disabled);
         };
 
-        let entries = filesystem
+        let mut entries = filesystem
             .entries
             .iter()
             .map(codex_filesystem_entry)
             .collect::<Result<Vec<_>, _>>()?;
+        for root in runtime_write_roots {
+            entries.push(codex_filesystem_entry(&WindowsVendorFilesystemEntry {
+                path: root.clone(),
+                access: WindowsVendorFilesystemAccess::Write,
+            })?);
+        }
         let file_system = FileSystemSandboxPolicy::restricted(entries);
 
         Ok(PermissionProfile::Managed {

@@ -29,6 +29,139 @@ impl CapabilityStatus {
     }
 }
 
+pub const EXECUTION_CAPABILITY_NAMES: [&str; 13] = [
+    "streaming_output",
+    "active_execution_query",
+    "execution_cancel",
+    "stdin_bytes",
+    "stdin_file",
+    "stdin_stream",
+    "transparent_exec",
+    "pty",
+    "pty_resize",
+    "pty_interrupt",
+    "control_channel",
+    "same_policy_concurrency",
+    "mixed_policy_concurrency",
+];
+
+/// Per-execution capability statuses ordered like EXECUTION_CAPABILITY_NAMES.
+pub type ExecutionCapabilityStatuses = [CapabilityStatus; EXECUTION_CAPABILITY_NAMES.len()];
+
+/// Engine-level baseline: the shared lifecycle and byte I/O work, but no
+/// interactive terminal or explicit control channel.
+pub fn baseline_execution_capabilities() -> ExecutionCapabilityStatuses {
+    use CapabilityStatus::{Supported, Unsupported};
+    [
+        Supported,
+        Supported,
+        Supported,
+        Supported,
+        Supported,
+        Supported,
+        Supported,
+        Unsupported,
+        Unsupported,
+        Unsupported,
+        Unsupported,
+        Supported,
+        Unsupported,
+    ]
+}
+
+/// Baseline plus real terminal and control-channel support.
+pub fn interactive_execution_capabilities() -> ExecutionCapabilityStatuses {
+    let mut statuses = baseline_execution_capabilities();
+    statuses[7] = CapabilityStatus::Supported;
+    statuses[8] = CapabilityStatus::Supported;
+    statuses[9] = CapabilityStatus::Supported;
+    statuses[10] = CapabilityStatus::Supported;
+    statuses
+}
+
+fn execution_capabilities_object(statuses: &ExecutionCapabilityStatuses) -> Value {
+    let mut map = serde_json::Map::new();
+    for (name, status) in EXECUTION_CAPABILITY_NAMES.iter().zip(statuses.iter()) {
+        map.insert((*name).to_string(), json!(status.as_str()));
+    }
+    Value::Object(map)
+}
+
+fn strongest(statuses: &[&'static str]) -> &'static str {
+    if statuses.contains(&CapabilityStatus::Unsupported.as_str()) {
+        CapabilityStatus::Unsupported.as_str()
+    } else if statuses.contains(&CapabilityStatus::Unavailable.as_str()) {
+        CapabilityStatus::Unavailable.as_str()
+    } else if statuses.contains(&CapabilityStatus::RequiresSetup.as_str()) {
+        CapabilityStatus::RequiresSetup.as_str()
+    } else if statuses.contains(&CapabilityStatus::Experimental.as_str()) {
+        CapabilityStatus::Experimental.as_str()
+    } else {
+        CapabilityStatus::Supported.as_str()
+    }
+}
+
+fn io_mode_supported(statuses: &ExecutionCapabilityStatuses, io_mode: &str) -> bool {
+    match io_mode {
+        "pty" => matches!(
+            statuses[7],
+            CapabilityStatus::Supported | CapabilityStatus::Experimental
+        ),
+        _ => true,
+    }
+}
+
+fn profile_feature_statuses(
+    statuses: &ExecutionCapabilityStatuses,
+    io_mode: &str,
+    requestable: bool,
+) -> Value {
+    let mut map = serde_json::Map::new();
+    for (index, name) in EXECUTION_CAPABILITY_NAMES.iter().enumerate() {
+        let applicable = match io_mode {
+            "pty" => !matches!(*name, "stdin_bytes" | "stdin_file" | "control_channel"),
+            _ => !matches!(*name, "pty" | "pty_resize" | "pty_interrupt"),
+        };
+        let status = if requestable && applicable {
+            statuses[index]
+        } else {
+            CapabilityStatus::Unsupported
+        };
+        map.insert((*name).to_string(), json!(status.as_str()));
+    }
+    Value::Object(map)
+}
+
+fn execution_profiles_json(
+    statuses: &ExecutionCapabilityStatuses,
+    sandbox_levels: &[(&'static str, &'static str)],
+    network_modes: &[(&'static str, &'static str)],
+) -> Value {
+    let mut profiles = Vec::new();
+    for (sandbox_level, sandbox_status) in sandbox_levels {
+        for (network_mode, network_status) in network_modes {
+            for io_mode in ["pipe", "pty"] {
+                let base = strongest(&[*sandbox_status, *network_status]);
+                let io_supported = io_mode_supported(statuses, io_mode);
+                let requestable = base != CapabilityStatus::Unsupported.as_str() && io_supported;
+                let status = if requestable {
+                    base
+                } else {
+                    CapabilityStatus::Unsupported.as_str()
+                };
+                profiles.push(json!({
+                    "sandbox_level": sandbox_level,
+                    "network_mode": network_mode,
+                    "io_mode": io_mode,
+                    "status": status,
+                    "feature_statuses": profile_feature_statuses(statuses, io_mode, requestable),
+                }));
+            }
+        }
+    }
+    Value::Array(profiles)
+}
+
 /// Platform execution boundary for RunSeal sandbox policies.
 ///
 pub(super) fn capabilities_json_for(backend: &dyn SandboxBackend, notes: &[&'static str]) -> Value {
@@ -68,6 +201,18 @@ pub(super) fn capabilities_json_for(backend: &dyn SandboxBackend, notes: &[&'sta
             BackendFeature::ManagedProxy,
         ],
     );
+    let execution_statuses = backend.execution_capabilities();
+    let sandbox_level_rows = [
+        ("read-only", read_only),
+        ("workspace-write", workspace_write),
+        ("workspace-contained", read_only),
+        ("danger-full-access", CapabilityStatus::Supported.as_str()),
+    ];
+    let network_mode_rows = [
+        ("unmanaged", CapabilityStatus::Supported.as_str()),
+        ("disabled", network_disabled),
+        ("proxy", network_proxy),
+    ];
     json!({
         "backend": backend.name(),
         "backend_status": backend.status(),
@@ -111,6 +256,12 @@ pub(super) fn capabilities_json_for(backend: &dyn SandboxBackend, notes: &[&'sta
             "audit_jsonl": CapabilityStatus::Supported.as_str(),
             "otel_export": CapabilityStatus::Unsupported.as_str(),
         },
+        "execution_capabilities": execution_capabilities_object(&execution_statuses),
+        "execution_profiles": execution_profiles_json(
+            &execution_statuses,
+            &sandbox_level_rows,
+            &network_mode_rows,
+        ),
         "sandbox_levels": {
             "read-only": read_only,
             "workspace-contained": read_only,

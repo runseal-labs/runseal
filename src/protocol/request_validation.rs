@@ -1,7 +1,7 @@
 use crate::backend::ExecutionEnv;
 use crate::commands;
 use crate::error::RunSealError;
-use crate::execution::{current_dir, execute_command, normalize_execution_cwd};
+use crate::execution::{ExecutionRequest, current_dir, normalize_execution_cwd};
 use crate::policy::{
     NetworkMode, SandboxPolicy, matches_environment_scrub_pattern, normalize_policy,
 };
@@ -10,6 +10,7 @@ use crate::{
     MAX_ENV_ENTRIES, MAX_ENV_KEY_BYTES, MAX_ENV_VALUE_BYTES, MAX_METADATA_BYTES,
     MAX_PROTOCOL_ID_BYTES,
 };
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -46,7 +47,9 @@ pub(crate) fn setup_status_cwd_from_params(params: &Value) -> Result<PathBuf, Ru
     normalize_execution_cwd(&cwd)
 }
 
-pub(crate) fn execute_from_params(params: &Value) -> Result<(Vec<Value>, Value), RunSealError> {
+pub(crate) fn execution_request_from_params(
+    params: &Value,
+) -> Result<ExecutionRequest, RunSealError> {
     let params = params_object(params, "execute")?;
     validate_param_keys(
         params,
@@ -57,6 +60,7 @@ pub(crate) fn execute_from_params(params: &Value) -> Result<(Vec<Value>, Value),
             "policy",
             "network",
             "stdin",
+            "io",
             "timeout_ms",
             "metadata",
             "env",
@@ -82,6 +86,7 @@ pub(crate) fn execute_from_params(params: &Value) -> Result<(Vec<Value>, Value),
         .unwrap_or_else(current_dir);
     let cwd = normalize_execution_cwd(&cwd)?;
     let stdin = stdin_from_params(params, &cwd)?;
+    let io = io_from_params(params, &stdin)?;
     let policy = params
         .get("policy")
         .cloned()
@@ -91,10 +96,110 @@ pub(crate) fn execute_from_params(params: &Value) -> Result<(Vec<Value>, Value),
     let timeout = timeout_from_params(params, &policy)?;
     let env = env_from_params(params, &policy)?;
 
-    execute_command(&command, &cwd, &policy, stdin, env, metadata, timeout)
+    Ok(ExecutionRequest {
+        control_input: io
+            .has_control()
+            .then(crate::backend::ExecutionInput::default),
+        io,
+        ids: crate::events::new_execution_ids(),
+        control: crate::execution::ExecutionControl::default(),
+        command,
+        cwd,
+        policy,
+        stdin,
+        env,
+        metadata,
+        timeout,
+    })
+}
+
+fn io_from_params(
+    params: &Map<String, Value>,
+    stdin: &crate::backend::ExecutionStdin,
+) -> Result<crate::backend::ExecutionIo, RunSealError> {
+    let Some(value) = params.get("io") else {
+        return Ok(crate::backend::ExecutionIo::Pipe);
+    };
+    let io = value
+        .as_object()
+        .ok_or_else(|| RunSealError::new("INVALID_REQUEST", "io must be an object"))?;
+    match io.get("mode").and_then(Value::as_str) {
+        Some("pipe") => {
+            validate_param_keys(io, "io", &["mode", "control"])?;
+            if let Some(control) = io.get("control") {
+                let control = control.as_object().ok_or_else(|| {
+                    RunSealError::new("INVALID_REQUEST", "io.control must be an object")
+                })?;
+                validate_param_keys(control, "io.control", &["mode", "child_fd"])?;
+                if control.get("mode").and_then(Value::as_str) != Some("pipe")
+                    || control.get("child_fd").and_then(Value::as_u64) != Some(3)
+                {
+                    return Err(RunSealError::new(
+                        "INVALID_REQUEST",
+                        "control requires pipe mode and child_fd 3",
+                    ));
+                }
+                #[cfg(not(windows))]
+                return Err(RunSealError::with_details(
+                    "BACKEND_CAPABILITY_MISSING",
+                    "control channel unavailable",
+                    json!({"missing_features":["control_channel"]}),
+                ));
+                #[cfg(windows)]
+                return Ok(crate::backend::ExecutionIo::PipeControl);
+            }
+            Ok(crate::backend::ExecutionIo::Pipe)
+        }
+        Some("pty") => {
+            validate_param_keys(io, "io", &["mode", "rows", "cols"])?;
+            if !matches!(stdin, crate::backend::ExecutionStdin::Stream(_)) {
+                return Err(RunSealError::new(
+                    "INVALID_REQUEST",
+                    "PTY requires stdin.stream",
+                ));
+            }
+            let rows = terminal_dimension(io, "rows")?;
+            let cols = terminal_dimension(io, "cols")?;
+            #[cfg(not(windows))]
+            {
+                let _ = (rows, cols);
+                Err(RunSealError::with_details(
+                    "BACKEND_CAPABILITY_MISSING",
+                    "PTY unavailable for this backend",
+                    json!({"missing_features":["pty"]}),
+                ))
+            }
+            #[cfg(windows)]
+            {
+                Ok(crate::backend::ExecutionIo::Pty { rows, cols })
+            }
+        }
+        _ => Err(RunSealError::new(
+            "INVALID_REQUEST",
+            "io.mode must be pipe or pty",
+        )),
+    }
+}
+fn terminal_dimension(io: &Map<String, Value>, field: &str) -> Result<u16, RunSealError> {
+    io.get(field)
+        .and_then(Value::as_u64)
+        .filter(|size| (1..=1000).contains(size))
+        .map(|size| size as u16)
+        .ok_or_else(|| {
+            RunSealError::new(
+                "INVALID_REQUEST",
+                format!("io.{field} must be an integer from 1 to 1000"),
+            )
+        })
 }
 
 fn validate_command(command: &[String]) -> Result<(), RunSealError> {
+    if command.iter().any(|argument| argument.contains('\0')) {
+        return Err(RunSealError::new(
+            "INVALID_REQUEST",
+            "command entries must not contain NUL",
+        ));
+    }
     let Some(program) = command.first().filter(|program| !program.is_empty()) else {
         return Err(RunSealError::new(
             "INVALID_REQUEST",
@@ -120,13 +225,134 @@ pub(crate) fn cancel_execution_id_from_params(params: &Value) -> Result<String, 
     let params = params_object(params, "cancelExecution")?;
     validate_param_keys(params, "cancelExecution", &["execution_id", "reason"])?;
     validate_optional_lookup_params(params)?;
+    if let Some(reason) = params.get("reason")
+        && !matches!(reason.as_str(), Some("user_requested" | "host_shutdown"))
+    {
+        return Err(RunSealError::new(
+            "INVALID_REQUEST",
+            "params.reason must be user_requested or host_shutdown",
+        ));
+    }
     required_prefixed_string_param(params, "execution_id", "exec_")
+}
+
+pub(crate) struct ExecutionInputRequest {
+    pub execution_id: String,
+    pub bytes: Option<Vec<u8>>,
+    pub control_stream: bool,
+}
+
+pub(crate) fn execution_input_from_params(
+    params: &Value,
+    write: bool,
+) -> Result<ExecutionInputRequest, RunSealError> {
+    let method = if write {
+        "writeExecutionInput"
+    } else {
+        "closeExecutionInput"
+    };
+    let params = params_object(params, method)?;
+    validate_param_keys(
+        params,
+        method,
+        if write {
+            &["execution_id", "stream", "encoding", "data"]
+        } else {
+            &["execution_id", "stream"]
+        },
+    )?;
+    let execution_id = required_prefixed_string_param(params, "execution_id", "exec_")?;
+    let control_stream = match params.get("stream").and_then(Value::as_str) {
+        Some("stdin") => false,
+        Some("control") => true,
+        _ => {
+            return Err(RunSealError::new(
+                "INVALID_REQUEST",
+                "params.stream must be stdin or control",
+            ));
+        }
+    };
+    let bytes = if write {
+        if params.get("encoding").and_then(Value::as_str) != Some("base64") {
+            return Err(RunSealError::new(
+                "INVALID_REQUEST",
+                "params.encoding must be base64",
+            ));
+        }
+        let data = params.get("data").and_then(Value::as_str).ok_or_else(|| {
+            RunSealError::new(
+                "INVALID_REQUEST",
+                "params.data must be base64-prefixed bytes",
+            )
+        })?;
+        if data.len() > 7 + 4 * crate::limits::deployment().stream_chunk_bytes.div_ceil(3) {
+            return Err(RunSealError::new(
+                "INVALID_REQUEST",
+                "input chunk exceeds the configured byte limit",
+            ));
+        }
+        let encoded = data.strip_prefix("base64:").ok_or_else(|| {
+            RunSealError::new("INVALID_REQUEST", "params.data must use base64: prefix")
+        })?;
+        let bytes = STANDARD.decode(encoded).map_err(|_| {
+            RunSealError::new("INVALID_REQUEST", "params.data must be valid base64")
+        })?;
+        if bytes.len() > crate::limits::deployment().stream_chunk_bytes {
+            return Err(RunSealError::new(
+                "INVALID_REQUEST",
+                "input chunk exceeds the configured byte limit",
+            ));
+        }
+        Some(bytes)
+    } else {
+        None
+    };
+    Ok(ExecutionInputRequest {
+        execution_id,
+        bytes,
+        control_stream,
+    })
+}
+
+pub(crate) struct EventSubscriptionRequest {
+    pub execution_id: String,
+    pub types: Vec<String>,
+    pub after_seq: Option<u64>,
 }
 
 pub(crate) fn subscribe_events_params(
     params: &Value,
-) -> Result<(String, Vec<String>), RunSealError> {
-    lookup_events_params(params, "subscribeEvents")
+) -> Result<EventSubscriptionRequest, RunSealError> {
+    let params = params_object(params, "subscribeEvents")?;
+    validate_param_keys(
+        params,
+        "subscribeEvents",
+        &["execution_id", "types", "after_seq"],
+    )?;
+    validate_optional_lookup_params(params)?;
+    let execution_id = required_prefixed_string_param(params, "execution_id", "exec_")?;
+    let after_seq = params
+        .get("after_seq")
+        .map(|value| {
+            value.as_u64().ok_or_else(|| {
+                RunSealError::new(
+                    "INVALID_REQUEST",
+                    "params.after_seq must be a nonnegative integer",
+                )
+            })
+        })
+        .transpose()?;
+    Ok(EventSubscriptionRequest {
+        execution_id,
+        types: types_from_params(params),
+        after_seq,
+    })
+}
+
+pub(crate) fn unsubscribe_execution_id_from_params(params: &Value) -> Result<String, RunSealError> {
+    let params = params_object(params, "unsubscribeEvents")?;
+    validate_param_keys(params, "unsubscribeEvents", &["execution_id"])?;
+    required_prefixed_string_param(params, "execution_id", "exec_")
 }
 
 pub(crate) fn audit_events_params(params: &Value) -> Result<(String, Vec<String>), RunSealError> {
@@ -402,6 +628,12 @@ pub(crate) fn env_from_params(
                 format!("params.env.{key} must be a string"),
             )
         })?;
+        if value.contains('\0') {
+            return Err(RunSealError::new(
+                "INVALID_REQUEST",
+                "environment values must not contain NUL",
+            ));
+        }
         if value.len() > MAX_ENV_VALUE_BYTES {
             return Err(RunSealError::new(
                 "INVALID_REQUEST",
@@ -424,10 +656,13 @@ pub(crate) fn env_from_params(
 }
 
 fn upsert_env_entry(entries: &mut Vec<(String, String)>, key: String, value: String) {
-    if let Some((_, existing_value)) = entries
-        .iter_mut()
-        .find(|(existing_key, _)| existing_key == &key)
-    {
+    if let Some((_, existing_value)) = entries.iter_mut().find(|(existing_key, _)| {
+        if cfg!(windows) {
+            existing_key.eq_ignore_ascii_case(&key)
+        } else {
+            existing_key == &key
+        }
+    }) {
         *existing_value = value;
     } else {
         entries.push((key, value));
@@ -459,4 +694,26 @@ fn validate_env_key(key: &str) -> Result<(), RunSealError> {
     }
 
     Ok(())
+}
+
+pub(crate) fn resize_from_params(params: &Value) -> Result<(String, u16, u16), RunSealError> {
+    let params = params_object(params, "resizeExecution")?;
+    validate_param_keys(params, "resizeExecution", &["execution_id", "rows", "cols"])?;
+    Ok((
+        required_prefixed_string_param(params, "execution_id", "exec_")?,
+        terminal_dimension(params, "rows")?,
+        terminal_dimension(params, "cols")?,
+    ))
+}
+
+pub(crate) fn signal_from_params(params: &Value) -> Result<String, RunSealError> {
+    let params = params_object(params, "signalExecution")?;
+    validate_param_keys(params, "signalExecution", &["execution_id", "signal"])?;
+    if params.get("signal").and_then(Value::as_str) != Some("interrupt") {
+        return Err(RunSealError::new(
+            "INVALID_REQUEST",
+            "signal must be interrupt",
+        ));
+    }
+    required_prefixed_string_param(params, "execution_id", "exec_")
 }

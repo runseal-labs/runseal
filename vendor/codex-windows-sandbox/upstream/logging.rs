@@ -3,11 +3,9 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use codex_utils_string::take_bytes_at_char_boundary;
 use tracing_appender::rolling::RollingFileAppender;
 use tracing_appender::rolling::Rotation;
 
-const LOG_COMMAND_PREVIEW_LIMIT: usize = 200;
 pub const LOG_FILE_PREFIX: &str = "sandbox";
 pub const LOG_FILE_SUFFIX: &str = "log";
 pub const MAX_LOG_FILES: usize = 90;
@@ -20,15 +18,6 @@ fn exe_label() -> &'static str {
             .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
             .unwrap_or_else(|| "proc".to_string())
     })
-}
-
-fn preview(command: &[String]) -> String {
-    let joined = command.join(" ");
-    if joined.len() <= LOG_COMMAND_PREVIEW_LIMIT {
-        joined
-    } else {
-        take_bytes_at_char_boundary(&joined, LOG_COMMAND_PREVIEW_LIMIT).to_string()
-    }
 }
 
 pub fn log_file_path_for_utc_date(base_dir: &Path, date: chrono::NaiveDate) -> PathBuf {
@@ -69,19 +58,16 @@ fn append_line(line: &str, base_dir: Option<&Path>) {
     }
 }
 
-pub fn log_start(command: &[String], base_dir: Option<&Path>) {
-    let p = preview(command);
-    log_note(&format!("START: {p}"), base_dir);
+pub fn log_start(_command: &[String], base_dir: Option<&Path>) {
+    log_note("START", base_dir);
 }
 
-pub fn log_success(command: &[String], base_dir: Option<&Path>) {
-    let p = preview(command);
-    log_note(&format!("SUCCESS: {p}"), base_dir);
+pub fn log_success(_command: &[String], base_dir: Option<&Path>) {
+    log_note("SUCCESS", base_dir);
 }
 
-pub fn log_failure(command: &[String], detail: &str, base_dir: Option<&Path>) {
-    let p = preview(command);
-    log_note(&format!("FAILURE: {p} ({detail})"), base_dir);
+pub fn log_failure(_command: &[String], _detail: &str, base_dir: Option<&Path>) {
+    log_note("FAILURE", base_dir);
 }
 
 // Debug logging helper. Emits only when SBX_DEBUG=1 to avoid noisy logs.
@@ -103,14 +89,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn preview_does_not_panic_on_utf8_boundary() {
-        // Place a 4-byte emoji such that naive (byte-based) truncation would split it.
-        let prefix = "x".repeat(LOG_COMMAND_PREVIEW_LIMIT - 1);
-        let command = vec![format!("{prefix}😀")];
-        let result = std::panic::catch_unwind(|| preview(&command));
-        assert!(result.is_ok());
-        let previewed = result.unwrap();
-        assert!(previewed.len() <= LOG_COMMAND_PREVIEW_LIMIT);
+    fn execution_notes_do_not_retain_argv_or_raw_error_bodies() {
+        let temp = tempfile::tempdir().unwrap();
+        let command = vec![
+            "program-secret-canary".to_string(),
+            "argument-secret-canary".to_string(),
+        ];
+        log_start(&command, Some(temp.path()));
+        log_success(&command, Some(temp.path()));
+        log_failure(&command, "diagnostic-secret-canary", Some(temp.path()));
+        let contents = std::fs::read_to_string(current_log_file_path(temp.path())).unwrap();
+        for secret in [
+            "program-secret-canary",
+            "argument-secret-canary",
+            "diagnostic-secret-canary",
+        ] {
+            assert!(!contents.contains(secret));
+        }
+        for phase in ["START", "SUCCESS", "FAILURE"] {
+            assert!(contents.contains(phase));
+        }
     }
 
     #[test]

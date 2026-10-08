@@ -9,7 +9,7 @@ It demonstrates:
 - calling getVersion/getCapabilities/getServiceStatus/getSetupStatus
 - failing closed when the requested sandbox capability or setup is unavailable
 - executing a path-qualified command
-- handling interleaved JSON-RPC event notifications before the final response
+- receiving an admission receipt, then waiting for a terminal event
 - replaying execution events with subscribeEvents
 - retrieving audit events with getAuditEvents
 - releasing service session state with disposeSession
@@ -122,12 +122,43 @@ class RunSealClient:
             return notifications, result
 
     def _read_stderr(self) -> str:
-        if self._proc.stderr is None:
+        if self._proc.stderr is None or self._proc.poll() is None:
             return ""
         try:
             return self._proc.stderr.read().strip()
         except OSError:
             return ""
+
+    def wait_execution(self, execution_id: str) -> tuple[list[JsonObject], JsonObject]:
+        assert self._proc.stdout is not None
+        events: list[JsonObject] = []
+        while True:
+            line = self._proc.stdout.readline()
+            if not line:
+                raise RunSealError("RunSeal closed stdout before execution termination")
+            message = json.loads(line)
+            event = message.get("params", {})
+            if message.get("method") != "event" or event.get("execution_id") != execution_id:
+                raise RunSealError("Unexpected message while waiting for execution")
+            events.append(event)
+            if event.get("type") in {"execution.finished", "execution.failed"}:
+                result = event.get("result")
+                if not isinstance(result, dict):
+                    raise RunSealError("Terminal event must carry an ExecutionResult")
+                return events, result
+
+    def read_events(self, count: int) -> list[JsonObject]:
+        assert self._proc.stdout is not None
+        events: list[JsonObject] = []
+        for _ in range(count):
+            line = self._proc.stdout.readline()
+            if not line:
+                raise RunSealError("RunSeal closed stdout during replay")
+            message = json.loads(line)
+            if message.get("method") != "event" or not isinstance(message.get("params"), dict):
+                raise RunSealError("Expected replay event notification")
+            events.append(message["params"])
+        return events
 
 
 def require_status(
@@ -278,6 +309,9 @@ def main() -> int:
             },
         )
 
+        print_json("execute_receipt", execution)
+        terminal_events, execution = client.wait_execution(execution["execution_id"])
+        execute_events.extend(terminal_events)
         print_json("execute_result", execution)
         print_json(
             "execute_event_types",
@@ -297,9 +331,11 @@ def main() -> int:
             {
                 "execution_id": execution_id,
                 "types": ["execution.*"],
+                "after_seq": 0,
             },
         )
 
+        replay_events.extend(client.read_events(replay["event_count"]))
         print_json("subscribe_events_result", replay)
         print_json(
             "replayed_event_types",

@@ -1,3 +1,6 @@
+#[path = "support/realtime_rpc.rs"]
+mod realtime_rpc;
+
 use anyhow::{Context, Result, bail};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
@@ -50,7 +53,7 @@ fn rpc_request(method: &str, params: Value) -> String {
 
 fn run_rpc(message: &str) -> Result<Output> {
     let bin = require_runseal_bin()?;
-    let mut child = Command::new(bin)
+    let child = Command::new(bin)
         .args(["rpc", "--stdio"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -58,15 +61,7 @@ fn run_rpc(message: &str) -> Result<Output> {
         .spawn()
         .context("failed to spawn runseal rpc")?;
 
-    child
-        .stdin
-        .as_mut()
-        .context("stdin unavailable")?
-        .write_all(message.as_bytes())?;
-
-    child
-        .wait_with_output()
-        .context("failed to wait for runseal rpc")
+    realtime_rpc::collect_rpc(child, message)
 }
 
 #[cfg(not(windows))]
@@ -159,7 +154,7 @@ fn execute_platform_script(
     network: Option<&str>,
     python_code: String,
     powershell_script: String,
-) -> Result<Value> {
+) -> Result<ExecutionObservation> {
     execute_params(platform_script_params(
         policy,
         cwd,
@@ -216,18 +211,40 @@ fn stdout_json_lines(output: &Output) -> Result<Vec<Value>> {
         .collect()
 }
 
-fn execute_params(params: Value) -> Result<Value> {
+fn execute_params(params: Value) -> Result<ExecutionObservation> {
     #[cfg(windows)]
     let _guard = windows_conformance_lock()?;
 
     execute_params_unlocked(params)
 }
 
-fn execute_params_unlocked(params: Value) -> Result<Value> {
-    execute_messages_unlocked(params)?
-        .into_iter()
-        .find(|message| message.get("id") == Some(&json!(1)))
-        .context("execute response with id 1 must exist")
+struct ExecutionObservation {
+    event: Value,
+    stdout: String,
+    stderr: String,
+}
+impl std::ops::Deref for ExecutionObservation {
+    type Target = Value;
+    fn deref(&self) -> &Value {
+        &self.event
+    }
+}
+impl std::fmt::Display for ExecutionObservation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.event.fmt(f)
+    }
+}
+fn observation(messages: &[Value]) -> Result<ExecutionObservation> {
+    Ok(ExecutionObservation {
+        event: realtime_rpc::terminal_or_response(messages)?.clone(),
+        stdout: String::from_utf8(realtime_rpc::stream_bytes(messages, "execution.stdout")?)
+            .context("fixture stdout must be UTF-8")?,
+        stderr: String::from_utf8_lossy(&realtime_rpc::stream_bytes(messages, "execution.stderr")?)
+            .into_owned(),
+    })
+}
+fn execute_params_unlocked(params: Value) -> Result<ExecutionObservation> {
+    observation(&execute_messages_unlocked(params)?)
 }
 
 fn execute_messages_unlocked(params: Value) -> Result<Vec<Value>> {
@@ -246,8 +263,9 @@ fn execute_messages_unlocked(params: Value) -> Result<Vec<Value>> {
 fn windows_conformance_lock() -> Result<MutexGuard<'static, ()>> {
     static LOCK: Mutex<()> = Mutex::new(());
     // RunSeal MVP: global Windows sandbox state; use narrower locks if test throughput matters.
-    LOCK.lock()
-        .map_err(|_| anyhow::anyhow!("windows conformance lock poisoned"))
+    Ok(LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner))
 }
 
 fn assert_backend_missing(response: &Value, root: &Path) -> Result<()> {
@@ -641,7 +659,11 @@ fn workspace_write_allows_workspace_write_when_supported_or_fails_closed() -> Re
         return Ok(());
     }
 
-    assert_eq!(response["result"]["status"], "finished");
+    assert_eq!(
+        response["result"]["status"], "finished",
+        "{response}\nstderr: {}",
+        response.stderr
+    );
     assert_eq!(response["result"]["exit_code"], 0);
     assert_eq!(fs::read_to_string(target)?, "inside");
     Ok(())
@@ -678,7 +700,11 @@ fn workspace_write_denies_external_write_when_supported_or_fails_closed() -> Res
         return Ok(());
     }
 
-    assert_eq!(response["result"]["status"], "finished");
+    assert_eq!(
+        response["result"]["status"], "finished",
+        "{response}\nstderr: {}",
+        response.stderr
+    );
     assert_ne!(response["result"]["exit_code"], 0);
     assert!(!outside.exists());
     Ok(())
@@ -710,7 +736,11 @@ fn workspace_write_denies_relative_cwd_write_escape_when_supported_or_fails_clos
         return Ok(());
     }
 
-    assert_eq!(response["result"]["status"], "finished");
+    assert_eq!(
+        response["result"]["status"], "finished",
+        "{response}\nstderr: {}",
+        response.stderr
+    );
     assert_ne!(response["result"]["exit_code"], 0);
     assert!(!outside.exists());
     Ok(())
@@ -746,7 +776,11 @@ fn workspace_write_denies_symlink_write_escape_when_supported_or_fails_closed() 
         return Ok(());
     }
 
-    assert_eq!(response["result"]["status"], "finished");
+    assert_eq!(
+        response["result"]["status"], "finished",
+        "{response}\nstderr: {}",
+        response.stderr
+    );
     assert_ne!(response["result"]["exit_code"], 0);
     assert_eq!(fs::read_to_string(outside)?, "outside-original");
     Ok(())
@@ -783,7 +817,11 @@ fn read_only_denies_workspace_write_when_supported_or_fails_closed() -> Result<(
         return Ok(());
     }
 
-    assert_eq!(response["result"]["status"], "finished");
+    assert_eq!(
+        response["result"]["status"], "finished",
+        "{response}\nstderr: {}",
+        response.stderr
+    );
     assert_ne!(response["result"]["exit_code"], 0);
     assert!(!target.exists());
     Ok(())
@@ -818,14 +856,13 @@ fn workspace_contained_denies_external_read_when_supported_or_fails_closed() -> 
         return Ok(());
     }
 
-    assert_eq!(response["result"]["status"], "finished");
-    assert_ne!(response["result"]["exit_code"], 0);
-    assert!(
-        !response["result"]["stdout"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("outside-secret")
+    assert_eq!(
+        response["result"]["status"], "finished",
+        "{response}\nstderr: {}",
+        response.stderr
     );
+    assert_ne!(response["result"]["exit_code"], 0);
+    assert!(!response.stdout.as_str().contains("outside-secret"));
     Ok(())
 }
 
@@ -879,7 +916,7 @@ fn portable_workspace_contained_enforces_host_read_boundary() -> Result<()> {
     assert_eq!(fs::read_to_string(&inside)?, "inside");
     assert!(!protected_target.exists());
     assert!(!outside_write.exists());
-    let stdout = response["result"]["stdout"].as_str().unwrap_or_default();
+    let stdout = response.stdout.as_str();
     assert!(stdout.contains("contained"), "{response}");
     assert!(!stdout.contains("outside-secret"), "{response}");
     Ok(())
@@ -918,7 +955,11 @@ fn workspace_write_protects_workspace_metadata_when_supported_or_fails_closed() 
             continue;
         }
 
-        assert_eq!(response["result"]["status"], "finished");
+        assert_eq!(
+            response["result"]["status"], "finished",
+            "{response}\nstderr: {}",
+            response.stderr
+        );
         assert_ne!(response["result"]["exit_code"], 0);
         assert!(!target.exists());
     }
@@ -938,7 +979,7 @@ fn read_only_reads_workspace_and_writes_runtime_roots_when_supported_or_fails_cl
          [(pathlib.Path(os.environ[key]) / 'read-only-runtime-write.txt').write_text(key, encoding='utf-8') for key in ['HOME', 'TMPDIR', 'RUNSEAL_HOME', 'RUNSEAL_TMP']]"
         .to_string();
     let ps_script = format!(
-        "Write-Output -NoNewline (Get-Content -Raw -LiteralPath {}); \
+        "$ErrorActionPreference = 'Stop'; Get-Content -Raw -LiteralPath {}; \
          foreach ($root in @($env:USERPROFILE, $env:TEMP, $env:RUNSEAL_HOME, $env:RUNSEAL_TMP)) {{ \
              Set-Content -LiteralPath (Join-Path $root 'read-only-runtime-write.txt') -Value $root -NoNewline \
          }}",
@@ -959,17 +1000,18 @@ fn read_only_reads_workspace_and_writes_runtime_roots_when_supported_or_fails_cl
         return Ok(());
     }
 
-    assert_eq!(response["result"]["status"], "finished");
+    assert_eq!(
+        response["result"]["status"], "finished",
+        "{response}\nstderr: {}",
+        response.stderr
+    );
     assert_eq!(
         response["result"]["exit_code"],
         0,
         "{}",
-        response["result"]["stderr"].as_str().unwrap_or_default()
+        response.stderr.as_str()
     );
-    assert_eq!(
-        response["result"]["stdout"].as_str().unwrap_or_default(),
-        "workspace-read-ok"
-    );
+    assert_eq!(response.stdout.trim(), "workspace-read-ok");
     Ok(())
 }
 
@@ -1073,12 +1115,7 @@ fn runtime_environment_roots_are_per_execution_when_supported_or_fails_closed() 
 
     assert_eq!(second["result"]["status"], "finished");
     assert_eq!(second["result"]["exit_code"], 0);
-    let leaked = serde_json::from_str::<Value>(
-        second["result"]["stdout"]
-            .as_str()
-            .context("second execution must return stdout")?
-            .trim(),
-    )?;
+    let leaked = serde_json::from_str::<Value>(second.stdout.as_str().trim())?;
     assert_eq!(leaked, json!([]));
     Ok(())
 }
@@ -1113,7 +1150,11 @@ fn runtime_roots_are_cleaned_after_execution_when_supported_or_fails_closed() ->
         return Ok(());
     }
 
-    assert_eq!(response["result"]["status"], "finished");
+    assert_eq!(
+        response["result"]["status"], "finished",
+        "{response}\nstderr: {}",
+        response.stderr
+    );
     assert_eq!(response["result"]["exit_code"], 0);
     let runtime_root = response["result"]["platform_plan"]["runtime_root"]
         .as_str()
@@ -1158,12 +1199,13 @@ fn workspace_write_accepts_bytes_stdin_when_supported_or_fails_closed() -> Resul
         return Ok(());
     }
 
-    assert_eq!(response["result"]["status"], "finished");
-    assert_eq!(response["result"]["exit_code"], 0);
     assert_eq!(
-        response["result"]["stdout"].as_str().unwrap_or_default(),
-        stdin_text
+        response["result"]["status"], "finished",
+        "{response}\nstderr: {}",
+        response.stderr
     );
+    assert_eq!(response["result"]["exit_code"], 0);
+    assert_eq!(response.stdout.as_str(), stdin_text);
     Ok(())
 }
 
@@ -1200,12 +1242,13 @@ fn workspace_write_accepts_file_stdin_when_supported_or_fails_closed() -> Result
         return Ok(());
     }
 
-    assert_eq!(response["result"]["status"], "finished");
-    assert_eq!(response["result"]["exit_code"], 0);
     assert_eq!(
-        response["result"]["stdout"].as_str().unwrap_or_default(),
-        stdin_text
+        response["result"]["status"], "finished",
+        "{response}\nstderr: {}",
+        response.stderr
     );
+    assert_eq!(response["result"]["exit_code"], 0);
+    assert_eq!(response.stdout.as_str(), stdin_text);
     Ok(())
 }
 
@@ -1245,14 +1288,13 @@ fn network_disabled_blocks_direct_egress_when_supported_or_fails_closed() -> Res
         return Ok(());
     }
 
-    assert_eq!(response["result"]["status"], "finished");
-    assert_ne!(response["result"]["exit_code"], 0);
-    assert!(
-        !response["result"]["stdout"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("direct-network-ok")
+    assert_eq!(
+        response["result"]["status"], "finished",
+        "{response}\nstderr: {}",
+        response.stderr
     );
+    assert_ne!(response["result"]["exit_code"], 0);
+    assert!(!response.stdout.as_str().contains("direct-network-ok"));
     Ok(())
 }
 
@@ -1283,14 +1325,13 @@ fn network_proxy_blocks_direct_egress_when_supported_or_fails_closed() -> Result
         return Ok(());
     }
 
-    assert_eq!(response["result"]["status"], "finished");
-    assert_ne!(response["result"]["exit_code"], 0);
-    assert!(
-        !response["result"]["stdout"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("direct-network-ok")
+    assert_eq!(
+        response["result"]["status"], "finished",
+        "{response}\nstderr: {}",
+        response.stderr
     );
+    assert_ne!(response["result"]["exit_code"], 0);
+    assert!(!response.stdout.as_str().contains("direct-network-ok"));
     Ok(())
 }
 
@@ -1314,14 +1355,13 @@ fn portable_network_proxy_blocks_other_loopback_ports() -> Result<()> {
 
     let accepted = accept_probe.join().expect("loopback accept probe")?;
     assert!(!accepted, "{response:#}");
-    assert_eq!(response["result"]["status"], "finished");
-    assert_ne!(response["result"]["exit_code"], 0);
-    assert!(
-        !response["result"]["stdout"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("loopback-bypass-ok")
+    assert_eq!(
+        response["result"]["status"], "finished",
+        "{response}\nstderr: {}",
+        response.stderr
     );
+    assert_ne!(response["result"]["exit_code"], 0);
+    assert!(!response.stdout.as_str().contains("loopback-bypass-ok"));
     Ok(())
 }
 
@@ -1339,14 +1379,13 @@ fn portable_network_proxy_blocks_direct_udp_egress() -> Result<()> {
         String::new(),
     )?;
 
-    assert_eq!(response["result"]["status"], "finished");
-    assert_ne!(response["result"]["exit_code"], 0);
-    assert!(
-        !response["result"]["stdout"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("direct-udp-ok")
+    assert_eq!(
+        response["result"]["status"], "finished",
+        "{response}\nstderr: {}",
+        response.stderr
     );
+    assert_ne!(response["result"]["exit_code"], 0);
+    assert!(!response.stdout.as_str().contains("direct-udp-ok"));
     Ok(())
 }
 
@@ -1372,14 +1411,13 @@ fn linux_network_proxy_hides_unapproved_host_unix_sockets() -> Result<()> {
 
     let accepted = accept_probe.join().expect("Unix socket accept probe")?;
     assert!(!accepted, "{response:#}");
-    assert_eq!(response["result"]["status"], "finished");
-    assert_ne!(response["result"]["exit_code"], 0);
-    assert!(
-        !response["result"]["stdout"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("host-unix-socket-ok")
+    assert_eq!(
+        response["result"]["status"], "finished",
+        "{response}\nstderr: {}",
+        response.stderr
     );
+    assert_ne!(response["result"]["exit_code"], 0);
+    assert!(!response.stdout.as_str().contains("host-unix-socket-ok"));
     Ok(())
 }
 
@@ -1401,7 +1439,7 @@ fn linux_network_proxy_drops_preopened_network_sockets() -> Result<()> {
     let tmp = TempDir::new()?;
     let workspace = tmp.path().join("workspace");
     fs::create_dir_all(&workspace)?;
-    let mut child = Command::new(require_runseal_bin()?)
+    let child = Command::new(require_runseal_bin()?)
         .args(["rpc", "--stdio"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -1422,13 +1460,8 @@ fn linux_network_proxy_drops_preopened_network_sockets() -> Result<()> {
             "env": {"RUNSEAL_TEST_SOCKET_FD": inherited_fd.to_string()}
         }),
     );
-    child
-        .stdin
-        .take()
-        .context("RunSeal stdin")?
-        .write_all(request.as_bytes())?;
     drop(inherited);
-    let output = child.wait_with_output()?;
+    let output = realtime_rpc::collect_rpc(child, &request)?;
     assert!(output.status.success(), "{output:?}");
 
     let mut observed = [0_u8; 4];
@@ -1451,18 +1484,9 @@ fn linux_network_proxy_drops_preopened_network_sockets() -> Result<()> {
         &observed[..observed_count]
     );
 
-    let response = String::from_utf8(output.stdout)?
-        .lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .find(|message| message["id"] == 1)
-        .context("execute response")?;
+    let response = observation(&stdout_json_lines(&output)?)?;
     assert_ne!(response["result"]["exit_code"], 0, "{response:#}");
-    assert!(
-        !response["result"]["stdout"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("preopened-socket-ok")
-    );
+    assert!(!response.stdout.as_str().contains("preopened-socket-ok"));
     Ok(())
 }
 
@@ -1532,14 +1556,13 @@ exit $exitCode
         return Ok(());
     }
 
-    assert_eq!(response["result"]["status"], "finished");
-    assert_ne!(response["result"]["exit_code"], 0);
-    assert!(
-        !response["result"]["stdout"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("child-direct-network-ok")
+    assert_eq!(
+        response["result"]["status"], "finished",
+        "{response}\nstderr: {}",
+        response.stderr
     );
+    assert_ne!(response["result"]["exit_code"], 0);
+    assert!(!response.stdout.as_str().contains("child-direct-network-ok"));
     Ok(())
 }
 
@@ -1655,35 +1678,31 @@ $successText
         code,
         ps_code,
     ))?;
-    let response = messages
-        .iter()
-        .find(|message| message.get("id") == Some(&json!(1)))
-        .context("execute response with id 1 must exist")?;
+    let response = observation(&messages)?;
 
-    if is_backend_missing(response) {
+    if is_backend_missing(&response) {
         let upstream_hit = upstream.join().expect("upstream server thread")?;
         assert!(!upstream_hit);
         let expected_features = expected_missing_features(&["network_proxy", "managed_proxy"]);
-        assert_backend_missing_features(response, &workspace, &expected_features)?;
+        assert_backend_missing_features(&response, &workspace, &expected_features)?;
         return Ok(());
     }
-    if is_backend_unavailable(response) {
+    if is_backend_unavailable(&response) {
         let upstream_hit = upstream.join().expect("upstream server thread")?;
         assert!(!upstream_hit);
-        assert_backend_unavailable(response, &workspace)?;
+        assert_backend_unavailable(&response, &workspace)?;
         return Ok(());
     }
 
     let upstream_hit = upstream.join().expect("upstream server thread")?;
-    assert!(upstream_hit, "{response:#}");
-    assert_eq!(response["result"]["status"], "finished");
-    assert_eq!(response["result"]["exit_code"], 0);
-    assert!(
-        response["result"]["stdout"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("proxy-ok")
+    assert!(upstream_hit, "{response:#}\nstderr: {}", response.stderr);
+    assert_eq!(
+        response["result"]["status"], "finished",
+        "{response}\nstderr: {}",
+        response.stderr
     );
+    assert_eq!(response["result"]["exit_code"], 0);
+    assert!(response.stdout.as_str().contains("proxy-ok"));
     let audit_path = response["result"]["audit_path"]
         .as_str()
         .context("successful response must include audit_path")?;
@@ -1758,15 +1777,14 @@ fn portable_network_proxy_tunnels_connect_bytes() -> Result<()> {
         "{upstream_hit:?}\n{audit_jsonl}\n{response:#}"
     );
     let upstream_hit = upstream_hit?;
-    assert!(upstream_hit, "{response:#}");
-    assert_eq!(response["result"]["status"], "finished");
-    assert_eq!(response["result"]["exit_code"], 0);
-    assert!(
-        response["result"]["stdout"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("connect-tunnel-ok")
+    assert!(upstream_hit, "{response:#}\nstderr: {}", response.stderr);
+    assert_eq!(
+        response["result"]["status"], "finished",
+        "{response}\nstderr: {}",
+        response.stderr
     );
+    assert_eq!(response["result"]["exit_code"], 0);
+    assert!(response.stdout.as_str().contains("connect-tunnel-ok"));
     Ok(())
 }
 
@@ -1827,7 +1845,7 @@ fn network_proxy_overrides_client_proxy_environment_when_supported_or_fails_clos
     let ps_code = r#"
 $ErrorActionPreference = 'Stop'
 if ($env:HTTP_PROXY.Contains('attacker.invalid')) { throw 'managed proxy did not override HTTP_PROXY' }
-if ($env:NO_PROXY -ne '') { throw 'managed proxy did not clear NO_PROXY' }
+if (-not [String]::IsNullOrEmpty($env:NO_PROXY)) { throw 'managed proxy did not clear NO_PROXY' }
 if (-not $env:RUNSEAL_NETWORK_PROXY_AUTHORIZATION.StartsWith('Basic ')) { throw 'managed proxy did not inject authorization' }
 $proxy = [Uri]$env:HTTP_PROXY
 $request = __REQUEST__
@@ -1879,15 +1897,14 @@ try {
 
     let upstream_hit = upstream.join().expect("upstream server thread")?;
 
-    assert!(upstream_hit, "{response:#}");
-    assert_eq!(response["result"]["status"], "finished");
-    assert_eq!(response["result"]["exit_code"], 0);
-    assert!(
-        response["result"]["stdout"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("proxy-ok")
+    assert!(upstream_hit, "{response:#}\nstderr: {}", response.stderr);
+    assert_eq!(
+        response["result"]["status"], "finished",
+        "{response}\nstderr: {}",
+        response.stderr
     );
+    assert_eq!(response["result"]["exit_code"], 0);
+    assert!(response.stdout.as_str().contains("proxy-ok"));
     assert_no_proxy_credential_terms(&response);
     assert!(!response.to_string().contains("attacker.invalid"));
     let audit_path = response["result"]["audit_path"]
@@ -1922,14 +1939,13 @@ fn network_proxy_credentials_are_redacted_when_supported_or_fails_closed() -> Re
         return Ok(());
     }
 
-    assert_eq!(response["result"]["status"], "finished");
-    assert_eq!(response["result"]["exit_code"], 0);
-    assert!(
-        response["result"]["stdout"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("proxy-redaction-ok")
+    assert_eq!(
+        response["result"]["status"], "finished",
+        "{response}\nstderr: {}",
+        response.stderr
     );
+    assert_eq!(response["result"]["exit_code"], 0);
+    assert!(response.stdout.as_str().contains("proxy-redaction-ok"));
     assert_no_proxy_credential_terms(&response);
 
     let audit_path = response["result"]["audit_path"]

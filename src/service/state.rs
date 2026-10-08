@@ -1,4 +1,3 @@
-use crate::error::RunSealError;
 use serde_json::Value;
 
 use super::executions::ExecutionStore;
@@ -11,14 +10,11 @@ pub(super) struct ServiceState {
 }
 
 impl ServiceState {
-    pub(super) fn record_finished_execution(&mut self, result: &Value, events: &[Value]) {
-        if let Some(session_id) = self.executions.record_finished(result, events) {
-            self.sessions.record(session_id);
-        }
+    pub(super) fn truncated(&self) -> bool {
+        self.executions.truncated()
     }
-
-    pub(super) fn record_failed_execution(&mut self, err: &RunSealError) {
-        if let Some(session_id) = self.executions.record_failed(err) {
+    pub(super) fn record_finished_execution(&mut self, result: &Value) {
+        if let Some(session_id) = self.executions.record_finished(result) {
             self.sessions.record(session_id);
         }
     }
@@ -35,24 +31,11 @@ impl ServiceState {
         self.executions.summaries()
     }
 
-    pub(super) fn execution_events(
-        &self,
-        execution_id: &str,
-        types: &[String],
-    ) -> Option<Vec<Value>> {
-        self.executions.events(execution_id, types)
+    pub(super) fn execution_ids_for_session(&self, session_id: &str) -> Vec<String> {
+        self.executions.ids_for_session(session_id)
     }
 
-    pub(super) fn audit_events(&self, execution_id: &str, types: &[String]) -> Option<Vec<Value>> {
-        self.executions.audit_events(execution_id, types)
-    }
-
-    pub(super) fn audit_tail(&self, types: &[String]) -> Vec<Value> {
-        self.executions.all_events(types)
-    }
-
-    pub(super) fn dispose_session(&mut self, session_id: &str) -> usize {
+    pub(super) fn dispose_session(&mut self, session_id: &str) {
         self.sessions.dispose(session_id);
-        0
     }
 }

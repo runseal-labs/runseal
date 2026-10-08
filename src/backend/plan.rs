@@ -83,7 +83,11 @@ impl PlatformSandboxPlan {
             private_portable_deny_roots: Vec::new(),
             process_boundary: "local-process",
             process_identity: "current-user",
-            process_cleanup: "direct-child",
+            process_cleanup: if cfg!(windows) {
+                "process-tree"
+            } else {
+                "direct-child"
+            },
             private_process_sandbox_user_model: "current-user",
             private_process_token: "none",
             private_process_job: "none",
@@ -364,10 +368,12 @@ impl PlatformSandboxPlan {
         })
     }
 
+    #[cfg(test)]
     pub fn prepare_sandbox_setup(&self) -> io::Result<PreparedSandboxSetup> {
         self.prepare_sandbox_setup_with_driver(new_windows_filesystem_acl_driver())
     }
 
+    #[cfg(test)]
     pub(super) fn prepare_sandbox_setup_with_driver(
         &self,
         mut filesystem_driver: Box<dyn WindowsFilesystemAclDriver>,
@@ -388,6 +394,7 @@ impl PlatformSandboxPlan {
         })
     }
 
+    #[cfg(test)]
     fn validate_private_process_setup(&self) -> io::Result<()> {
         if !self.is_sandbox_enforced() {
             return Ok(());
@@ -412,6 +419,7 @@ impl PlatformSandboxPlan {
         ))
     }
 
+    #[cfg(test)]
     fn validate_private_network_setup(&self) -> io::Result<()> {
         if !self.is_sandbox_enforced() {
             return Ok(());
@@ -492,6 +500,7 @@ impl PlatformSandboxPlan {
         self.prepare_filesystem_rules_with_driver(driver.as_mut())
     }
 
+    #[cfg(test)]
     pub(super) fn prepare_filesystem_rules_with_driver(
         &self,
         driver: &mut dyn WindowsFilesystemAclDriver,
@@ -506,6 +515,7 @@ impl PlatformSandboxPlan {
         Ok(transaction.rollback_roots().to_vec())
     }
 
+    #[cfg(test)]
     fn private_filesystem_acl_subject(
         &self,
         transaction: &WindowsFilesystemAclTransactionPlan,
@@ -521,6 +531,7 @@ impl PlatformSandboxPlan {
         .map(Some)
     }
 
+    #[cfg(test)]
     pub(super) fn cleanup_sandbox_setup_with_driver(
         &self,
         driver: &mut dyn WindowsFilesystemAclDriver,
@@ -530,6 +541,7 @@ impl PlatformSandboxPlan {
         Ok(cleaned)
     }
 
+    #[cfg(test)]
     fn cleanup_filesystem_rules_with_driver(
         &self,
         driver: &mut dyn WindowsFilesystemAclDriver,
@@ -729,11 +741,13 @@ impl PlatformSandboxPlan {
     }
 }
 
+#[cfg(test)]
 pub struct PreparedSandboxSetup {
     prepared_roots: Vec<String>,
     filesystem_driver: Box<dyn WindowsFilesystemAclDriver>,
 }
 
+#[cfg(test)]
 impl PreparedSandboxSetup {
     pub fn prepared_roots(&self) -> &[String] {
         &self.prepared_roots
@@ -744,6 +758,7 @@ impl PreparedSandboxSetup {
     }
 }
 
+#[cfg(test)]
 fn extend_unique(target: &mut Vec<String>, source: Vec<String>) {
     for item in source {
         if !target.iter().any(|existing| existing == &item) {
