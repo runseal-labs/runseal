@@ -99,6 +99,12 @@ fn runner_launch_cwd<'a>(runner_exe: &'a Path, fallback_cwd: &'a Path) -> &'a Pa
         .unwrap_or(fallback_cwd)
 }
 
+fn report_runner_test_diagnostic(stage: &str) {
+    if std::env::var_os("RUNSEAL_WINDOWS_TEST_DIAGNOSTICS").is_some() {
+        eprintln!("runseal-test-diagnostic: runner={stage}");
+    }
+}
+
 pub(crate) struct RunnerTransport {
     pipe_write: File,
     pipe_read: File,
@@ -502,6 +508,18 @@ fn finish_runner_startup(
         }
         Err(error) => {
             let stopped = owner.stop(budget.cleanup_deadline()).is_ok();
+            if error
+                .downcast_ref::<crate::SandboxCaptureCleanupError>()
+                .is_some()
+            {
+                report_runner_test_diagnostic("capture_cleanup_error");
+            } else if error.downcast_ref::<crate::SandboxSpawnFailed>().is_some() {
+                report_runner_test_diagnostic("spawn_failed");
+            } else if stopped && !spawn_request_sent {
+                report_runner_test_diagnostic("stopped_before_spawn");
+            } else {
+                report_runner_test_diagnostic("stop_unverified");
+            }
             // Runner exit alone does not verify descendants or shared resources.
             if error
                 .downcast_ref::<crate::SandboxCaptureCleanupError>()
@@ -622,7 +640,8 @@ pub(crate) fn spawn_runner_transport(
             return Err(std::io::Error::from_raw_os_error(error as i32).into());
         }
         Ok(pi)
-    })?;
+    })
+    .inspect_err(|_| report_runner_test_diagnostic("logon_launch_failed"))?;
     let (owner, runner_thread, expected_runner_pid) = runner.into_parts()?;
     let runner_process = owner
         .process
@@ -630,6 +649,7 @@ pub(crate) fn spawn_runner_transport(
         .ok_or_else(|| anyhow::anyhow!(crate::SandboxCleanupError))?
         .as_raw_handle() as HANDLE;
     let spawn_request_sent = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut startup_stage = "resume_runner";
     let startup = (|| -> Result<RunnerTransport> {
         resume_runner_after_security_check(
             runner_process,
@@ -637,8 +657,11 @@ pub(crate) fn spawn_runner_transport(
             &mut budget,
             |process, thread| unsafe { restrict_runner_object_access(process, thread) },
         )?;
+        startup_stage = "connect_input_pipe";
         connect_pipe_with_budget(&pipe_write, expected_runner_pid, &mut budget)?;
+        startup_stage = "connect_output_pipe";
         connect_pipe_with_budget(&pipe_read, expected_runner_pid, &mut budget)?;
+        startup_stage = "send_spawn_request";
         let pipe_write = send_spawn_request(
             pipe_write,
             spawn_request,
@@ -649,9 +672,13 @@ pub(crate) fn spawn_runner_transport(
             pipe_write,
             pipe_read,
         };
+        startup_stage = "read_spawn_ready";
         transport.read_spawn_ready(&mut budget)?;
         Ok(transport)
     })();
+    if startup.is_err() {
+        report_runner_test_diagnostic(&format!("startup_{startup_stage}"));
+    }
     drop(runner_thread);
     finish_runner_startup(
         owner,
