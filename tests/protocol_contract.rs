@@ -3690,6 +3690,7 @@ fn policy_denial_uses_stable_error_code() -> Result<()> {
         .unwrap();
     assert_eq!(response["error"]["data"]["code"], "POLICY_DENIED");
     assert!(response["error"]["data"]["reason"].as_str().is_some());
+    assert!(response["error"]["data"].get("execution_id").is_none());
     let audit_path = response["error"]["data"]["audit_path"]
         .as_str()
         .expect("policy denial must return audit_path");
@@ -3698,6 +3699,11 @@ fn policy_denial_uses_stable_error_code() -> Result<()> {
         audit_events
             .iter()
             .any(|event| event["type"] == "policy.denied" && event["decision"] == "denied")
+    );
+    assert!(
+        !audit_events
+            .iter()
+            .any(|event| event["type"] == "execution.requested")
     );
     Ok(())
 }
@@ -3732,6 +3738,7 @@ fn policy_request_uses_approval_required_error_code() -> Result<()> {
         .find(|message| message.get("id") == Some(&json!(1)))
         .unwrap();
     assert_eq!(response["error"]["data"]["code"], "APPROVAL_REQUIRED");
+    assert!(response["error"]["data"].get("execution_id").is_none());
     let audit_path = response["error"]["data"]["audit_path"]
         .as_str()
         .expect("approval required error must return audit_path");
@@ -3739,6 +3746,11 @@ fn policy_request_uses_approval_required_error_code() -> Result<()> {
     assert!(audit_events.iter().any(|event| {
         event["type"] == "policy.requires_approval" && event["decision"] == "requires_approval"
     }));
+    assert!(
+        !audit_events
+            .iter()
+            .any(|event| event["type"] == "execution.requested")
+    );
     Ok(())
 }
 
@@ -3773,6 +3785,7 @@ fn broad_write_request_uses_approval_required_error_code() -> Result<()> {
         .find(|message| message.get("id") == Some(&json!(1)))
         .unwrap();
     assert_eq!(response["error"]["data"]["code"], "APPROVAL_REQUIRED");
+    assert!(response["error"]["data"].get("execution_id").is_none());
     assert!(
         response["error"]["data"]["reason"]
             .as_str()
@@ -3788,6 +3801,11 @@ fn broad_write_request_uses_approval_required_error_code() -> Result<()> {
             && event["decision"] == "requires_approval"
             && event["reason"].as_str().unwrap().contains("broad write")
     }));
+    assert!(
+        !audit_events
+            .iter()
+            .any(|event| event["type"] == "execution.requested")
+    );
     Ok(())
 }
 

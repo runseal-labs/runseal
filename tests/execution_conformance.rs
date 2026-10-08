@@ -2952,8 +2952,16 @@ fn execution_capability_profiles_match_live_supported_and_rejected_behavior() ->
             continue;
         }
 
+        #[cfg(windows)]
+        let interpreter = if sandbox_level == "workspace-contained" {
+            contained_python_fixture(tmp.path())?
+        } else {
+            python()?
+        };
+        #[cfg(not(windows))]
+        let interpreter = python()?;
         let command = [
-            python()?,
+            interpreter,
             "-u".to_string(),
             "-c".to_string(),
             "import os,sys; expected=sys.argv[1]=='pty'; assert all(os.isatty(fd)==expected for fd in (0,1,2)); print('AC26_PROFILE_OK',flush=True)".to_string(),
@@ -7174,6 +7182,7 @@ fn cli_control_stalled_caller_cleans_owned_range_and_preserves_peer() -> Result<
             assert!(!process_present(pid)?);
         }
         let mut terminal = None;
+        let mut audit_summaries = Vec::new();
         for file in std::fs::read_dir(tmp.path().join(".runseal/audit"))? {
             let audit = std::fs::read_to_string(file?.path())?;
             for event in audit.lines().map(serde_json::from_str::<Value>) {
@@ -7182,10 +7191,21 @@ fn cli_control_stalled_caller_cleans_owned_range_and_preserves_peer() -> Result<
                     && event["result"]["error"]["code"] == "CLIENT_BACKPRESSURE"
                 {
                     terminal = Some(event);
+                } else {
+                    audit_summaries.push(json!({
+                        "type":event["type"],
+                        "error_code":event["result"]["error"]["code"],
+                        "termination_reason":event["result"]["termination_reason"],
+                        "cleanup_complete":event["result"]["cleanup_complete"],
+                    }));
                 }
             }
         }
-        let terminal = terminal.context("durable backpressure terminal")?;
+        let terminal = terminal.ok_or_else(|| {
+            anyhow::anyhow!(
+                "durable backpressure terminal missing; safe audit summaries: {audit_summaries:?}"
+            )
+        })?;
         assert_eq!(
             terminal["result"]["termination_reason"], "backpressure",
             "{terminal}"

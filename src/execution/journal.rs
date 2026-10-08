@@ -9,11 +9,15 @@ use serde_json::{Value, json};
 type TerminalRange = Box<dyn FnMut(&Value) -> Result<u64, RunSealError> + Send>;
 
 pub(crate) struct ExecutionJournal {
-    audit: AuditWriter,
+    audit: Option<AuditWriter>,
+    cwd: std::path::PathBuf,
+    session_id: String,
+    audit_path: String,
     metadata: Option<Value>,
     binding: Value,
     sequence: u64,
     prepared_requested: Option<Value>,
+    admitted: bool,
     durable_record_missing: bool,
     started_at: Option<Value>,
     pty: bool,
@@ -22,18 +26,25 @@ pub(crate) struct ExecutionJournal {
 
 impl ExecutionJournal {
     pub(crate) fn prepare(request: &ExecutionRequest) -> Result<Self, RunSealError> {
-        let audit = create_audit_writer(&request.cwd, &request.ids.session_id)?;
         let backend = crate::backend::active_backend();
         let hash = request.policy.hash();
+        let audit_path = std::path::PathBuf::from(".runseal")
+            .join("audit")
+            .join(format!("{}.jsonl", request.ids.session_id))
+            .to_string_lossy()
+            .replace('\\', "/");
         let binding = json!({
             "execution_id": request.ids.execution_id, "session_id": request.ids.session_id,
             "seal_id": request.ids.seal_id, "policy_id": request.policy.id,
             "policy_hash": hash, "policy_epoch": hash,
             "backend": backend_event_json(backend.name(), backend.status(), backend.platform()),
-            "audit_path": audit.relative_path(), "runseal_version": env!("CARGO_PKG_VERSION"),
+            "audit_path": audit_path, "runseal_version": env!("CARGO_PKG_VERSION"),
         });
-        let mut journal = Self {
-            audit,
+        Ok(Self {
+            audit: None,
+            cwd: request.cwd.clone(),
+            session_id: request.ids.session_id.clone(),
+            audit_path,
             metadata: request
                 .metadata
                 .as_ref()
@@ -41,23 +52,94 @@ impl ExecutionJournal {
             binding,
             sequence: 0,
             prepared_requested: None,
+            admitted: false,
             durable_record_missing: false,
             started_at: None,
             pty: request.io.is_pty(),
             terminal_range: None,
-        };
-        // Establish the required durable record before returning an admission receipt.
-        let requested = journal.emit(&json!({"type":"execution.requested","decision":"requested","command_args":request.command.len()}), &mut |_| Ok(()))?;
-        journal.prepared_requested = Some(requested);
-        Ok(journal)
+        })
     }
 
-    pub(crate) fn reject(mut self, code: &str, reason: &str) -> RunSealError {
+    /// Persist the initial execution record only after policy and backend
+    /// admission have succeeded. Callers publish an admission receipt only
+    /// after this write is durable.
+    pub(crate) fn admit(&mut self, command_args: usize) -> Result<(), RunSealError> {
+        if self.admitted {
+            return Ok(());
+        }
+        let mut audit = create_audit_writer(&self.cwd, &self.session_id)?;
+        self.audit_path = audit.relative_path().to_owned();
+        self.binding["audit_path"] = json!(self.audit_path);
+        self.sequence = 1;
+        let requested = self.envelope(&json!({
+            "type":"execution.requested",
+            "decision":"requested",
+            "command_args":command_args,
+        }));
+        let audit_event = super::output::audit_stream_event_metadata(&requested);
+        if let Err(error) =
+            write_audit_event_with_metadata(&mut audit, &audit_event, &self.metadata)
+        {
+            self.durable_record_missing = true;
+            return Err(error);
+        }
+        self.audit = Some(audit);
+        self.prepared_requested = Some(requested);
+        self.admitted = true;
+        Ok(())
+    }
+
+    /// Record a policy denial without creating an Execution record. The audit
+    /// event intentionally has no execution/session/seal identifiers because
+    /// the request was rejected before admission.
+    pub(crate) fn reject(&mut self, code: &str, reason: &str) -> RunSealError {
         let approval = code == "APPROVAL_REQUIRED";
-        if let Err(err) = self.emit(&json!({"type":if approval {"policy.requires_approval"} else {"policy.denied"},"decision":if approval {"requires_approval"} else {"denied"},"reason":reason}), &mut |_| Ok(())) { return err; }
-        let mut details = self.binding.clone();
-        details["cleanup_complete"] = json!(true);
-        RunSealError::with_details(code, reason, details)
+        let payload = json!({
+            "type":if approval {"policy.requires_approval"} else {"policy.denied"},
+            "decision":if approval {"requires_approval"} else {"denied"},
+            "reason":reason,
+        });
+        if let Err(error) = self.write_pre_admission_event(&payload) {
+            return error;
+        }
+        RunSealError::with_details(
+            code,
+            reason,
+            json!({"audit_path":self.audit_path,"cleanup_complete":true}),
+        )
+    }
+
+    pub(crate) fn audit_pre_admission_failure(
+        &self,
+        mut error: RunSealError,
+        payload: &Value,
+    ) -> RunSealError {
+        if let Err(audit_error) = self.write_pre_admission_event(payload) {
+            return audit_error;
+        }
+        let details = error.details.get_or_insert_with(|| json!({}));
+        if let Some(object) = details.as_object_mut() {
+            object.insert("audit_path".to_string(), json!(self.audit_path));
+            object.insert("cleanup_complete".to_string(), json!(true));
+        }
+        error
+    }
+
+    fn write_pre_admission_event(&self, payload: &Value) -> Result<(), RunSealError> {
+        let mut audit = create_audit_writer(&self.cwd, &self.session_id)?;
+        let audit_path = audit.relative_path().to_owned();
+        let mut event = json!({
+            "policy_id":self.binding["policy_id"],
+            "policy_hash":self.binding["policy_hash"],
+            "backend":self.binding["backend"],
+            "audit_path":audit_path,
+            "time":timestamp_now(),
+        });
+        if let (Some(event), Some(payload)) = (event.as_object_mut(), payload.as_object()) {
+            event.extend(payload.clone());
+        }
+        let audit_event = super::output::audit_stream_event_metadata(&event);
+        write_audit_event_with_metadata(&mut audit, &audit_event, &self.metadata)
     }
 
     pub(crate) fn set_terminal_range(
@@ -68,7 +150,7 @@ impl ExecutionJournal {
     }
 
     pub(crate) fn audit_path(&self) -> &str {
-        self.audit.relative_path()
+        &self.audit_path
     }
 
     fn envelope(&self, payload: &Value) -> Value {
@@ -88,6 +170,12 @@ impl ExecutionJournal {
         payload: &Value,
         observer: &mut dyn FnMut(&Value) -> Result<(), RunSealError>,
     ) -> Result<Value, RunSealError> {
+        if !self.admitted {
+            return Err(RunSealError::new(
+                "INTERNAL_ERROR",
+                "execution event emitted before admission",
+            ));
+        }
         if payload["type"] == "execution.requested"
             && let Some(requested) = self.prepared_requested.take()
         {
@@ -100,9 +188,13 @@ impl ExecutionJournal {
             self.started_at = Some(event["time"].clone());
         }
         let audit_event = super::output::audit_stream_event_metadata(&event);
-        if let Err(err) =
-            write_audit_event_with_metadata(&mut self.audit, &audit_event, &self.metadata)
-        {
+        let Some(audit) = self.audit.as_mut() else {
+            return Err(RunSealError::new(
+                "INTERNAL_ERROR",
+                "admitted journal has no audit writer",
+            ));
+        };
+        if let Err(err) = write_audit_event_with_metadata(audit, &audit_event, &self.metadata) {
             self.durable_record_missing = true;
             return Err(err);
         }
@@ -116,6 +208,15 @@ impl ExecutionJournal {
         control: &super::ExecutionControl,
         observer: &mut dyn FnMut(&Value) -> Result<(), RunSealError>,
     ) -> Result<(Vec<Value>, Value), RunSealError> {
+        if !self.admitted {
+            return match outcome {
+                Err(error) => Err(error),
+                Ok(_) => Err(RunSealError::new(
+                    "INTERNAL_ERROR",
+                    "execution completed without admission",
+                )),
+            };
+        }
         let (mut result, mut error) = match outcome {
             Ok(result) => (result, None),
             Err(err) => {
@@ -195,9 +296,14 @@ impl ExecutionJournal {
         summary["earliest_available_seq"] = json!(earliest);
         result["earliest_available_seq"] = json!(earliest);
         terminal["result"] = summary.clone();
-        if let Err(audit_error) =
-            write_audit_event_with_metadata(&mut self.audit, &terminal, &self.metadata)
-        {
+        let terminal_write = match self.audit.as_mut() {
+            Some(audit) => write_audit_event_with_metadata(audit, &terminal, &self.metadata),
+            None => Err(RunSealError::new(
+                "INTERNAL_ERROR",
+                "admitted journal has no audit writer",
+            )),
+        };
+        if let Err(audit_error) = terminal_write {
             self.durable_record_missing = true;
             summary["durable_record_missing"] = json!(true);
             summary["status"] = json!("failed");
@@ -253,9 +359,16 @@ while True: pathlib.Path('heartbeat').write_text(str(time.monotonic())); time.sl
         let mut journal =
             ExecutionJournal::prepare(&request).map_err(|err| anyhow::anyhow!(err.message))?;
         let audit_path = journal.audit_path().to_owned();
+        journal
+            .admit(request.command.len())
+            .map_err(|err| anyhow::anyhow!(err.message))?;
         // Replace the actual file with a read-only handle after resolved/allowed/started.
         // The next write fails through the filesystem while the real process is active.
-        journal.audit.deny_writes_after(tmp.path(), 3)?;
+        journal
+            .audit
+            .as_mut()
+            .context("audit writer")?
+            .deny_writes_after(tmp.path(), 3)?;
         let mut events = Vec::new();
         let outcome = super::super::execute_prepared_with_events(request, journal, &mut |event| {
             events.push(event.clone());

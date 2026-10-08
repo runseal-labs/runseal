@@ -382,102 +382,21 @@ fn execute_inner<B: SandboxBackend + Send + Sync + 'static>(
         backend: backend_event_json(backend.name(), backend.status(), backend.platform()),
     };
 
-    let requested = execution_event_now(
-        json!({
-            "type": "execution.requested",
-            "decision": "requested",
-            "command_args": command.len(),
-        }),
-        &event_context,
-    );
-    journal.emit(&requested, observer)?;
-
-    let resolved = execution_event_now(
-        json!({
-            "type": "policy.resolved",
-            "decision": "resolved",
-            "sandbox_level": policy.sandbox_level.as_str(),
-            "network": network_audit_json(policy),
-            "backend_requirement": if policy.allows_local_execution() {
-                "local-execution"
-            } else {
-                "sandbox-backend"
-            },
-            "required_backend_features": policy.required_backend_feature_names(),
-        }),
-        &event_context,
-    );
-    journal.emit(&resolved, observer)?;
-
     if policy.requires_broad_write_approval() {
-        let reason = "filesystem broad write requires approval";
-        let event = execution_event_now(
-            json!({
-                "type": "policy.requires_approval",
-                "execution_id": ids.execution_id,
-                "policy_id": policy_id,
-                "policy_hash": policy_hash,
-                "audit_path": audit_path,
-                "decision": "requires_approval",
-                "reason": reason,
-            }),
-            &event_context,
-        );
-        journal.emit(&event, observer)?;
-
-        return Err(RunSealError::with_details(
+        return Err(journal.reject(
             "APPROVAL_REQUIRED",
-            reason,
-            json!({
-                "execution_id": ids.execution_id,
-                "session_id": ids.session_id,
-                "seal_id": ids.seal_id,
-                "audit_path": audit_path,
-            }),
+            "filesystem broad write requires approval",
         ));
     }
 
     if policy.denies_execution_without_backend() {
-        let reason = "filesystem write denied by policy";
         let requires_approval = policy.approval.on_violation == "request";
-        let event_type = if requires_approval {
-            "policy.requires_approval"
+        let (code, reason) = if requires_approval {
+            ("APPROVAL_REQUIRED", "filesystem write denied by policy")
         } else {
-            "policy.denied"
+            ("POLICY_DENIED", "filesystem write denied by policy")
         };
-        let decision = if requires_approval {
-            "requires_approval"
-        } else {
-            "denied"
-        };
-        let event = execution_event_now(
-            json!({
-                "type": event_type,
-                "execution_id": ids.execution_id,
-                "policy_id": policy_id,
-                "policy_hash": policy_hash,
-                "audit_path": audit_path,
-                "decision": decision,
-                "reason": reason,
-            }),
-            &event_context,
-        );
-        journal.emit(&event, observer)?;
-
-        return Err(RunSealError::with_details(
-            if requires_approval {
-                "APPROVAL_REQUIRED"
-            } else {
-                "POLICY_DENIED"
-            },
-            reason,
-            json!({
-                "execution_id": ids.execution_id,
-                "session_id": ids.session_id,
-                "seal_id": ids.seal_id,
-                "audit_path": audit_path,
-            }),
-        ));
+        return Err(journal.reject(code, reason));
     }
 
     check_preparing(&control, timer, timeout)?;
@@ -493,17 +412,6 @@ fn execute_inner<B: SandboxBackend + Send + Sync + 'static>(
         Ok(plan) => plan,
         Err(err) => {
             let details = err.details_json();
-            let event = execution_event_now(
-                json!({
-                    "type":"sandbox.backend_capability", "decision":"unsupported", "reason":err.reason,
-                    "backend":details.get("backend").cloned().unwrap_or_else(||json!({})),
-                    "support":details.get("support").cloned().unwrap_or_else(||json!("unsupported")),
-                    "missing_features":details.get("missing_features").cloned().unwrap_or_else(||json!([])),
-                    "platform_plan":details.get("platform_plan").cloned().unwrap_or(Value::Null),
-                }),
-                &event_context,
-            );
-            journal.emit(&event, observer)?;
             let mut details = details;
             #[cfg(windows)]
             if err.code == "BACKEND_UNAVAILABLE"
@@ -517,7 +425,19 @@ fn execute_inner<B: SandboxBackend + Send + Sync + 'static>(
             if let Some(object) = details.as_object_mut() {
                 object.insert("cleanup_complete".to_string(), json!(true));
             }
-            return Err(RunSealError::with_details(err.code, err.reason, details));
+            let error = RunSealError::with_details(err.code, err.reason, details);
+            return Err(if error.code == "BACKEND_UNAVAILABLE" {
+                journal.audit_pre_admission_failure(
+                    error,
+                    &json!({
+                        "type":"sandbox.backend_capability",
+                        "decision":"unavailable",
+                        "reason":"sandbox backend unavailable",
+                    }),
+                )
+            } else {
+                error
+            });
         }
     };
 
@@ -546,6 +466,34 @@ fn execute_inner<B: SandboxBackend + Send + Sync + 'static>(
         }
         RunSealError::with_details(code, reason, details)
     })?);
+    journal.admit(command.len())?;
+    let requested = execution_event_now(
+        json!({
+            "type": "execution.requested",
+            "decision": "requested",
+            "command_args": command.len(),
+        }),
+        &event_context,
+    );
+    journal.emit(&requested, observer)?;
+
+    let resolved = execution_event_now(
+        json!({
+            "type": "policy.resolved",
+            "decision": "resolved",
+            "sandbox_level": policy.sandbox_level.as_str(),
+            "network": network_audit_json(policy),
+            "backend_requirement": if policy.allows_local_execution() {
+                "local-execution"
+            } else {
+                "sandbox-backend"
+            },
+            "required_backend_features": policy.required_backend_feature_names(),
+        }),
+        &event_context,
+    );
+    journal.emit(&resolved, observer)?;
+
     let allowed = execution_event_now(
         json!({
             "type": "policy.allowed",

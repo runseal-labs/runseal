@@ -181,7 +181,8 @@ fn prepare_and_run(
         } else {
             "filesystem write denied by policy"
         };
-        return Err(crate::execution::ExecutionJournal::prepare(&request)?.reject(code, reason));
+        let mut journal = crate::execution::ExecutionJournal::prepare(&request)?;
+        return Err(journal.reject(code, reason));
     }
     let mut journal = crate::execution::ExecutionJournal::prepare(&request)?;
     let plan = match crate::backend::active_backend().compile_plan(
@@ -191,11 +192,20 @@ fn prepare_and_run(
     ) {
         Ok(plan) => plan,
         Err(error) => {
-            return Err(finish_admission_error(
-                journal,
-                &control,
-                compile_backend_error(error, &request.cwd),
-            ));
+            let error = compile_backend_error(error, &request.cwd);
+            let error = if error.code == "BACKEND_UNAVAILABLE" {
+                journal.audit_pre_admission_failure(
+                    error,
+                    &json!({
+                        "type":"sandbox.backend_capability",
+                        "decision":"unavailable",
+                        "reason":"sandbox backend unavailable",
+                    }),
+                )
+            } else {
+                error
+            };
+            return Err(finish_admission_error(journal, &control, error));
         }
     };
     if control.is_cancelled() {
@@ -215,6 +225,35 @@ fn prepare_and_run(
             ));
         }
     };
+    if control.is_cancelled() {
+        control.request(crate::execution::TerminationCause::FailedToStart);
+        reservation
+            .finish(control.begin_cleanup(), true)
+            .map_err(|_| {
+                RunSealError::with_details(
+                    "EXECUTION_CLEANUP_FAILED",
+                    "execution admission cleanup could not be verified",
+                    json!({"cleanup_complete":false}),
+                )
+            })?;
+        return Err(RunSealError::new(
+            "CLIENT_DISCONNECTED",
+            "execution admission stopped",
+        ));
+    }
+    if let Err(error) = journal.admit(request.command.len()) {
+        control.request(crate::execution::TerminationCause::FailedToStart);
+        reservation
+            .finish(control.begin_cleanup(), true)
+            .map_err(|_| {
+                RunSealError::with_details(
+                    "EXECUTION_CLEANUP_FAILED",
+                    "execution admission cleanup could not be verified",
+                    json!({"cleanup_complete":false}),
+                )
+            })?;
+        return Err(error);
+    }
     let execution_id = request.ids.execution_id.clone();
     let policy_hash = request.policy.hash();
     let receipt = json!({"execution_id":execution_id,"session_id":request.ids.session_id,"status":"preparing","policy_id":request.policy.id,"policy_hash":policy_hash,"policy_epoch":policy_hash,"stderr_merged":request.io.is_pty()});
