@@ -247,6 +247,21 @@ try {
     Write-Host "Checking setup repair path"
     Assert-SetupReady (Invoke-Setup).Json
 
+    Write-Host "Checking sandboxed exec after explicit setup"
+    $readyExec = Invoke-RunSealJson -AllowFailure -RunArgs @(
+        "exec", "--json", "--policy", "workspace-write", "--network", "disabled", "--cwd", $workspace, "--timeout-ms", "60000", "--",
+        "whoami.exe"
+    ) -TimeoutSeconds 120
+    if ($readyExec.ExitCode -ne 0) {
+        $errorCode = $readyExec.Json.error.data.code
+        $errorReason = $readyExec.Json.error.data.error.reason
+        $cleanupComplete = $readyExec.Json.error.data.cleanup_complete
+        throw "sandboxed exec failed after explicit setup (code=$errorCode, reason=$errorReason, cleanup_complete=$cleanupComplete)"
+    }
+    if ($readyExec.Json.exit_code -ne 0 -or $readyExec.Json.stdout -notmatch "runsealsandbox") {
+        throw "sandboxed exec after explicit setup did not run as the sandbox identity: $($readyExec.Stdout)"
+    }
+
     Write-Host "Checking setup status stays read-only when setup is stale"
     $sandboxHomeOverride = [Environment]::GetEnvironmentVariable("RUNSEAL_WINDOWS_SANDBOX_HOME")
     if ([string]::IsNullOrWhiteSpace($sandboxHomeOverride)) {
