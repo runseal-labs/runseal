@@ -60,8 +60,11 @@ sandboxed PTY and control channel. Linux and macOS currently report those
 Windows-only combinations as unavailable and the example exits before starting
 them.
 
-The Node.js client uses `process.execPath` as the path-qualified child command and
-keeps the protocol reader active during requests and execution output.
+The Node.js client uses `process.execPath` for its pipe, control, and cancellation
+child commands and keeps the protocol reader active during requests and execution
+output. Its PTY resize probe uses Python's standard-library `os.get_terminal_size`
+to read the live pseudo-console dimensions; Python must be on `PATH`, or
+`RUNSEAL_PYTHON` can name its absolute executable path.
 
 The example defaults to:
 

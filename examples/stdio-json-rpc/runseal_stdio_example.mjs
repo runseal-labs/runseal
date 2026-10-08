@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { resolve } from 'node:path';
+import { existsSync } from 'node:fs';
+import { delimiter, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 // Standard-library client: keep the connection open after an admission receipt.
@@ -100,6 +101,19 @@ function receivedText(state, stream) {
   return Buffer.concat(state.output[stream]).toString('utf8');
 }
 
+function pythonExecutable() {
+  const configured = process.env.RUNSEAL_PYTHON;
+  if (configured) return resolve(configured);
+  const names = process.platform === 'win32' ? ['python.exe', 'python3.exe'] : ['python3', 'python'];
+  for (const directory of (process.env.PATH ?? '').split(delimiter).filter(Boolean)) {
+    for (const name of names) {
+      const candidate = resolve(directory.replace(/^"|"$/g, ''), name);
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+  throw new Error('PTY size probe requires Python on PATH or RUNSEAL_PYTHON');
+}
+
 function requireProfile(capabilities, args, ioMode, requiredFeatures) {
   const profile = capabilities.execution_profiles?.find((item) =>
     item.sandbox_level === args.policy && item.network_mode === args.network && item.io_mode === ioMode);
@@ -118,22 +132,18 @@ function requireProfile(capabilities, args, ioMode, requiredFeatures) {
 async function runPtyExample(client, args, capabilities) {
   requireProfile(capabilities, args, 'pty', ['pty', 'pty_resize', 'streaming_output', 'stdin_stream']);
   const child = [
-    "const { createInterface } = require('node:readline');",
-    "if (!process.stdin.isTTY || !process.stdout.isTTY || !process.stderr.isTTY) { process.stderr.write('PTY_NOT_TTY\\n', () => process.exit(8)); }",
-    "process.stderr.write('PTY_STDERR\\n');",
-    "process.stdout.write(`PTY_READY:${process.stdout.columns}:${process.stdout.rows}\\n`);",
-    "const lines = createInterface({ input: process.stdin });",
-    "lines.once('line', (line) => process.stdout.write(`PTY_ACK:${line.trim()}\\nPTY_RESIZED:${process.stdout.columns}:${process.stdout.rows}\\n`, () => process.exit(0)));",
+    "import os,sys; assert all(os.isatty(fd) for fd in (0,1,2)); size=os.get_terminal_size(1); print('PTY_READY:%s:%s'%(size.columns,size.lines),flush=True); print('PTY_STDERR',file=sys.stderr,flush=True); line=sys.stdin.readline(); size=os.get_terminal_size(1); print('PTY_ACK:'+line.strip(),flush=True); print('PTY_RESIZED:%s:%s'%(size.columns,size.lines),flush=True)",
   ].join('\n');
   const receipt = await client.call('execute', {
-    command: [process.execPath, '-e', child],
+    command: [pythonExecutable(), '-u', '-c', child],
     cwd: args.cwd, policy: args.policy, network: { mode: args.network },
     stdin: { mode: 'stream' }, io: { mode: 'pty', rows: 17, cols: 101 },
   });
   if (receipt.status !== 'preparing') throw new Error('PTY execution did not return an admission receipt');
   const id = receipt.execution_id;
-  const ready = await client.waitFor(id, (state) => receivedText(state, 'terminal').includes('PTY_READY:101:17'));
-  if (!receivedText(ready, 'terminal').includes('PTY_STDERR')) throw new Error('PTY stderr was not merged into terminal output');
+  await client.waitFor(id, (state) =>
+    receivedText(state, 'terminal').includes('PTY_READY:101:17') &&
+    receivedText(state, 'terminal').includes('PTY_STDERR'));
   const resized = await client.call('resizeExecution', { execution_id: id, rows: 41, cols: 123 });
   if (resized.accepted !== true) throw new Error('PTY resize was not accepted');
   const input = Buffer.from('hello\r\n');
@@ -154,7 +164,7 @@ async function runControlExample(client, args, capabilities) {
     "function readExact(fd, size) { const data = Buffer.alloc(size); let offset = 0; while (offset < size) { const count = fs.readSync(fd, data, offset, size - offset, null); if (count === 0) throw new Error('unexpected EOF'); offset += count; } return data; }",
     "function writeAll(fd, data) { let offset = 0; while (offset < data.length) offset += fs.writeSync(fd, data, offset, data.length - offset); }",
     "writeAll(3, Buffer.from('READY')); process.stdout.write('CONTROL_STDOUT\\n'); process.stderr.write('CONTROL_STDERR\\n');",
-    "for (let index = 0; index < 3; index += 1) { const input = readExact(0, 1); const request = readExact(3, 4).toString('ascii'); if (input[0] !== 65 + index || request !== `PING${index}`) throw new Error('invalid control round'); writeAll(3, Buffer.from(`PONG${index}`)); }",
+    "for (let index = 0; index < 3; index += 1) { const input = readExact(0, 1); const request = readExact(3, 5).toString('ascii'); if (input[0] !== 65 + index || request !== `PING${index}`) throw new Error('invalid control round'); writeAll(3, Buffer.from(`PONG${index}`)); }",
     "const probe = Buffer.alloc(1); if (fs.readSync(3, probe, 0, 1, null) !== 0 || fs.readSync(0, probe, 0, 1, null) !== 0) throw new Error('expected half-close');",
   ].join('\n');
   const receipt = await client.call('execute', {
@@ -242,7 +252,7 @@ async function main() {
     });
     if (receipt.status !== 'preparing') throw new Error('Expected admission receipt');
     const id = receipt.execution_id;
-    await client.waitFor(id, (state) => state.stdout >= 6);
+    await client.waitFor(id, (state) => state.bytes.stdout >= 6);
     // Queries and input continue on the same connection while the child is alive.
     const active = await client.call('getExecution', { execution_id: id });
     if (active.status !== 'running') throw new Error('Expected a running execution');
@@ -250,7 +260,7 @@ async function main() {
     for (const bytes of [Buffer.from('round one\n'), Buffer.from([0, 255, 254, 0]), Buffer.from('round three\n')]) {
       await client.call('writeExecutionInput', { execution_id: id, stream: 'stdin', encoding: 'base64', data: `base64:${bytes.toString('base64')}` });
       expected += bytes.length;
-      await client.waitFor(id, (state) => state.stdout >= expected);
+      await client.waitFor(id, (state) => state.bytes.stdout >= expected);
     }
     await client.call('closeExecutionInput', { execution_id: id, stream: 'stdin' });
     const { result } = await client.waitFor(id, (state) => Boolean(state.result));

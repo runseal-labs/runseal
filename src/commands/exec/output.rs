@@ -144,6 +144,13 @@ impl Output {
 
     fn fail(&mut self, code: &'static str, reason: &'static str) -> Result<(), RunSealError> {
         self.failure = Some((code, reason));
+        #[cfg(windows)]
+        if let Some(console) = &mut self.console {
+            // A blocked WriteConsoleW worker lives in this helper process. Stop
+            // it as soon as output can no longer be delivered so backend range
+            // cleanup does not wait for an unrelated console write to finish.
+            console.abort();
+        }
         Err(RunSealError::new(code, reason))
     }
 
@@ -234,6 +241,11 @@ impl ConsoleOutputWorker {
 
     fn progress(&self) -> u64 {
         self.progress.load(Ordering::Acquire)
+    }
+
+    fn abort(&mut self) {
+        self.sender.take();
+        let _ = self.kill_child();
     }
 
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
