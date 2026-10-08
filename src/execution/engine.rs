@@ -516,7 +516,7 @@ fn execute_inner<B: SandboxBackend + Send + Sync + 'static>(
     check_preparing(&control, timer, timeout)?;
     *reservation = Some(crate::backend::reserve_execution(&plan).map_err(|error| {
         let cleanup_complete = !crate::backend::cleanup_failed(&error);
-        let (code, reason, _) = if cleanup_complete {
+        let (code, reason, setup_status) = if cleanup_complete {
             backend_execution_error(&error, sandbox_enforced, cwd).unwrap_or_else(|| {
                 (
                     "EXECUTION_FAILED_TO_START",
@@ -531,7 +531,11 @@ fn execute_inner<B: SandboxBackend + Send + Sync + 'static>(
                 None,
             )
         };
-        RunSealError::with_details(code, reason, json!({"cleanup_complete":cleanup_complete}))
+        let mut details = json!({"cleanup_complete":cleanup_complete});
+        if let (Some(details), Some(setup_status)) = (details.as_object_mut(), setup_status) {
+            details.insert("setup_status".to_string(), setup_status);
+        }
+        RunSealError::with_details(code, reason, details)
     })?);
     let allowed = execution_event_now(
         json!({
