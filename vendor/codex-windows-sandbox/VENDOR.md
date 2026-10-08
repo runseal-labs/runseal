@@ -72,6 +72,9 @@ Local vendor patches:
   execution range was created, so a short timeout during sandbox preparation must
   not quarantine the shared binding. Guarded by the sandboxed short-timeout
   regression in `tests/execution_conformance.rs`.
+- Allow the first sandbox-user profile load to finish within a bounded
+  60-second runner-preparation window; the execution deadline and cancellation
+  budget still take precedence. Guarded by the prepared Windows sandbox smoke.
 - Keep a runner `spawn_failed` report as a definitive start failure instead of
   rewriting it into unverified cleanup. The runner never created a process range,
   so the host reports a start failure with confirmed cleanup and must not
@@ -95,7 +98,7 @@ in `tests/vendor_boundary.rs`.
 | `upstream/conpty/mod.rs` | Preserve explicit process identity, terminal dimensions, interrupt handling, and argv quoting for terminal launches. |
 | `upstream/control.rs` | Add the bounded duplex child control endpoint, half-close behavior, and retained writer ownership. |
 | `upstream/elevated/ipc_framed.rs` | Validate the v11 runner frame and carry the frozen cleanup budget and deadline. |
-| `upstream/elevated/runner_client.rs` | Bound runner preparation, retain process ownership, and confirm termination before releasing startup state. |
+| `upstream/elevated/runner_client.rs` | Allow bounded first-profile initialization, retain process ownership, and confirm termination before releasing startup state. |
 | `upstream/elevated_impl.rs` | Bridge live stdin/output, cancellation, terminal results, and cleanup evidence between host and runner. |
 | `upstream/host_coordinator.rs` | Add the named host coordination event with a restricted access descriptor. |
 | `upstream/lib.rs` | Export the cleanup, control, output, and terminal interfaces used by the RunSeal adapter. |

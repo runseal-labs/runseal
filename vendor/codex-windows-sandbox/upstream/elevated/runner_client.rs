@@ -51,7 +51,10 @@ use windows_sys::Win32::System::Threading::STARTUPINFOW;
 use windows_sys::Win32::System::Threading::TerminateProcess;
 use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
-const RUNNER_PREPARATION_TIMEOUT: Duration = Duration::from_secs(15);
+// Loading a newly created sandbox user's Windows profile is synchronous and
+// can exceed the ordinary startup budget on a fresh host. Keep preparation
+// bounded while allowing that first profile initialization to finish.
+const RUNNER_PREPARATION_TIMEOUT: Duration = Duration::from_secs(60);
 const RUNNER_PREPARATION_POLL: Duration = Duration::from_millis(5);
 const RUNNER_ERROR_MODE_FLAGS: u32 = 0x0001 | 0x0002;
 const WAIT_OBJECT_0: u32 = 0;
@@ -97,12 +100,6 @@ fn runner_launch_cwd<'a>(runner_exe: &'a Path, fallback_cwd: &'a Path) -> &'a Pa
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or(fallback_cwd)
-}
-
-fn report_runner_test_diagnostic(stage: &str) {
-    if std::env::var_os("RUNSEAL_WINDOWS_TEST_DIAGNOSTICS").is_some() {
-        eprintln!("runseal-test-diagnostic: runner={stage}");
-    }
 }
 
 pub(crate) struct RunnerTransport {
@@ -433,20 +430,14 @@ fn launch_runner_with_budget(
     budget: &mut PreparationBudget,
     launch: impl FnOnce() -> Result<PROCESS_INFORMATION> + Send + 'static,
 ) -> Result<NativeRunner> {
-    budget
-        .check()
-        .inspect_err(|_| report_runner_test_diagnostic("launch_budget_expired_before_worker"))?;
+    budget.check()?;
     let mut worker_budget = budget.clone();
     let worker = thread::Builder::new()
         .name("runseal-runner-logon".into())
         .spawn(move || {
-            worker_budget.check().inspect_err(|_| {
-                report_runner_test_diagnostic("launch_budget_expired_before_api")
-            })?;
+            worker_budget.check()?;
             let runner = NativeRunner::from_process_info(launch()?, worker_budget.clone());
-            worker_budget.check().inspect_err(|_| {
-                report_runner_test_diagnostic("launch_budget_expired_after_api")
-            })?;
+            worker_budget.check()?;
             Ok(runner)
         })?;
     let mut interrupted = false;
@@ -466,7 +457,6 @@ fn launch_runner_with_budget(
             };
         }
         if interrupted && Instant::now() >= budget.cleanup_deadline() {
-            report_runner_test_diagnostic("launch_worker_cleanup_deadline_expired");
             let mut retained = retained_launch_workers()
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -515,18 +505,6 @@ fn finish_runner_startup(
         }
         Err(error) => {
             let stopped = owner.stop(budget.cleanup_deadline()).is_ok();
-            if error
-                .downcast_ref::<crate::SandboxCaptureCleanupError>()
-                .is_some()
-            {
-                report_runner_test_diagnostic("capture_cleanup_error");
-            } else if error.downcast_ref::<crate::SandboxSpawnFailed>().is_some() {
-                report_runner_test_diagnostic("spawn_failed");
-            } else if stopped && !spawn_request_sent {
-                report_runner_test_diagnostic("stopped_before_spawn");
-            } else {
-                report_runner_test_diagnostic("stop_unverified");
-            }
             // Runner exit alone does not verify descendants or shared resources.
             if error
                 .downcast_ref::<crate::SandboxCaptureCleanupError>()
@@ -619,7 +597,6 @@ pub(crate) fn spawn_runner_transport(
         let env_block: Option<Vec<u16>> = None;
 
         let previous_error_mode = unsafe { SetErrorMode(RUNNER_ERROR_MODE_FLAGS) };
-        report_runner_test_diagnostic("logon_api_started");
         let spawn_res = unsafe {
             CreateProcessWithLogonW(
                 user_w.as_ptr(),
@@ -645,13 +622,10 @@ pub(crate) fn spawn_runner_transport(
             SetErrorMode(previous_error_mode);
         }
         if let Some(error) = spawn_error {
-            report_runner_test_diagnostic(&format!("logon_win32_error_{error}"));
             return Err(std::io::Error::from_raw_os_error(error as i32).into());
         }
-        report_runner_test_diagnostic("logon_api_succeeded");
         Ok(pi)
-    })
-    .inspect_err(|_| report_runner_test_diagnostic("logon_launch_failed"))?;
+    })?;
     let (owner, runner_thread, expected_runner_pid) = runner.into_parts()?;
     let runner_process = owner
         .process
@@ -659,7 +633,6 @@ pub(crate) fn spawn_runner_transport(
         .ok_or_else(|| anyhow::anyhow!(crate::SandboxCleanupError))?
         .as_raw_handle() as HANDLE;
     let spawn_request_sent = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let mut startup_stage = "resume_runner";
     let startup = (|| -> Result<RunnerTransport> {
         resume_runner_after_security_check(
             runner_process,
@@ -667,11 +640,8 @@ pub(crate) fn spawn_runner_transport(
             &mut budget,
             |process, thread| unsafe { restrict_runner_object_access(process, thread) },
         )?;
-        startup_stage = "connect_input_pipe";
         connect_pipe_with_budget(&pipe_write, expected_runner_pid, &mut budget)?;
-        startup_stage = "connect_output_pipe";
         connect_pipe_with_budget(&pipe_read, expected_runner_pid, &mut budget)?;
-        startup_stage = "send_spawn_request";
         let pipe_write = send_spawn_request(
             pipe_write,
             spawn_request,
@@ -682,13 +652,9 @@ pub(crate) fn spawn_runner_transport(
             pipe_write,
             pipe_read,
         };
-        startup_stage = "read_spawn_ready";
         transport.read_spawn_ready(&mut budget)?;
         Ok(transport)
     })();
-    if startup.is_err() {
-        report_runner_test_diagnostic(&format!("startup_{startup_stage}"));
-    }
     drop(runner_thread);
     finish_runner_startup(
         owner,
