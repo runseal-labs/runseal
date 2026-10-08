@@ -3126,8 +3126,12 @@ fn windows_node_client_round_trips_inside_sandbox() -> Result<()> {
             String::from_utf8_lossy(&output.stderr)
         );
         let summary: Value = serde_json::from_slice(&output.stdout)?;
-        assert_eq!(summary["status"], "finished");
-        assert_eq!(summary["stdout_bytes"], 32);
+        assert_eq!(summary["command"]["status"], "finished");
+        assert_eq!(summary["command"]["stdout_bytes"], 32);
+        assert_eq!(summary["pty"]["resized"], true);
+        assert_eq!(summary["control"]["control_round_trips"], 3);
+        assert_eq!(summary["cancellation"]["termination_reason"], "cancelled");
+        assert_eq!(summary["cancellation"]["cleanup_complete"], true);
     }
     Ok(())
 }
@@ -3324,237 +3328,255 @@ fn dropping_protocol_fixture_drains_live_execution_before_host_exit() -> Result<
 #[cfg(windows)]
 #[test]
 fn paused_protocol_reader_does_not_prevent_cancellation() -> Result<()> {
-    verify_paused_protocol_reader(true, false)
+    verify_paused_protocol_reader("danger-full-access", true, false)
+}
+
+#[cfg(windows)]
+#[test]
+#[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
+fn sandboxed_paused_protocol_reader_does_not_prevent_cancellation() -> Result<()> {
+    verify_paused_protocol_reader("workspace-write", true, false)
 }
 
 #[cfg(windows)]
 #[test]
 fn stalled_protocol_writer_cleans_owned_execution_and_closes_connection() -> Result<()> {
-    verify_paused_protocol_reader(false, false)
+    verify_paused_protocol_reader("danger-full-access", false, false)
+}
+
+#[cfg(windows)]
+#[test]
+#[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
+fn sandboxed_stalled_protocol_writer_cleans_owned_execution_and_closes_connection() -> Result<()> {
+    verify_paused_protocol_reader("workspace-write", false, false)
 }
 
 #[cfg(windows)]
 #[test]
 fn unsubscribe_discards_already_queued_notifications_before_its_receipt() -> Result<()> {
-    verify_paused_protocol_reader(true, true)
+    verify_paused_protocol_reader("danger-full-access", true, true)
 }
 
 #[cfg(windows)]
-fn verify_paused_protocol_reader(cancel: bool, unsubscribe: bool) -> Result<()> {
-    let _guard = process_test_gate();
-    for policy in ["danger-full-access", "workspace-write"] {
-        let tmp = TempDir::new()?;
-        let mut host = Command::new(env!("CARGO_BIN_EXE_runseal"))
-            .args(["service", "--stdio"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()?;
-        let mut input = host.stdin.take().context("stdin")?;
-        let output = host.stdout.take().context("stdout")?;
-        let (permit, reads) = mpsc::sync_channel::<()>(1);
-        let (sender, messages) = mpsc::sync_channel::<Result<Value>>(1);
-        let reader = std::thread::spawn(move || {
-            let mut output = BufReader::new(output);
-            while reads.recv().is_ok() {
-                let mut line = String::new();
-                let result = output
-                    .read_line(&mut line)
-                    .map_err(anyhow::Error::from)
-                    .and_then(|count| {
-                        anyhow::ensure!(count > 0, "protocol EOF");
-                        Ok(serde_json::from_str(&line)?)
-                    });
-                if sender.send(result).is_err() {
-                    break;
-                }
-            }
-        });
-        struct HostFixture(Child);
-        impl Drop for HostFixture {
-            fn drop(&mut self) {
-                let _ = self.0.kill();
-                let _ = self.0.wait();
-            }
-        }
-        let mut host = HostFixture(host);
-        let mut fixture = HeartbeatFixture {
-            directory: tmp.path().to_owned(),
-            pids: Vec::new(),
-        };
-        let child_code = "import pathlib,time; target=pathlib.Path('first'); stop=pathlib.Path('first.stop'); count=0\nwhile not stop.exists():\n count+=1; target.write_text(str(count)); time.sleep(0.01)";
-        let root_code = "import os,pathlib,subprocess,sys,time; child=subprocess.Popen([sys.executable,'-u','-c',sys.argv[1]]);\nwhile not pathlib.Path('first').exists(): time.sleep(0.01)\nprint('READY '+str(child.pid),flush=True)\nwhile not pathlib.Path('burst').exists(): time.sleep(0.01)\nfor _ in range(8): os.write(1,b'X'*65536)\npathlib.Path('burst-started').write_text('started')\nwhile True: os.write(1,b'X'*65536)";
-        writeln!(
-            input,
-            "{}",
-            json!({"jsonrpc":"2.0","id":1,"method":"execute","params":{"command":[python()?,"-u","-c",root_code,child_code],"cwd":tmp.path(),"policy":policy}})
-        )?;
-        input.flush()?;
-        let next = || -> Result<Value> {
-            permit.send(())?;
-            messages
-                .recv_timeout(Duration::from_secs(10))
-                .context("controlled reader watchdog")?
-        };
-        let receipt = next()?;
-        assert_eq!(receipt["result"]["status"], "preparing", "{receipt}");
-        let id = receipt["result"]["execution_id"]
-            .as_str()
-            .context("execution ID")?;
-        let mut ready = Vec::new();
-        let mut audit_path = None;
-        loop {
-            let message = next()?;
-            let event = &message["params"];
-            if let Some(path) = event["audit_path"].as_str() {
-                audit_path = Some(path.to_owned());
-            }
-            if event["type"] == "execution.stdout" {
-                ready.extend(
-                    STANDARD.decode(
-                        event["data"]
-                            .as_str()
-                            .context("data")?
-                            .strip_prefix("base64:")
-                            .context("base64 prefix")?,
-                    )?,
-                );
-                if ready.ends_with(b"\n") {
-                    break;
-                }
-            }
-            assert_ne!(event["type"], "execution.failed", "{message}");
-        }
-        let descendant: u32 = String::from_utf8(ready)?
-            .trim()
-            .strip_prefix("READY ")
-            .context("READY PID")?
-            .parse()?;
-        fixture.pids.push(descendant);
-        std::fs::write(tmp.path().join("burst"), b"release")?;
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while !tmp.path().join("burst-started").exists() && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        assert!(tmp.path().join("burst-started").exists());
-        if !cancel {
-            let deadline = Instant::now() + Duration::from_secs(10);
-            let status = loop {
-                if let Some(status) = host.0.try_wait()? {
-                    break Some(status);
-                }
-                if Instant::now() >= deadline {
-                    break None;
-                }
-                std::thread::sleep(Duration::from_millis(10));
-            };
-            assert!(
-                !status
-                    .context("writer stall must close the connection within cleanup watchdog")?
-                    .success()
-            );
-            assert!(!process_present(descendant)?);
-            let audit =
-                std::fs::read_to_string(tmp.path().join(audit_path.context("audit path")?))?;
-            let events = audit
-                .lines()
-                .map(serde_json::from_str::<Value>)
-                .collect::<std::result::Result<Vec<_>, _>>()?;
-            assert!(
-                events
-                    .iter()
-                    .any(|event| event["type"] == "execution.failed"
-                        && event["error"]["code"] == "CLIENT_BACKPRESSURE")
-            );
-            assert!(events.iter().all(|event| event.get("data").is_none()));
-            drop(permit);
-            drop(input);
-            reader
-                .join()
-                .map_err(|_| anyhow::anyhow!("reader panicked"))?;
-            continue;
-        }
-        if unsubscribe {
-            writeln!(
-                input,
-                "{}",
-                json!({"jsonrpc":"2.0","id":3,"method":"unsubscribeEvents","params":{"execution_id":id}})
-            )?;
-            input.flush()?;
-        }
-        // No further read permit: stdout fills while the controller must still accept cancel.
-        writeln!(
-            input,
-            "{}",
-            json!({"jsonrpc":"2.0","id":2,"method":"cancelExecution","params":{"execution_id":id}})
-        )?;
-        input.flush()?;
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while process_present(descendant)? && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        assert!(
-            !process_present(descendant)?,
-            "cancel must clear its range while the client is not reading output"
-        );
-        assert!(host.0.try_wait()?.is_none());
-        let deadline = Instant::now() + Duration::from_secs(10);
-        let mut acknowledged = false;
-        let mut unsubscribed = false;
-        let terminal = 'drain: loop {
-            anyhow::ensure!(Instant::now() < deadline, "resume drain watchdog");
-            let message = next()?;
-            if message["id"] == 3 {
-                assert_eq!(message["result"]["unsubscribed"], true);
-                unsubscribed = true;
-            }
-            if unsubscribed {
-                assert_ne!(
-                    message["method"], "event",
-                    "queued notifications must be invalidated before unsubscribe receipt: {message}"
-                );
-            }
-            if message["id"] == 2 {
-                assert_eq!(message["result"]["status"], "canceling");
-                acknowledged = true;
-                if unsubscribe {
-                    assert!(unsubscribed);
-                    let mut request_id = 4;
-                    loop {
-                        writeln!(
-                            input,
-                            "{}",
-                            json!({"jsonrpc":"2.0","id":request_id,"method":"getExecution","params":{"execution_id":id}})
-                        )?;
-                        input.flush()?;
-                        let snapshot = next()?;
-                        assert_eq!(
-                            snapshot["id"], request_id,
-                            "no stale notification may follow unsubscribe: {snapshot}"
-                        );
-                        if snapshot["result"]["status"] == "failed" {
-                            break 'drain snapshot["result"].clone();
-                        }
-                        anyhow::ensure!(Instant::now() < deadline, "completion query watchdog");
-                        request_id += 1;
-                        std::thread::sleep(Duration::from_millis(10));
-                    }
-                }
-            }
+#[test]
+#[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
+fn sandboxed_unsubscribe_discards_already_queued_notifications_before_its_receipt() -> Result<()> {
+    verify_paused_protocol_reader("workspace-write", true, true)
+}
 
-            if message["params"]["type"] == "execution.failed" {
-                break message["params"]["result"].clone();
+#[cfg(windows)]
+fn verify_paused_protocol_reader(policy: &str, cancel: bool, unsubscribe: bool) -> Result<()> {
+    let _guard = process_test_gate();
+    let tmp = TempDir::new()?;
+    let mut host = Command::new(env!("CARGO_BIN_EXE_runseal"))
+        .args(["service", "--stdio"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()?;
+    let mut input = host.stdin.take().context("stdin")?;
+    let output = host.stdout.take().context("stdout")?;
+    let (permit, reads) = mpsc::sync_channel::<()>(1);
+    let (sender, messages) = mpsc::sync_channel::<Result<Value>>(1);
+    let reader = std::thread::spawn(move || {
+        let mut output = BufReader::new(output);
+        while reads.recv().is_ok() {
+            let mut line = String::new();
+            let result = output
+                .read_line(&mut line)
+                .map_err(anyhow::Error::from)
+                .and_then(|count| {
+                    anyhow::ensure!(count > 0, "protocol EOF");
+                    Ok(serde_json::from_str(&line)?)
+                });
+            if sender.send(result).is_err() {
+                break;
             }
+        }
+    });
+    struct HostFixture(Child);
+    impl Drop for HostFixture {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let mut host = HostFixture(host);
+    let mut fixture = HeartbeatFixture {
+        directory: tmp.path().to_owned(),
+        pids: Vec::new(),
+    };
+    let child_code = "import pathlib,time; target=pathlib.Path('first'); stop=pathlib.Path('first.stop'); count=0\nwhile not stop.exists():\n count+=1; target.write_text(str(count)); time.sleep(0.01)";
+    let root_code = "import os,pathlib,subprocess,sys,time; child=subprocess.Popen([sys.executable,'-u','-c',sys.argv[1]]);\nwhile not pathlib.Path('first').exists(): time.sleep(0.01)\nprint('READY '+str(child.pid),flush=True)\nwhile not pathlib.Path('burst').exists(): time.sleep(0.01)\nfor _ in range(8): os.write(1,b'X'*65536)\npathlib.Path('burst-started').write_text('started')\nwhile True: os.write(1,b'X'*65536)";
+    writeln!(
+        input,
+        "{}",
+        json!({"jsonrpc":"2.0","id":1,"method":"execute","params":{"command":[python()?,"-u","-c",root_code,child_code],"cwd":tmp.path(),"policy":policy}})
+    )?;
+    input.flush()?;
+    let next = || -> Result<Value> {
+        permit.send(())?;
+        messages
+            .recv_timeout(Duration::from_secs(10))
+            .context("controlled reader watchdog")?
+    };
+    let receipt = next()?;
+    assert_eq!(receipt["result"]["status"], "preparing", "{receipt}");
+    let id = receipt["result"]["execution_id"]
+        .as_str()
+        .context("execution ID")?;
+    let mut ready = Vec::new();
+    let mut audit_path = None;
+    loop {
+        let message = next()?;
+        let event = &message["params"];
+        if let Some(path) = event["audit_path"].as_str() {
+            audit_path = Some(path.to_owned());
+        }
+        if event["type"] == "execution.stdout" {
+            ready.extend(
+                STANDARD.decode(
+                    event["data"]
+                        .as_str()
+                        .context("data")?
+                        .strip_prefix("base64:")
+                        .context("base64 prefix")?,
+                )?,
+            );
+            if ready.ends_with(b"\n") {
+                break;
+            }
+        }
+        assert_ne!(event["type"], "execution.failed", "{message}");
+    }
+    let descendant: u32 = String::from_utf8(ready)?
+        .trim()
+        .strip_prefix("READY ")
+        .context("READY PID")?
+        .parse()?;
+    fixture.pids.push(descendant);
+    std::fs::write(tmp.path().join("burst"), b"release")?;
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !tmp.path().join("burst-started").exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(tmp.path().join("burst-started").exists());
+    if !cancel {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let status = loop {
+            if let Some(status) = host.0.try_wait()? {
+                break Some(status);
+            }
+            if Instant::now() >= deadline {
+                break None;
+            }
+            std::thread::sleep(Duration::from_millis(10));
         };
-        assert!(acknowledged);
-        assert_eq!(terminal["error"]["code"], "EXECUTION_CANCELLED");
-        assert_eq!(terminal["cleanup_complete"], true);
+        assert!(
+            !status
+                .context("writer stall must close the connection within cleanup watchdog")?
+                .success()
+        );
+        assert!(!process_present(descendant)?);
+        let audit = std::fs::read_to_string(tmp.path().join(audit_path.context("audit path")?))?;
+        let events = audit
+            .lines()
+            .map(serde_json::from_str::<Value>)
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        assert!(
+            events
+                .iter()
+                .any(|event| event["type"] == "execution.failed"
+                    && event["error"]["code"] == "CLIENT_BACKPRESSURE")
+        );
+        assert!(events.iter().all(|event| event.get("data").is_none()));
         drop(permit);
         drop(input);
         reader
             .join()
             .map_err(|_| anyhow::anyhow!("reader panicked"))?;
+        return Ok(());
     }
+    if unsubscribe {
+        writeln!(
+            input,
+            "{}",
+            json!({"jsonrpc":"2.0","id":3,"method":"unsubscribeEvents","params":{"execution_id":id}})
+        )?;
+        input.flush()?;
+    }
+    // No further read permit: stdout fills while the controller must still accept cancel.
+    writeln!(
+        input,
+        "{}",
+        json!({"jsonrpc":"2.0","id":2,"method":"cancelExecution","params":{"execution_id":id}})
+    )?;
+    input.flush()?;
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while process_present(descendant)? && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        !process_present(descendant)?,
+        "cancel must clear its range while the client is not reading output"
+    );
+    assert!(host.0.try_wait()?.is_none());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut acknowledged = false;
+    let mut unsubscribed = false;
+    let terminal = 'drain: loop {
+        anyhow::ensure!(Instant::now() < deadline, "resume drain watchdog");
+        let message = next()?;
+        if message["id"] == 3 {
+            assert_eq!(message["result"]["unsubscribed"], true);
+            unsubscribed = true;
+        }
+        if unsubscribed {
+            assert_ne!(
+                message["method"], "event",
+                "queued notifications must be invalidated before unsubscribe receipt: {message}"
+            );
+        }
+        if message["id"] == 2 {
+            assert_eq!(message["result"]["status"], "canceling");
+            acknowledged = true;
+            if unsubscribe {
+                assert!(unsubscribed);
+                let mut request_id = 4;
+                loop {
+                    writeln!(
+                        input,
+                        "{}",
+                        json!({"jsonrpc":"2.0","id":request_id,"method":"getExecution","params":{"execution_id":id}})
+                    )?;
+                    input.flush()?;
+                    let snapshot = next()?;
+                    assert_eq!(
+                        snapshot["id"], request_id,
+                        "no stale notification may follow unsubscribe: {snapshot}"
+                    );
+                    if snapshot["result"]["status"] == "failed" {
+                        break 'drain snapshot["result"].clone();
+                    }
+                    anyhow::ensure!(Instant::now() < deadline, "completion query watchdog");
+                    request_id += 1;
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
+        }
+
+        if message["params"]["type"] == "execution.failed" {
+            break message["params"]["result"].clone();
+        }
+    };
+    assert!(acknowledged);
+    assert_eq!(terminal["error"]["code"], "EXECUTION_CANCELLED");
+    assert_eq!(terminal["cleanup_complete"], true);
+    drop(permit);
+    drop(input);
+    reader
+        .join()
+        .map_err(|_| anyhow::anyhow!("reader panicked"))?;
     Ok(())
 }
 

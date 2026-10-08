@@ -15,9 +15,12 @@ It demonstrates:
 - retrieving audit events with `getAuditEvents`
 - releasing service session state with `disposeSession`
 
-The Node.js example additionally keeps a child alive while querying it and performing
-three binary stdin round trips, then sends EOF and waits for its terminal result.
-It checks event sequence and stream offsets without printing raw child payloads.
+The Node.js example keeps one service process alive for several executions. It
+queries and exchanges three binary stdin rounds with a live child, exercises a
+resizable PTY, performs three duplex fd 3 control-channel rounds with separate
+stdout/stderr, and cancels a running child after observing live output. Each path
+checks the admission receipt, event sequence/offsets, terminal result, and cleanup;
+the client fails closed when the requested profile or feature is unavailable.
 
 The example uses newline-delimited JSON-RPC messages. It does not use
 `Content-Length` framing.
@@ -51,6 +54,11 @@ For Node.js, use the same policy and network options:
 ```powershell
 node examples/stdio-json-rpc/runseal_stdio_example.mjs --runseal ./target/debug/runseal.exe --cwd .
 ```
+
+Run the Node.js example on a prepared Windows reference host to exercise the
+sandboxed PTY and control channel. Linux and macOS currently report those
+Windows-only combinations as unavailable and the example exits before starting
+them.
 
 The Node.js client uses `process.execPath` as the path-qualified child command and
 keeps the protocol reader active during requests and execution output.
