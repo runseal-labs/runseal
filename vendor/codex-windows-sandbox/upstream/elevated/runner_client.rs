@@ -433,14 +433,20 @@ fn launch_runner_with_budget(
     budget: &mut PreparationBudget,
     launch: impl FnOnce() -> Result<PROCESS_INFORMATION> + Send + 'static,
 ) -> Result<NativeRunner> {
-    budget.check()?;
+    budget
+        .check()
+        .inspect_err(|_| report_runner_test_diagnostic("launch_budget_expired_before_worker"))?;
     let mut worker_budget = budget.clone();
     let worker = thread::Builder::new()
         .name("runseal-runner-logon".into())
         .spawn(move || {
-            worker_budget.check()?;
+            worker_budget.check().inspect_err(|_| {
+                report_runner_test_diagnostic("launch_budget_expired_before_api")
+            })?;
             let runner = NativeRunner::from_process_info(launch()?, worker_budget.clone());
-            worker_budget.check()?;
+            worker_budget.check().inspect_err(|_| {
+                report_runner_test_diagnostic("launch_budget_expired_after_api")
+            })?;
             Ok(runner)
         })?;
     let mut interrupted = false;
@@ -460,6 +466,7 @@ fn launch_runner_with_budget(
             };
         }
         if interrupted && Instant::now() >= budget.cleanup_deadline() {
+            report_runner_test_diagnostic("launch_worker_cleanup_deadline_expired");
             let mut retained = retained_launch_workers()
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -612,6 +619,7 @@ pub(crate) fn spawn_runner_transport(
         let env_block: Option<Vec<u16>> = None;
 
         let previous_error_mode = unsafe { SetErrorMode(RUNNER_ERROR_MODE_FLAGS) };
+        report_runner_test_diagnostic("logon_api_started");
         let spawn_res = unsafe {
             CreateProcessWithLogonW(
                 user_w.as_ptr(),
@@ -640,6 +648,7 @@ pub(crate) fn spawn_runner_transport(
             report_runner_test_diagnostic(&format!("logon_win32_error_{error}"));
             return Err(std::io::Error::from_raw_os_error(error as i32).into());
         }
+        report_runner_test_diagnostic("logon_api_succeeded");
         Ok(pi)
     })
     .inspect_err(|_| report_runner_test_diagnostic("logon_launch_failed"))?;
