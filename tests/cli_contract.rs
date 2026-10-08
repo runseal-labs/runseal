@@ -1100,7 +1100,8 @@ fn setup_help_describes_explicit_windows_setup() -> Result<()> {
         assert!(stdout.contains("Usage: runseal setup windows-sandbox [--cwd <path>]"));
         assert!(stdout.contains("Use --elevate to request UAC"));
         assert!(stdout.contains("Later repairs reuse the sandbox broker"));
-        assert!(stdout.contains("fails closed"));
+        assert!(stdout.contains("repairs missing or stale setup through the installed broker"));
+        assert!(stdout.contains("Without an installed broker, sandboxed exec fails closed"));
         assert!(stdout.contains("--status"));
         assert!(stdout.contains("--json"));
         assert!(stdout.contains("--elevate"));

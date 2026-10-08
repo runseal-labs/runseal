@@ -122,11 +122,22 @@ function Assert-SetupRequiredStatus {
     }
 }
 
-function Assert-ExecFailsClosedForSetup {
+function Assert-ExecRepairedSetup {
+    param([object]$Run)
+
+    if ($Run.ExitCode -ne 0) {
+        throw "sandboxed exec could not repair setup through the broker: $($Run.Stdout) $($Run.Stderr)"
+    }
+    if ($Run.Json.exit_code -ne 0 -or $Run.Json.stdout -notmatch "runsealsandbox") {
+        throw "sandboxed exec did not run as the sandbox identity after repair: $($Run.Stdout)"
+    }
+}
+
+function Assert-ExecFailsClosedWithoutSetupBroker {
     param([object]$Run)
 
     if ($Run.ExitCode -eq 0) {
-        throw "sandboxed exec unexpectedly succeeded before setup"
+        throw "sandboxed exec unexpectedly succeeded without setup or a broker"
     }
     if ($Run.Json.error.data.code -ne "BACKEND_UNAVAILABLE") {
         throw "sandboxed exec returned wrong setup-missing error: $($Run.Stdout)"
@@ -185,7 +196,7 @@ try {
         "exec", "--json", "--policy", "workspace-write", "--network", "disabled", "--cwd", $workspace, "--timeout-ms", "5000", "--",
         "whoami.exe"
     ) -TimeoutSeconds 10
-    Assert-ExecFailsClosedForSetup $missingExec
+    Assert-ExecFailsClosedWithoutSetupBroker $missingExec
 
     if (-not $statusBefore.can_run_setup_now) {
         if (-not $AllowElevation) {
@@ -221,7 +232,7 @@ try {
     Write-Host "Checking setup repair path"
     Assert-SetupReady (Invoke-Setup).Json
 
-    Write-Host "Checking stale setup fails closed"
+    Write-Host "Checking setup status stays read-only when setup is stale"
     $sandboxHomeOverride = [Environment]::GetEnvironmentVariable("RUNSEAL_WINDOWS_SANDBOX_HOME")
     if ([string]::IsNullOrWhiteSpace($sandboxHomeOverride)) {
         $localAppData = [Environment]::GetEnvironmentVariable("LOCALAPPDATA")
@@ -244,10 +255,14 @@ try {
     $staleExec = Invoke-RunSealJson -AllowFailure -RunArgs @(
         "exec", "--json", "--policy", "workspace-write", "--network", "disabled", "--cwd", $workspace, "--timeout-ms", "5000", "--",
         "whoami.exe"
-    ) -TimeoutSeconds 10
-    Assert-ExecFailsClosedForSetup $staleExec
+    ) -TimeoutSeconds 240
+    Assert-ExecRepairedSetup $staleExec
+    $repairedStatus = (Invoke-RunSealJson -RunArgs @("setup", "windows-sandbox", "--status", "--json", "--cwd", $workspace)).Json
+    if ($repairedStatus.requires_setup) {
+        throw "sandboxed exec returned without repairing stale setup"
+    }
 
-    Write-Host "Repairing stale setup"
+    Write-Host "Checking setup action after automatic repair"
     if ($AllowElevation -and $staleStatus.elevated -eq $false) {
         $elevated = Invoke-Setup -Elevate
         if ($elevated.Json.status -eq "elevation_requested") {

@@ -19,7 +19,8 @@ Usage: runseal setup windows-sandbox [--cwd <path>] [--status] [--json] [--eleva
 Windows sandbox setup:
   Use --elevate to request UAC when first install cannot run in the current shell.
   Later repairs reuse the sandbox broker when available.
-  Sandboxed exec fails closed when setup is missing or stale.
+  Sandboxed exec repairs missing or stale setup through the installed broker.
+  Without an installed broker, sandboxed exec fails closed.
   --status reports setup readiness without changing setup state.
   --json reports setup failures as structured JSON.
 ";
