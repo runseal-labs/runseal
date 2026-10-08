@@ -98,6 +98,50 @@ impl Output {
         Ok(())
     }
 
+    pub(super) fn write_final(
+        &mut self,
+        mut bytes: &[u8],
+        deadline: Instant,
+    ) -> Result<(), RunSealError> {
+        if let Some((code, reason)) = self.failure {
+            return Err(RunSealError::new(code, reason));
+        }
+        let mut progress = Instant::now();
+        #[cfg(windows)]
+        let mut console_progress = self.console.as_ref().map(ConsoleOutputWorker::progress);
+        while !bytes.is_empty() {
+            match self.write_some(bytes) {
+                Ok(0) => return self.fail("CLIENT_DISCONNECTED", "output disconnected"),
+                Ok(count) => {
+                    bytes = &bytes[count..];
+                    progress = Instant::now();
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        return self.fail(
+                            "EXECUTION_CLEANUP_FAILED",
+                            "final output cleanup deadline exceeded",
+                        );
+                    }
+                    #[cfg(windows)]
+                    if let Some(console) = &self.console {
+                        let current = Some(console.progress());
+                        if current != console_progress {
+                            console_progress = current;
+                            progress = Instant::now();
+                        }
+                    }
+                    if progress.elapsed() >= crate::limits::deployment().backpressure_timeout() {
+                        return self.fail("CLIENT_BACKPRESSURE", "final output stalled");
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(_) => return self.fail("CLIENT_DISCONNECTED", "output disconnected"),
+            }
+        }
+        Ok(())
+    }
+
     fn fail(&mut self, code: &'static str, reason: &'static str) -> Result<(), RunSealError> {
         self.failure = Some((code, reason));
         Err(RunSealError::new(code, reason))

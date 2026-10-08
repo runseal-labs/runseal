@@ -39,6 +39,16 @@ fn failure_exit(error: &RunSealError) -> i32 {
     }
 }
 
+fn finish_outputs(
+    stdout: &mut output::Output,
+    stderr: &mut output::Output,
+    deadline: std::time::Instant,
+) -> bool {
+    let stdout_result = stdout.finish(deadline);
+    let stderr_result = stderr.finish(deadline);
+    stdout_result.is_ok() && stderr_result.is_ok()
+}
+
 pub(crate) fn run(args: &[String]) -> Result<i32, String> {
     let control = crate::execution::ExecutionControl::default();
     let result = signals::SignalFrontend::new(control.clone()).and_then(|mut signals| {
@@ -181,7 +191,8 @@ fn run_inner(
         Ok(result) => result,
         Err(err) if request.events && err.terminal_event.is_some() => {
             let code = failure_exit(&err);
-            return Ok(if stdout.finish(control.begin_cleanup()).is_ok() {
+            let deadline = control.begin_cleanup();
+            return Ok(if finish_outputs(&mut stdout, &mut stderr, deadline) {
                 code
             } else {
                 125
@@ -197,18 +208,26 @@ fn run_inner(
                     format!("[runseal:{}] {}\n", err.code, err.reason),
                 )
             };
-            // The channel may be gone; never append a second diagnostic after a partial write.
-            if target.write(bytes.as_bytes()).is_err()
-                || target.finish(control.begin_cleanup()).is_err()
-            {
-                return Ok(125);
-            }
-            return Ok(code);
+            // Execution cleanup leaves the output workers alive until after the
+            // terminal record. Bypass cancellation polling for this final,
+            // bounded diagnostic write.
+            let deadline = control.begin_cleanup();
+            let _ = target.write_final(bytes.as_bytes(), deadline);
+            return Ok(if finish_outputs(&mut stdout, &mut stderr, deadline) {
+                code
+            } else {
+                125
+            });
         }
     };
 
     if request.events {
-        return Ok(0);
+        let deadline = control.begin_cleanup();
+        return Ok(if finish_outputs(&mut stdout, &mut stderr, deadline) {
+            0
+        } else {
+            125
+        });
     }
 
     if request.json {
@@ -221,19 +240,32 @@ fn run_inner(
             "stderr":{"encoding":"base64","data":format!("base64:{}",STANDARD.encode(&stderr_bytes)),"bytes":stderr_bytes.len(),"truncated":false}
         });
         if let Err(error) = stdout.write(format!("{result}\n").as_bytes()) {
-            let _ = stdout.finish(control.begin_cleanup());
-            return Ok(failure_exit(&error));
+            let code = failure_exit(&error);
+            let deadline = control.begin_cleanup();
+            return Ok(if finish_outputs(&mut stdout, &mut stderr, deadline) {
+                code
+            } else {
+                125
+            });
         }
-        if stdout.finish(control.begin_cleanup()).is_err() {
-            return Ok(125);
-        }
-        return Ok(0);
+        let deadline = control.begin_cleanup();
+        return Ok(if finish_outputs(&mut stdout, &mut stderr, deadline) {
+            0
+        } else {
+            125
+        });
     }
     let code = result["exit_code"]
         .as_i64()
         .ok_or_else(|| RunSealError::new("INTERNAL_ERROR", "execution result has no exit code"))?;
-    i32::try_from(code)
-        .map_err(|_| RunSealError::new("INTERNAL_ERROR", "execution exit code is out of range"))
+    let code = i32::try_from(code)
+        .map_err(|_| RunSealError::new("INTERNAL_ERROR", "execution exit code is out of range"))?;
+    let deadline = control.begin_cleanup();
+    Ok(if finish_outputs(&mut stdout, &mut stderr, deadline) {
+        code
+    } else {
+        125
+    })
 }
 
 struct Frontend<'a> {
@@ -320,8 +352,6 @@ impl crate::execution::ExecutionObserver for Frontend<'_> {
         let output_deadline =
             deadline.min(std::time::Instant::now() + std::time::Duration::from_secs(2));
         let signals = self.signals.finish(output_deadline);
-        let stdout = self.stdout.finish(output_deadline);
-        let stderr = self.stderr.finish(output_deadline);
         let input = self
             .input_reader
             .as_mut()
@@ -338,8 +368,6 @@ impl crate::execution::ExecutionObserver for Frontend<'_> {
             .and(signals)
             .and(terminal)
             .and(control)
-            .and(stdout)
-            .and(stderr)
             .map_err(|reason| RunSealError::new("EXECUTION_CLEANUP_FAILED", reason))
     }
 }
