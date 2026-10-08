@@ -153,6 +153,10 @@ impl ExecutionJournal {
         &self.audit_path
     }
 
+    pub(crate) fn is_admitted(&self) -> bool {
+        self.admitted
+    }
+
     fn envelope(&self, payload: &Value) -> Value {
         let mut event = self.binding.clone();
         if let (Some(object), Some(payload)) = (event.as_object_mut(), payload.as_object()) {
@@ -367,7 +371,7 @@ while True: pathlib.Path('heartbeat').write_text(str(time.monotonic())); time.sl
         journal
             .audit
             .as_mut()
-            .context("audit writer")?
+            .ok_or_else(|| anyhow::anyhow!("audit writer"))?
             .deny_writes_after(tmp.path(), 3)?;
         let mut events = Vec::new();
         let outcome = super::super::execute_prepared_with_events(request, journal, &mut |event| {

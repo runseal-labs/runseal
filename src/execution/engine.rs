@@ -249,7 +249,10 @@ fn execute_prepared_with_backend_and_timer<B: SandboxBackend + Send + Sync + 'st
             )),
         ),
     };
-    if !backend_entered && control.cause() == Some(super::TerminationCause::Timeout) {
+    if !backend_entered
+        && journal.is_admitted()
+        && control.cause() == Some(super::TerminationCause::Timeout)
+    {
         let limit = json!({
             "type":"execution.resource.limit_exceeded",
             "decision":"limit_exceeded",
