@@ -17,6 +17,18 @@ impl fmt::Display for SandboxCleanupError {
 }
 impl std::error::Error for SandboxCleanupError {}
 
+/// A definitive runner start failure: the runner reported that process creation
+/// failed before any execution range existed. It must stay a start failure rather
+/// than being rewritten into an unverified-cleanup result.
+#[derive(Debug)]
+pub struct SandboxSpawnFailed(pub String);
+impl fmt::Display for SandboxSpawnFailed {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+impl std::error::Error for SandboxSpawnFailed {}
+
 #[derive(Debug)]
 pub struct SandboxCaptureCleanupError {
     pub exit_code: Option<i32>,

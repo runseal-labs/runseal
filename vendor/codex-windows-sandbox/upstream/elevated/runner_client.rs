@@ -122,6 +122,9 @@ impl RunnerTransport {
                                 timed_out: payload.timed_out
                             }))
                         }
+                        Message::Error { payload } if payload.code == "spawn_failed" => {
+                            Err(anyhow::anyhow!(crate::SandboxSpawnFailed(payload.message)))
+                        }
                         _ => Err(anyhow::anyhow!("runner startup confirmation invalid")),
                     };
                 }
@@ -503,7 +506,10 @@ fn finish_runner_startup(
             if error
                 .downcast_ref::<crate::SandboxCaptureCleanupError>()
                 .is_some()
+                || error.downcast_ref::<crate::SandboxSpawnFailed>().is_some()
             {
+                // A definitive start failure or already-classified capture cleanup
+                // keeps its own meaning; do not rewrite it.
                 Err(error)
             } else if stopped && !spawn_request_sent {
                 // The runner was terminated and its exit verified before it

@@ -72,6 +72,11 @@ Local vendor patches:
   execution range was created, so a short timeout during sandbox preparation must
   not quarantine the shared binding. Guarded by the sandboxed short-timeout
   regression in `tests/execution_conformance.rs`.
+- Keep a runner `spawn_failed` report as a definitive start failure instead of
+  rewriting it into unverified cleanup. The runner never created a process range,
+  so the host reports a start failure with confirmed cleanup and must not
+  quarantine the shared binding. Guarded by the spawn-event regression in
+  `tests/execution_conformance.rs`.
 
 Prior non-public integrations may be used as pitfall evidence only after
 redaction. Land those lessons as public acceptance criteria, adapter behavior,

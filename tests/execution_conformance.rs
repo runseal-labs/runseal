@@ -3760,13 +3760,13 @@ fn windows_unread_stream_input_does_not_block_cancellation() -> Result<()> {
     let execution_id = receipt["result"]["execution_id"]
         .as_str()
         .context("execution id")?;
-    receive_bytes(&client, b"READY\r\n")?;
+    receive_bytes_with_timeout(&client, b"READY\r\n", Duration::from_secs(10))?;
     client.send(2,"writeExecutionInput",json!({"execution_id":execution_id,"stream":"stdin","encoding":"base64","data":format!("base64:{}",STANDARD.encode(vec![0u8;64*1024]))}))?;
     assert_eq!(
         client.next(Duration::from_secs(2))?["result"]["accepted_bytes"],
         64 * 1024
     );
-    receive_bytes(&client, b"INPUT_STARTED\r\n")?;
+    receive_bytes_with_timeout(&client, b"INPUT_STARTED\r\n", Duration::from_secs(10))?;
     let mut saw_backpressure = false;
     for id in 3..67 {
         client.send(id,"writeExecutionInput",json!({"execution_id":execution_id,"stream":"stdin","encoding":"base64","data":format!("base64:{}",STANDARD.encode(vec![0u8;64*1024]))}))?;

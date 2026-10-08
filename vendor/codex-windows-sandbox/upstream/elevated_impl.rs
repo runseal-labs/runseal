@@ -257,12 +257,27 @@ mod windows_impl {
         input_writer: &mut InputWriter,
         deadline: std::time::Instant,
     ) -> Result<(i32, bool)> {
+        let spawn_failed = result
+            .as_ref()
+            .err()
+            .is_some_and(|error| error.downcast_ref::<crate::SandboxSpawnFailed>().is_some());
         let failure = capture_cleanup_failure(&result);
-        let input_result = input_writer
-            .finish(deadline)
-            .map_err(|_| anyhow::anyhow!(capture_cleanup_failure(&result)))?;
+        let input_result = input_writer.finish(deadline);
+        // A definitive runner start failure means no execution range existed, so
+        // a local input-worker teardown must not replace it with cleanup failure.
+        if !spawn_failed {
+            input_result
+                .as_ref()
+                .map_err(|_| anyhow::anyhow!(capture_cleanup_failure(&result)))?;
+        }
         // Local I/O completion cannot replace a missing or failed cleanup frame.
-        let (exit_code, timed_out) = result.map_err(|_| anyhow::anyhow!(failure))?;
+        let (exit_code, timed_out) = result.map_err(|error| {
+            if spawn_failed {
+                error
+            } else {
+                anyhow::anyhow!(failure)
+            }
+        })?;
         // A child may exit before consuming stdin. Its confirmed exit remains real.
         if let Err(error) = input_result
             && !input_transport_closed(&error)
@@ -659,6 +674,9 @@ mod windows_impl {
                     Message::Error { payload } => {
                         if payload.code == "cleanup_failed" {
                             break Err(anyhow::anyhow!(crate::SandboxCleanupError));
+                        }
+                        if payload.code == "spawn_failed" {
+                            break Err(anyhow::anyhow!(crate::SandboxSpawnFailed(payload.message)));
                         }
                         break Err(anyhow::anyhow!("runner error: {}", payload.message));
                     }
