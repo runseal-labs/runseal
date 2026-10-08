@@ -5169,7 +5169,7 @@ fn cli_stalled_console_output_for_policy(policy: &str) -> Result<()> {
         let child_code = format!(
             "import os,pathlib,subprocess,sys,time; child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(120)']); pathlib.Path('console.ready.tmp').write_text(str(os.getpid())+' '+str(child.pid)); pathlib.Path('console.ready.tmp').replace('console.ready')\nwhile not pathlib.Path('console.go').exists(): time.sleep(0.005)\nwhile True: os.write({stream},b'Z'*65536)"
         );
-        let driver_code = "import json,pathlib,subprocess,sys; child=subprocess.Popen(sys.argv[1:]); code=child.wait(); path=pathlib.Path('console.done.tmp'); path.write_text(json.dumps({'pid':child.pid,'exit':code})); path.replace('console.done'); sys.exit(0)";
+        let driver_code = "import json,pathlib,subprocess,sys; child=subprocess.Popen(sys.argv[1:]); started=pathlib.Path('console.cli.tmp'); started.write_text(str(child.pid)); started.replace('console.cli'); code=child.wait(); path=pathlib.Path('console.done.tmp'); path.write_text(json.dumps({'pid':child.pid,'exit':code})); path.replace('console.done'); sys.exit(0)";
         let command = vec![
             python()?,
             "-u".into(),
@@ -5225,7 +5225,19 @@ fn cli_stalled_console_output_for_policy(policy: &str) -> Result<()> {
         let deadline = Instant::now() + Duration::from_secs(30);
         while !tmp.path().join("console.done").exists() {
             if Instant::now() >= deadline {
-                anyhow::bail!("stalled Console CLI cleanup did not finish for {policy}");
+                let driver_exited = driver.try_wait()?.is_some();
+                let command_running = std::fs::read_to_string(tmp.path().join("console.cli"))
+                    .ok()
+                    .and_then(|pid| pid.parse::<u32>().ok())
+                    .is_some_and(|pid| process_present(pid).unwrap_or(false));
+                let sandbox_processes_running = pids
+                    .iter()
+                    .filter(|pid| process_present(**pid).unwrap_or(false))
+                    .count();
+                let terminals = read_console_terminal_summary(tmp.path());
+                anyhow::bail!(
+                    "stalled Console CLI cleanup did not finish for {policy} (driver_exited={driver_exited}, command_running={command_running}, sandbox_processes_running={sandbox_processes_running}, terminal={terminals})"
+                );
             }
             std::thread::sleep(Duration::from_millis(5));
         }
@@ -5327,6 +5339,48 @@ fn cli_stalled_console_output_for_policy(policy: &str) -> Result<()> {
         assert!(!process_present(peer_pid)?);
     }
     Ok(())
+}
+
+#[cfg(windows)]
+fn read_console_terminal_summary(workspace: &std::path::Path) -> String {
+    let Ok(files) = std::fs::read_dir(workspace.join(".runseal/audit")) else {
+        return "unavailable".to_string();
+    };
+    let mut results = Vec::new();
+    for file in files.flatten() {
+        let Ok(contents) = std::fs::read_to_string(file.path()) else {
+            continue;
+        };
+        for event in contents
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        {
+            if matches!(
+                event["type"].as_str(),
+                Some("execution.finished" | "execution.failed")
+            ) {
+                results.push(format!(
+                    "{}:{}:{}",
+                    event["result"]["termination_reason"]
+                        .as_str()
+                        .unwrap_or("unknown"),
+                    event["result"]["error"]["code"].as_str().unwrap_or("none"),
+                    event["result"]["cleanup_complete"]
+                        .as_bool()
+                        .map_or("unknown", |complete| if complete {
+                            "true"
+                        } else {
+                            "false"
+                        })
+                ));
+            }
+        }
+    }
+    if results.is_empty() {
+        "none".to_string()
+    } else {
+        results.join(",")
+    }
 }
 
 #[cfg(windows)]

@@ -58,9 +58,18 @@ jobs:
         shell: pwsh
         run: .\scripts\windows-smoke.ps1
 
+      - name: Verify stalled Windows Console cleanup first
+        if: runner.os == 'Windows'
+        run: cargo test --test execution_conformance sandboxed_stalled_console_output_cleans_owned_range_and_preserves_peer -- --include-ignored --exact
+
       - name: Run prepared Windows conformance
         if: runner.os == 'Windows'
         run: cargo test --all-targets -- --include-ignored
+
+      - name: Run third-party Windows examples
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: .\scripts\windows-examples-smoke.ps1
 
       - name: Run tests
         if: runner.os != 'Windows'
