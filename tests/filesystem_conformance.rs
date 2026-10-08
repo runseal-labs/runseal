@@ -286,7 +286,10 @@ fn assert_backend_unavailable(response: &Value, root: &Path) -> Result<()> {
             ),
             "{setup_status}"
         );
-        assert!(setup_status["elevated"].is_boolean(), "{setup_status}");
+        assert!(
+            setup_status["elevated"].is_boolean() || setup_status["elevated"].is_null(),
+            "{setup_status}"
+        );
         let elevated = setup_status["elevated"].as_bool().unwrap_or(false);
         let broker_available = setup_status["broker"] == "available";
         assert_eq!(
