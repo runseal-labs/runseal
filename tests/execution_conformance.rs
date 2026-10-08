@@ -1100,9 +1100,12 @@ fn configured_output_cap_matches_effective_policy_hash_and_real_execution_bounda
         }
         // Check actual target/output behavior before policy fields, so the baseline
         // must demonstrate enforcement failure rather than only a changed JSON field.
-        for (_, total, effective, _, _, _, _, bytes, terminal, _, gone) in &observations {
-            assert!(*gone);
-            assert_eq!(terminal["result"]["cleanup_complete"], true);
+        for (index, total, effective, _, _, _, _, bytes, terminal, _, gone) in &observations {
+            assert!(*gone, "case {index}: target process must be gone");
+            assert_eq!(
+                terminal["result"]["cleanup_complete"], true,
+                "case {index} (output={total}, effective={effective}): {terminal}"
+            );
             if total > effective {
                 assert_eq!(terminal["type"], "execution.failed", "{terminal}");
                 assert_eq!(terminal["result"]["error"]["code"], "OUTPUT_LIMIT_EXCEEDED");
