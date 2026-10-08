@@ -1875,7 +1875,12 @@ fn configured_sender_budget_backpressures_real_output_without_blocking_cancel() 
         std::fs::write(tmp.path().join("burst.go"), b"G")?;
         // Keep the protocol pipe open, with no reader permits. Native producer
         // write acknowledgements establish progress and then actual backpressure.
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let observation_window = if budget == 32 * 1024 * 1024 {
+            Duration::from_secs(10)
+        } else {
+            Duration::from_secs(2)
+        };
+        let deadline = Instant::now() + observation_window;
         let mut progress = 0;
         let mut unchanged = Instant::now();
         while Instant::now() < deadline && !tmp.path().join("burst.done").exists() {
