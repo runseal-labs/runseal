@@ -637,6 +637,7 @@ pub(crate) fn spawn_runner_transport(
             SetErrorMode(previous_error_mode);
         }
         if let Some(error) = spawn_error {
+            report_runner_test_diagnostic(&format!("logon_win32_error_{error}"));
             return Err(std::io::Error::from_raw_os_error(error as i32).into());
         }
         Ok(pi)

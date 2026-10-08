@@ -211,7 +211,7 @@ function Get-ExecutionFailureSummary {
     $data = $Run.Json.error.data
     $executionIdPresent = -not [string]::IsNullOrWhiteSpace($data.execution_id)
     $diagnostics = @($Run.Stderr -split "`r?`n" | Where-Object {
-        $_ -match '^runseal-test-diagnostic: (windows|gate|runner)=[a-z_]+$'
+        $_ -match '^runseal-test-diagnostic: (windows|gate|runner)=[a-z0-9_]+$'
     }) -join ";"
     return "code=$($data.code), cleanup_complete=$($data.cleanup_complete), execution_id_present=$executionIdPresent, exit_code=$($data.exit_code), requested_termination_reason=$($data.requested_termination_reason), timeout_ms=$($data.timeout_ms), stdout_bytes=$($data.stdout_bytes), stderr_bytes=$($data.stderr_bytes), terminal_bytes=$($data.terminal_bytes), control_bytes=$($data.control_bytes), diagnostics=$diagnostics"
 }
