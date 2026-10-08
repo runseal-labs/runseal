@@ -282,6 +282,7 @@ fn send_spawn_request(
     pipe: File,
     request: SpawnRequest,
     budget: &mut PreparationBudget,
+    request_sent: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<File> {
     budget.check()?;
     let cancellation = budget.cancellation.clone();
@@ -308,6 +309,7 @@ fn send_spawn_request(
                     },
                 },
             )?;
+            request_sent.store(true, std::sync::atomic::Ordering::Release);
             Ok(Some(pipe))
         })?;
     wait_preparation_worker(worker, budget)?
@@ -488,6 +490,7 @@ fn finish_runner_startup(
     mut owner: RunnerProcessOwner,
     budget: &mut PreparationBudget,
     startup: Result<RunnerTransport>,
+    spawn_request_sent: bool,
 ) -> Result<RunnerTransport> {
     match startup {
         Ok(transport) => {
@@ -495,13 +498,19 @@ fn finish_runner_startup(
             Ok(transport)
         }
         Err(error) => {
-            let _ = owner.stop(budget.cleanup_deadline());
+            let stopped = owner.stop(budget.cleanup_deadline()).is_ok();
             // Runner exit alone does not verify descendants or shared resources.
             if error
                 .downcast_ref::<crate::SandboxCaptureCleanupError>()
                 .is_some()
             {
                 Err(error)
+            } else if stopped && !spawn_request_sent {
+                // The runner was terminated and its exit verified before it
+                // received any spawn request, so no execution range existed.
+                Err(anyhow::anyhow!(
+                    "runner startup cancelled before the execution range was created"
+                ))
             } else {
                 Err(anyhow::anyhow!(crate::SandboxCleanupError))
             }
@@ -530,7 +539,14 @@ pub(crate) fn spawn_runner_transport(
             .transpose()?,
     };
     let mut budget = PreparationBudget::new(cancellation, execution_deadline);
-    budget.check()?;
+    if budget.check().is_err() {
+        // No runner exists yet, so there is no execution range to verify. A
+        // cancelled or expired preparation is a clean pre-start abort, not an
+        // unverified cleanup.
+        return Err(anyhow::anyhow!(
+            "runner startup cancelled before the execution range was created"
+        ));
+    }
     let (pipe_in_name, pipe_out_name) = pipe_pair();
     let pipe_write = unsafe {
         File::from_raw_handle(create_named_pipe(
@@ -607,6 +623,7 @@ pub(crate) fn spawn_runner_transport(
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!(crate::SandboxCleanupError))?
         .as_raw_handle() as HANDLE;
+    let spawn_request_sent = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let startup = (|| -> Result<RunnerTransport> {
         resume_runner_after_security_check(
             runner_process,
@@ -616,7 +633,12 @@ pub(crate) fn spawn_runner_transport(
         )?;
         connect_pipe_with_budget(&pipe_write, expected_runner_pid, &mut budget)?;
         connect_pipe_with_budget(&pipe_read, expected_runner_pid, &mut budget)?;
-        let pipe_write = send_spawn_request(pipe_write, spawn_request, &mut budget)?;
+        let pipe_write = send_spawn_request(
+            pipe_write,
+            spawn_request,
+            &mut budget,
+            spawn_request_sent.clone(),
+        )?;
         let mut transport = RunnerTransport {
             pipe_write,
             pipe_read,
@@ -625,7 +647,12 @@ pub(crate) fn spawn_runner_transport(
         Ok(transport)
     })();
     drop(runner_thread);
-    finish_runner_startup(owner, &mut budget, startup)
+    finish_runner_startup(
+        owner,
+        &mut budget,
+        startup,
+        spawn_request_sent.load(std::sync::atomic::Ordering::Acquire),
+    )
 }
 
 #[cfg(test)]

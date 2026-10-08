@@ -3511,6 +3511,66 @@ fn windows_timeout_clears_descendant_range_and_retains_timeout_cause() -> Result
 
 #[cfg(windows)]
 #[test]
+fn windows_preparation_timeout_aborts_cleanly_without_quarantining_the_binding() -> Result<()> {
+    let _guard = windows_test_gate();
+    let tmp = TempDir::new()?;
+    let mut client = Client::spawn("service")?;
+    // The request deadline expires while the Windows sandbox is still being
+    // prepared, before the runner receives any spawn request. That is a clean
+    // pre-start abort: the terminal must keep the timeout cause and confirmed
+    // cleanup, and the shared binding must remain admissible.
+    client.send(
+        1,
+        "execute",
+        json!({"command":[python()?,"-c","import time; time.sleep(60)"],"cwd":tmp.path(),"policy":"workspace-write","network":"disabled","timeout_ms":100}),
+    )?;
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut receipt = None;
+    let terminal = loop {
+        let message = client.next(deadline.saturating_duration_since(Instant::now()))?;
+        if message["id"] == 1 {
+            receipt = Some(message["result"].clone());
+        }
+        if message["params"]["type"] == "execution.failed" {
+            break message["params"]["result"].clone();
+        }
+    };
+    assert_eq!(terminal["error"]["code"], "EXECUTION_TIMEOUT", "{terminal}");
+    assert_eq!(terminal["termination_reason"], "timeout", "{terminal}");
+    assert_eq!(
+        terminal["requested_termination_reason"], "timeout",
+        "{terminal}"
+    );
+    assert_eq!(terminal["cleanup_complete"], true, "{terminal}");
+    assert_eq!(terminal["exit_code"], Value::Null, "{terminal}");
+    if let Some(receipt) = receipt {
+        assert_eq!(receipt["status"], "preparing", "{receipt}");
+    }
+    // A following sandboxed execution in the same service must still admit and
+    // complete; a false cleanup failure would have quarantined this binding.
+    client.send(
+        2,
+        "execute",
+        json!({"command":[python()?,"-c","print('recovered')"],"cwd":tmp.path(),"policy":"workspace-write","network":"disabled","timeout_ms":20000}),
+    )?;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let recovered = loop {
+        let message = client.next(deadline.saturating_duration_since(Instant::now()))?;
+        if message["params"]["type"] == "execution.finished" {
+            break message["params"]["result"].clone();
+        }
+        if message["params"]["type"] == "execution.failed" {
+            anyhow::bail!("binding stayed unusable after the timeout: {message}");
+        }
+    };
+    assert_eq!(recovered["status"], "finished", "{recovered}");
+    assert_eq!(recovered["exit_code"], 0, "{recovered}");
+    assert_eq!(recovered["cleanup_complete"], true, "{recovered}");
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
 fn windows_spawn_failure_keeps_raw_backend_diagnostics_out_of_audit() -> Result<()> {
     let _guard = windows_test_gate();
     let tmp = TempDir::new()?;

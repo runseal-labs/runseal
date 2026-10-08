@@ -828,3 +828,14 @@ the pre-launch setup refusal must report `EXECUTION_FAILED_TO_START` with
 policy reservation, and must leave the binding admissible. Treating that
 pre-launch error as unverifiable cleanup quarantines the machine binding, fails
 the case, and blocks every later sandboxed execution.
+
+`windows_preparation_timeout_aborts_cleanly_without_quarantining_the_binding` in
+`tests/execution_conformance.rs` runs a real service with `timeout_ms:100` on a
+Windows sandboxed policy. The deadline expires while the machine sandbox home is
+still being prepared, before the vendored runner receives any spawn request. The
+terminal must stay `EXECUTION_TIMEOUT` with `termination_reason:timeout`,
+`requested_termination_reason:timeout`, and `cleanup_complete:true`; a following
+sandboxed execution in the same service must admit and finish. The equivalent case
+is `adv.process.orphan-child-after-cancel.v1`. Classifying the cancelled
+preparation as unverified cleanup instead quarantines the shared binding and
+blocks every later sandboxed execution until an explicit repair.

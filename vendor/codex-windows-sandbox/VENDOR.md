@@ -66,6 +66,12 @@ Local vendor patches:
   nested inside the on-disk state file; guarded by upstream identity tests.
 - Replace upstream workspace/git dependency inheritance with local trimmed
   vendor crates; guarded by `tests/vendor_boundary.rs`.
+- Classify a cancellation or execution-deadline expiry that happens before the
+  runner receives any spawn request as a clean pre-start abort. No runner was
+  launched, or the launched runner is terminated and its exit verified, and no
+  execution range was created, so a short timeout during sandbox preparation must
+  not quarantine the shared binding. Guarded by the sandboxed short-timeout
+  regression in `tests/execution_conformance.rs`.
 
 Prior non-public integrations may be used as pitfall evidence only after
 redaction. Land those lessons as public acceptance criteria, adapter behavior,
