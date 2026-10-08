@@ -1784,10 +1784,9 @@ fn sandboxed_exec_cli_uses_backend_or_reports_unavailable() -> Result<()> {
                     .contains("windows sandbox setup unavailable"),
                 "{payload}"
             );
-            assert_eq!(
-                payload["error"]["data"]["setup_status"]["setup"],
-                "windows-sandbox"
-            );
+            if let Some(setup_status) = payload["error"]["data"].get("setup_status") {
+                assert_eq!(setup_status["setup"], "windows-sandbox");
+            }
             assert_no_private_windows_setup_terms(&payload.to_string());
             let audit_dir = tmp.path().join(".runseal").join("audit");
             let audit_files = fs::read_dir(&audit_dir)

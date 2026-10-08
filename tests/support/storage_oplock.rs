@@ -154,7 +154,7 @@ fn native_storage_admission_keeps_controls_live_and_disconnect_prevents_late_lau
     use windows_sys::Win32::System::Threading::{
         GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
     };
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     for mode in ["rpc", "service"] {
         for disconnect in [false, true] {
             let tmp = TempDir::new()?;
@@ -356,7 +356,7 @@ fn native_storage_admission_keeps_controls_live_and_disconnect_prevents_late_lau
 #[test]
 fn configured_cleanup_deadline_controls_public_blocked_file_admission_on_disconnect() -> Result<()>
 {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     let mut elapsed = Vec::new();
     for mode in ["rpc", "service"] {
         for milliseconds in [500u64, 1500] {

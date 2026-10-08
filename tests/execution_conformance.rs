@@ -7,24 +7,16 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
-#[cfg(windows)]
-fn windows_test_gate() -> std::sync::MutexGuard<'static, ()> {
+fn process_test_gate() -> std::sync::MutexGuard<'static, ()> {
     static GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
     GATE.lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-#[cfg(not(windows))]
-struct NoopWindowsTestGuard;
-
-#[cfg(not(windows))]
-fn windows_test_gate() -> NoopWindowsTestGuard {
-    NoopWindowsTestGuard
 }
 
 #[test]
 fn configured_active_execution_limit_refuses_an_extra_target_while_controls_stay_live() -> Result<()>
 {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     for mode in ["rpc", "service"] {
         let tmp = TempDir::new()?;
         let configured = std::ffi::OsString::from("2");
@@ -89,7 +81,7 @@ fn configured_active_execution_limit_refuses_an_extra_target_while_controls_stay
             "a rejected target must not execute"
         );
         for ((_, pid), terminal) in active.iter().zip(terminals) {
-            assert_eq!(terminal["cleanup_complete"], true);
+            assert_eq!(terminal["cleanup_complete"], true, "{terminal}");
             assert!(!process_present(*pid)?);
         }
     }
@@ -98,7 +90,7 @@ fn configured_active_execution_limit_refuses_an_extra_target_while_controls_stay
 
 #[test]
 fn configured_replay_budget_changes_retention_without_changing_execution_policy() -> Result<()> {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     let mut results = Vec::new();
     let tmp = TempDir::new()?;
     for budget in ["65536", "1048576"] {
@@ -186,7 +178,7 @@ fn configured_replay_budget_changes_retention_without_changing_execution_policy(
 #[test]
 fn configured_connection_replay_budget_evicts_old_history_without_erasing_terminal_or_audit()
 -> Result<()> {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     let tmp = TempDir::new()?;
     for connection in ["1048576", "8388608"] {
         let mut client = Client::spawn_with_env_values(
@@ -285,7 +277,7 @@ fn configured_connection_replay_budget_evicts_old_history_without_erasing_termin
 #[test]
 fn configured_summary_and_audit_retention_preserves_active_targets_and_durable_terminals()
 -> Result<()> {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     let tmp = TempDir::new()?;
     for (count_limit, summary_bytes, audit_bytes) in [
         ("2", "8388608", "8388608"),
@@ -428,7 +420,7 @@ fn configured_summary_and_audit_retention_preserves_active_targets_and_durable_t
 
 #[test]
 fn configured_chunks_refuse_one_extra_byte_and_preserve_binary_output_offsets() -> Result<()> {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     let tmp = TempDir::new()?;
     let mut modes = vec![false];
     if cfg!(windows) {
@@ -561,7 +553,7 @@ fn configured_chunks_refuse_one_extra_byte_and_preserve_binary_output_offsets() 
 
 #[test]
 fn configured_pending_budget_refuses_unread_input_then_drains_every_accepted_byte() -> Result<()> {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     for pending in ["8192", "262144"] {
         let tmp = TempDir::new()?;
         let mut client = Client::spawn_with_env_values(
@@ -638,7 +630,7 @@ fn configured_pending_budget_refuses_unread_input_then_drains_every_accepted_byt
 #[cfg(windows)]
 #[test]
 fn tiny_input_writes_preserve_binary_order_eof_and_backpressure_on_native_streams() -> Result<()> {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     for control in [false, true] {
         let tmp = TempDir::new()?;
         let mut client = Client::spawn_with_env_values(
@@ -788,7 +780,7 @@ fn tiny_input_writes_preserve_binary_order_eof_and_backpressure_on_native_stream
 #[test]
 fn configured_rpc_frame_boundary_drains_oversize_without_starting_target_or_stopping_peer()
 -> Result<()> {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     for mode in ["rpc", "service"] {
         let tmp = TempDir::new()?;
         let mut client = Client::spawn_with_env_values(
@@ -867,7 +859,7 @@ fn configured_rpc_frame_boundary_drains_oversize_without_starting_target_or_stop
 
 #[test]
 fn configured_frame_snapshot_retains_newest_records_and_keeps_connection_live() -> Result<()> {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     let tmp = TempDir::new()?;
     for frame_bytes in ["131072", "1048576"] {
         let mut client = Client::spawn_with_env_values(
@@ -926,7 +918,7 @@ fn configured_frame_snapshot_retains_newest_records_and_keeps_connection_live() 
 #[test]
 fn configured_outgoing_frame_counts_newline_and_cleans_live_target_on_unrecoverable_response()
 -> Result<()> {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     let tmp = TempDir::new()?;
     let mut client = Client::spawn_with_env_values(
         "service",
@@ -1015,7 +1007,7 @@ fn configured_outgoing_frame_counts_newline_and_cleans_live_target_on_unrecovera
 fn configured_output_cap_matches_effective_policy_hash_and_real_execution_boundaries() -> Result<()>
 {
     use sha2::{Digest, Sha256};
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     let tmp = TempDir::new()?;
     let cases = [
         ("8192", None, 8192, 8192),
@@ -1193,7 +1185,7 @@ fn configured_output_cap_matches_effective_policy_hash_and_real_execution_bounda
 #[test]
 fn configured_output_cap_plain_cli_preserves_child_exit_or_reports_resource_failure() -> Result<()>
 {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     for deployment in ["8192", "16384"] {
         let tmp = TempDir::new()?;
         let explained = Command::new(env!("CARGO_BIN_EXE_runseal"))
@@ -1230,7 +1222,7 @@ fn configured_output_cap_plain_cli_preserves_child_exit_or_reports_resource_fail
 #[cfg(windows)]
 #[test]
 fn configured_output_cap_counts_native_control_and_terminal_streams() -> Result<()> {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     for (pty, deployment, exceeded) in [
         (false, "8192", true),
         (false, "8193", false),
@@ -1320,7 +1312,7 @@ fn configured_output_cap_counts_native_control_and_terminal_streams() -> Result<
 fn configured_backpressure_grace_cleans_unread_rpc_output_and_keeps_idle_connection_live()
 -> Result<()> {
     use std::io::Read;
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     let mut hashes = Vec::new();
     for grace in [500, 8000] {
         let tmp = TempDir::new()?;
@@ -1523,7 +1515,7 @@ fn preparing_timeout_commits_before_blocked_native_receipt_and_never_launches_af
     use std::io::Read;
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::System::Pipes::PeekNamedPipe;
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     for mode in ["rpc", "service"] {
         let tmp = TempDir::new()?;
         let mut environment: std::collections::HashMap<String, String> = std::env::vars().collect();
@@ -1796,7 +1788,7 @@ fn preparing_timeout_commits_before_blocked_native_receipt_and_never_launches_af
 #[test]
 fn configured_sender_budget_backpressures_real_output_without_blocking_cancel() -> Result<()> {
     use std::io::Read;
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     let mut hashes = Vec::new();
     for budget in [5 * 1024 * 1024, 32 * 1024 * 1024] {
         let tmp = TempDir::new()?;
@@ -2006,7 +1998,7 @@ fn configured_sender_budget_backpressures_real_output_without_blocking_cancel() 
 #[test]
 fn cli_console_cancellation_cleans_range_and_preserves_peer_in_each_output_mode() -> Result<()> {
     use std::io::Read;
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     let driver_code = r#"
 import base64,ctypes,json,pathlib,subprocess,sys,time
 from ctypes import wintypes as w
@@ -2202,7 +2194,7 @@ while True: time.sleep(.01)
 #[test]
 fn partial_cli_json_delivery_does_not_retry_or_append_an_error_frame() -> Result<()> {
     use std::io::Read;
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     for grace in [5000, 500] {
         let tmp = TempDir::new()?;
         let command=vec![
@@ -2492,7 +2484,7 @@ fn sandboxed_workspace_cannot_cover_protected_execution_state() -> Result<()> {
     use std::ffi::OsString;
     use std::os::windows::ffi::OsStringExt;
     use windows_sys::Win32::UI::Shell::{FOLDERID_ProgramData, SHGetKnownFolderPath};
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     let mut pointer = std::ptr::null_mut();
     let status = unsafe {
         SHGetKnownFolderPath(&FOLDERID_ProgramData, 0, std::ptr::null_mut(), &mut pointer)
@@ -2581,7 +2573,7 @@ fn sandboxed_workspace_cannot_cover_protected_execution_state() -> Result<()> {
 #[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn cross_process_policy_gate_survives_caller_appdata_override_and_accepts_after_drain() -> Result<()>
 {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     let first = TempDir::new()?;
     let second = TempDir::new()?;
     let alternate_appdata = TempDir::new()?;
@@ -2720,7 +2712,7 @@ impl Drop for Client {
 #[cfg(windows)]
 #[test]
 fn nul_in_argv_and_environment_is_rejected_before_admission() -> Result<()> {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     let tmp = TempDir::new()?;
     let marker = tmp.path().join("started");
     let base = json!({"command":[python()?,"-c","import pathlib,sys; pathlib.Path(sys.argv[1]).write_text('started')",marker],"cwd":tmp.path(),"policy":"danger-full-access"});
@@ -2843,7 +2835,7 @@ fn wait_process_exit_unix(pid: u32) -> Result<()> {
 #[cfg(unix)]
 #[test]
 fn portable_local_execution_cleans_process_groups_on_exit_and_cancel() -> Result<()> {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     for cancel in [false, true] {
         let tmp = TempDir::new()?;
         let mut client = Client::spawn("service")?;
@@ -2918,7 +2910,7 @@ fn portable_local_execution_cleans_process_groups_on_exit_and_cancel() -> Result
 
 #[test]
 fn execution_capability_profiles_match_live_supported_and_rejected_behavior() -> Result<()> {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     let tmp = TempDir::new()?;
     let mut client = Client::spawn("service")?;
     client.send(1, "getCapabilities", json!({}))?;
@@ -3035,7 +3027,7 @@ fn execution_capability_profiles_match_live_supported_and_rejected_behavior() ->
 }
 
 fn activity_query_and_cancel(mode: &str, policy: &str) -> Result<()> {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     let tmp = TempDir::new()?;
     let mut client = Client::spawn(mode)?;
     client.send(1,"execute",json!({"command":[python()?,"-u","-c","import time; print('READY',flush=True); time.sleep(60)"],"cwd":tmp.path(),"policy":policy,"stdin":{"mode":"empty"}}))?;
@@ -3103,7 +3095,7 @@ fn rpc_and_service_query_and_cancel_while_execution_is_running() -> Result<()> {
 #[test]
 #[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn windows_node_client_round_trips_inside_sandbox() -> Result<()> {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     let node = if let Ok(path) = std::env::var("RUNSEAL_TEST_NODE") {
         path
     } else {
@@ -3235,7 +3227,7 @@ fn windows_ac07_cancelling_execution_a_keeps_execution_b_live_and_bound() -> Res
 #[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn windows_environment_override_is_case_insensitive_for_local_and_sandbox_execution() -> Result<()>
 {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     for level in ["danger-full-access", "workspace-write"] {
         for (configured_key, requested_key) in [("PATH", "Path"), ("Path", "PATH")] {
             let tmp = TempDir::new()?;
@@ -3345,7 +3337,7 @@ fn unsubscribe_discards_already_queued_notifications_before_its_receipt() -> Res
 
 #[cfg(windows)]
 fn verify_paused_protocol_reader(cancel: bool, unsubscribe: bool) -> Result<()> {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     for policy in ["danger-full-access", "workspace-write"] {
         let tmp = TempDir::new()?;
         let mut host = Command::new(env!("CARGO_BIN_EXE_runseal"))
@@ -3565,7 +3557,7 @@ fn verify_paused_protocol_reader(cancel: bool, unsubscribe: bool) -> Result<()> 
 #[cfg(windows)]
 #[test]
 fn windows_local_host_death_clears_its_range_and_preserves_other_connection() -> Result<()> {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     let tmp = TempDir::new()?;
     let mut owner = Client::spawn("service")?;
     let mut peer = Client::spawn("service")?;
@@ -3638,7 +3630,7 @@ impl Drop for HeartbeatFixture {
 
 #[cfg(windows)]
 fn verify_natural_exit_and_cancel_range(policy: &str) -> Result<()> {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     for cancel in [false, true] {
         let tmp = TempDir::new()?;
         let mut client = Client::spawn("service")?;
@@ -3753,7 +3745,7 @@ fn verify_natural_exit_and_cancel_range(policy: &str) -> Result<()> {
 #[test]
 #[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn windows_timeout_clears_descendant_range_and_retains_timeout_cause() -> Result<()> {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     let tmp = TempDir::new()?;
     let mut client = Client::spawn("service")?;
     // This scenario needs a live descendant before the request deadline;
@@ -3797,7 +3789,7 @@ fn windows_timeout_clears_descendant_range_and_retains_timeout_cause() -> Result
 #[test]
 #[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn windows_preparation_timeout_aborts_cleanly_without_quarantining_the_binding() -> Result<()> {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     let tmp = TempDir::new()?;
     let mut client = Client::spawn("service")?;
     // The request deadline expires while the Windows sandbox is still being
@@ -3858,7 +3850,7 @@ fn windows_preparation_timeout_aborts_cleanly_without_quarantining_the_binding()
 #[test]
 #[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn windows_spawn_failure_keeps_raw_backend_diagnostics_out_of_audit() -> Result<()> {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     let tmp = TempDir::new()?;
     let mut client = Client::spawn("service")?;
     let argument_canary = "argument-secret-canary";
@@ -3893,7 +3885,7 @@ fn windows_spawn_failure_keeps_raw_backend_diagnostics_out_of_audit() -> Result<
 #[test]
 #[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn windows_output_limit_terminates_with_verified_cleanup_and_correct_cause() -> Result<()> {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     let tmp = TempDir::new()?;
     let mut client = Client::spawn("service")?;
     client.send(1,"execute",json!({"command":[python()?,"-u","-c","import os,time;\nwhile True: os.write(1,b'Z'*65536)"],"cwd":tmp.path(),"policy":{"version":"runseal.policy/v1","sandbox_level":"workspace-write","resources":{"max_output_bytes":131072}}}))?;
@@ -3952,7 +3944,7 @@ fn receive_bytes_with_timeout(client: &Client, expected: &[u8], timeout: Duratio
 }
 
 fn stream_round_trips(policy: &str) -> Result<()> {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     let tmp = TempDir::new()?;
     let mut client = Client::spawn("service")?;
     client.send(1,"execute", json!({"command":[python()?,"-u","-c",
@@ -4041,7 +4033,7 @@ fn windows_sandboxed_stream_stdin_three_round_trips_and_ordered_eof() -> Result<
 #[test]
 #[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn windows_unread_stream_input_does_not_block_cancellation() -> Result<()> {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     let tmp = TempDir::new()?;
     let mut client = Client::spawn("service")?;
     client.send(1,"execute",json!({"command":[python()?,"-u","-c","import sys,time; print('READY',flush=True); sys.stdin.buffer.read(1); print('INPUT_STARTED',flush=True); time.sleep(15)"],"cwd":tmp.path(),"policy":"workspace-write","stdin":{"mode":"stream"}}))?;
@@ -4094,7 +4086,7 @@ fn windows_unread_stream_input_does_not_block_cancellation() -> Result<()> {
 #[test]
 #[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn sandboxed_binary_bytes_file_and_empty_stdin_deliver_exact_bytes_then_eof() -> Result<()> {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     for (mode, size) in [("empty", 0), ("bytes", 64 * 1024), ("file", 192 * 1024)] {
         let tmp = TempDir::new()?;
         let expected: Vec<u8> = (0..size).map(|index| (index % 256) as u8).collect();
@@ -4151,7 +4143,7 @@ fn sandboxed_binary_bytes_file_and_empty_stdin_deliver_exact_bytes_then_eof() ->
 
 #[test]
 fn unsubscribe_replay_and_replacement_are_ordered_without_duplicate_delivery() -> Result<()> {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     let tmp = TempDir::new()?;
     let mut client = Client::spawn("service")?;
     client.send(1,"execute",json!({"command":[python()?,"-u","-c","import sys; out=sys.stdout.buffer; out.write(b'READY\\n'); out.flush();\nfor line in sys.stdin.buffer: out.write(line); out.flush()"],"cwd":tmp.path(),"policy":"danger-full-access","stdin":{"mode":"stream"}}))?;
@@ -4268,7 +4260,7 @@ fn unsubscribe_replay_and_replacement_are_ordered_without_duplicate_delivery() -
 
 #[test]
 fn evicted_history_is_reported_and_audit_queries_exclude_live_payloads() -> Result<()> {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     let tmp = TempDir::new()?;
     let mut client = Client::spawn("service")?;
     client.send(1,"execute",json!({"command":[python()?,"-u","-c","import sys; out=sys.stdout.buffer; out.write(b'READY\\n'); out.flush(); sys.stdin.buffer.readline(); out.write(b'replay-secret-canary'*120000); out.flush(); sys.stdin.buffer.read()"],"cwd":tmp.path(),"policy":"danger-full-access","stdin":{"mode":"stream"}}))?;
@@ -4377,7 +4369,7 @@ fn evicted_history_is_reported_and_audit_queries_exclude_live_payloads() -> Resu
 
 #[test]
 fn required_audit_failure_rejects_before_receipt_and_child_spawn() -> Result<()> {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     let tmp = TempDir::new()?;
     std::fs::create_dir(tmp.path().join(".runseal"))?;
     std::fs::write(tmp.path().join(".runseal/audit"), b"not a directory")?;
@@ -4407,7 +4399,7 @@ fn required_audit_failure_rejects_before_receipt_and_child_spawn() -> Result<()>
 #[test]
 #[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn live_event_sequence_and_unique_terminal_match_committed_audit() -> Result<()> {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     for (policy, cancel) in [
         ("danger-full-access", false),
         ("workspace-write", false),
@@ -4520,7 +4512,7 @@ fn live_event_sequence_and_unique_terminal_match_committed_audit() -> Result<()>
 #[test]
 #[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn dispose_session_waits_for_owned_range_and_runtime_cleanup_without_stopping_peer() -> Result<()> {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     for (mode, policy) in [
         ("service", "danger-full-access"),
         ("service", "workspace-write"),
@@ -4642,7 +4634,7 @@ fn dispose_session_waits_for_owned_range_and_runtime_cleanup_without_stopping_pe
 #[test]
 #[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn local_completion_drains_output_with_foreign_pipe_handles_without_stopping_peer() -> Result<()> {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     for stdin_mode in ["empty", "file"] {
         let tmp = TempDir::new()?;
         struct Peer(std::process::Child);
@@ -4713,7 +4705,7 @@ fn local_completion_drains_output_with_foreign_pipe_handles_without_stopping_pee
 #[test]
 #[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn started_event_requires_real_spawn_and_precedes_child_output() -> Result<()> {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     for policy in ["danger-full-access", "workspace-write"] {
         for launches in [false, true] {
             let tmp = TempDir::new()?;
@@ -4811,7 +4803,7 @@ fn local_pty_has_real_console_dimensions_and_merged_binary_events() -> Result<()
 
 #[cfg(windows)]
 fn pty_console_case(policy: &str) -> Result<()> {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     let tmp = TempDir::new()?;
     let code = "import os,sys; assert os.isatty(0) and os.isatty(1) and os.isatty(2); size=os.get_terminal_size(1); print('PTY_READY:%s:%s'%(size.columns,size.lines),flush=True); print('PTY_STDERR',file=sys.stderr,flush=True); line=sys.stdin.readline(); size=os.get_terminal_size(1); print('PTY_RESIZED:%s:%s'%(size.columns,size.lines),flush=True); print('PTY_ACK:'+line.strip(),flush=True)";
     let mut client = Client::spawn("service")?;
@@ -4931,7 +4923,7 @@ fn local_pty_interrupt_keeps_shell_and_peer_alive() -> Result<()> {
 #[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn cli_native_file_output_preserves_binary_streams_and_child_exit() -> Result<()> {
     use std::io::{Read, Seek};
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     for policy in ["danger-full-access", "workspace-write"] {
         let tmp = TempDir::new()?;
         let mut stdout = tempfile::tempfile()?;
@@ -5002,7 +4994,7 @@ fn cli_stalled_console_output_cleans_owned_range_and_preserves_peer() -> Result<
 #[cfg(windows)]
 fn cli_stalled_console_output_for_policy(policy: &str) -> Result<()> {
     use std::io::Read;
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     for (stream, timeout) in [1, 2]
         .into_iter()
         .flat_map(|stream| [false, true].map(move |timeout| (stream, timeout)))
@@ -5194,7 +5186,7 @@ fn cli_local_console_cleanup_deadline_bounds_delivery_after_native_exit() -> Res
 #[cfg(windows)]
 fn cli_console_paced_case(hold_until_consumed: bool) -> Result<()> {
     use std::io::Read;
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     let tmp = TempDir::new()?;
     let driver_code = r#"import ctypes,json,pathlib,subprocess,sys,threading,time
 k=ctypes.WinDLL('kernel32',use_last_error=True)
@@ -5397,7 +5389,7 @@ sys.exit(result.returncode)
 #[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn cli_console_output_preserves_unicode_without_changing_caller_code_page() -> Result<()> {
     use std::io::Read;
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     for policy in ["danger-full-access", "workspace-write"] {
         let tmp = TempDir::new()?;
         let driver_code = "import ctypes,json,pathlib,subprocess,sys; k=ctypes.WinDLL('kernel32',use_last_error=True); assert k.SetConsoleOutputCP(437); before=k.GetConsoleOutputCP(); result=subprocess.run(sys.argv[1:]); after=k.GetConsoleOutputCP(); pathlib.Path('console.result').write_text(json.dumps({'before':before,'after':after,'exit':result.returncode})); sys.exit(result.returncode)";
@@ -5529,7 +5521,7 @@ fn cli_console_output_preserves_unicode_without_changing_caller_code_page() -> R
 #[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn cli_pty_forwards_real_console_input_resize_and_restores_modes() -> Result<()> {
     use std::io::Read;
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     for policy in ["danger-full-access", "workspace-write"] {
         let tmp = TempDir::new()?;
         let child_code = "import os,pathlib,sys,time; assert all(os.isatty(fd) for fd in (0,1,2)); size=os.get_terminal_size(1); assert (size.columns,size.lines)==(97,27),size; print('FRONT_READY',flush=True); pathlib.Path('front.ready').write_text('ready'); line=sys.stdin.readline(); assert line.strip()=='hello界🙂'; print('FRONT_INPUT',flush=True); pathlib.Path('front.foreground').write_text('ready')\ntry:\n while True: time.sleep(0.02)\nexcept KeyboardInterrupt: print('FRONT_INTERRUPTED',flush=True)\npathlib.Path('front.interrupted').write_text('ready')\nwhile (os.get_terminal_size(1).columns,os.get_terminal_size(1).lines)!=(119,39): time.sleep(0.02)\nprint('FRONT_RESIZED',flush=True); pathlib.Path('front.resized').write_text('ready'); assert sys.stdin.readline().strip()=='quit'; sys.exit(7)";
@@ -5654,7 +5646,7 @@ fn cli_pty_forwards_real_console_input_resize_and_restores_modes() -> Result<()>
 #[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn cli_plain_console_inherit_delivers_unicode_and_stops_on_partial_input_exit() -> Result<()> {
     use std::io::Read;
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     for (policy, mode) in ["danger-full-access", "workspace-write"]
         .into_iter()
         .flat_map(|policy| {
@@ -5864,7 +5856,7 @@ fn cli_pty_input_eof_cancels_range_and_keeps_peer_alive() -> Result<()> {
             let _ = self.0.wait();
         }
     }
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     for policy in ["danger-full-access", "workspace-write"] {
         let tmp = TempDir::new()?;
         let mut peer = Client::spawn("service")?;
@@ -5965,7 +5957,7 @@ fn cli_pty_input_eof_cancels_range_and_keeps_peer_alive() -> Result<()> {
 
 #[cfg(windows)]
 fn pty_interrupt_case(policy: &str) -> Result<()> {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     let tmp = TempDir::new()?;
     let python = python()?;
     let cmd = std::path::PathBuf::from(std::env::var_os("SystemRoot").context("system root")?)
@@ -6150,7 +6142,7 @@ fn pty_interrupt_case(policy: &str) -> Result<()> {
 #[test]
 fn windows_native_control_fd3_is_duplex_binary_and_half_closeable() -> Result<()> {
     use std::io::{Read, Write};
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     let tmp = TempDir::new()?;
     let child_code = r#"import os,sys
 os.write(3,b'READY')
@@ -6397,7 +6389,7 @@ fn contained_python_fixture(workspace: &std::path::Path) -> Result<String> {
 #[test]
 #[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn rpc_control_fd3_three_binary_rounds_and_half_close_preserve_streams_and_audit() -> Result<()> {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     for policy in [
         "danger-full-access",
         "read-only",
@@ -6695,7 +6687,7 @@ sys.exit(7)
 #[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn rpc_control_remains_live_with_blocked_stdin_and_cancels_after_control_backpressure() -> Result<()>
 {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     for policy in ["danger-full-access", "workspace-write"] {
         let tmp = TempDir::new()?;
         let mut client = Client::spawn("service")?;
@@ -6823,7 +6815,7 @@ fn rpc_control_remains_live_with_blocked_stdin_and_cancels_after_control_backpre
 #[test]
 #[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn rpc_control_output_shares_the_execution_output_limit() -> Result<()> {
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     for policy in ["danger-full-access", "workspace-write"] {
         let tmp = TempDir::new()?;
         let mut client = Client::spawn("service")?;
@@ -6880,7 +6872,7 @@ fn rpc_control_output_shares_the_execution_output_limit() -> Result<()> {
 #[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn cli_control_fd3_forwards_binary_rounds_and_half_close_with_separate_stdio() -> Result<()> {
     use std::io::{Read, Write};
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     for policy in ["danger-full-access", "workspace-write"] {
         let tmp = TempDir::new()?;
         let code = r#"import os,sys
@@ -7024,7 +7016,7 @@ sys.exit(7)
 #[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn cli_control_stalled_caller_cleans_owned_range_and_preserves_peer() -> Result<()> {
     use std::io::{Read, Write};
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     for policy in ["danger-full-access", "workspace-write"] {
         let tmp = TempDir::new()?;
         let mut peer_client = Client::spawn("service")?;
@@ -7155,7 +7147,7 @@ fn cli_control_stalled_caller_cleans_owned_range_and_preserves_peer() -> Result<
 #[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn cli_stdio_stalled_or_disconnected_caller_cleans_owned_range_and_preserves_peer() -> Result<()> {
     use std::io::Read;
-    let _guard = windows_test_gate();
+    let _guard = process_test_gate();
     for (policy, events, stream, failure) in ["danger-full-access", "workspace-write"]
         .into_iter()
         .flat_map(|policy| {
