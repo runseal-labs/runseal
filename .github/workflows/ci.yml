@@ -56,6 +56,12 @@ jobs:
       - name: Run tests
         run: cargo test
 
+      - name: Run portable conformance smoke
+        if: runner.os == 'Linux' || runner.os == 'macOS'
+        run: |
+          cargo build --bin runseal
+          python3 scripts/portable-probe-smoke.py
+
       - name: Check whitespace
         run: git diff --check
 
