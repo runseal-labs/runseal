@@ -123,7 +123,10 @@ function Assert-SetupRequiredStatus {
 }
 
 function Assert-ExecRepairedSetup {
-    param([object]$Run)
+    param(
+        [object]$Run,
+        [string]$GateStateBefore = "unknown"
+    )
 
     if ($Run.ExitCode -ne 0) {
         $setupStatus = $null
@@ -138,10 +141,11 @@ function Assert-ExecRepairedSetup {
         $errorCode = $Run.Json.error.data.code
         $errorReason = $Run.Json.error.data.error.reason
         $cleanupComplete = $Run.Json.error.data.cleanup_complete
+        $gateStateAfter = Get-ExecutionGateSummary
         if ($null -eq $setupStatus) {
-            throw "sandboxed exec could not repair setup through the broker (code=$errorCode, reason=$errorReason, cleanup_complete=$cleanupComplete, setup_status=unavailable, broker_last_result=$lastResult)"
+            throw "sandboxed exec could not repair setup through the broker (code=$errorCode, reason=$errorReason, cleanup_complete=$cleanupComplete, gate_before=$GateStateBefore, gate_after=$gateStateAfter, setup_status=unavailable, broker_last_result=$lastResult)"
         }
-        throw "sandboxed exec could not repair setup through the broker (code=$errorCode, reason=$errorReason, cleanup_complete=$cleanupComplete, setup_requires_setup=$($setupStatus.requires_setup), broker=$($setupStatus.broker), next_action=$($setupStatus.next_action), broker_last_result=$lastResult)"
+        throw "sandboxed exec could not repair setup through the broker (code=$errorCode, reason=$errorReason, cleanup_complete=$cleanupComplete, gate_before=$GateStateBefore, gate_after=$gateStateAfter, setup_requires_setup=$($setupStatus.requires_setup), broker=$($setupStatus.broker), next_action=$($setupStatus.next_action), broker_last_result=$lastResult)"
     }
     if ($Run.Json.exit_code -ne 0 -or $Run.Json.stdout -notmatch "runsealsandbox") {
         throw "sandboxed exec did not run as the sandbox identity after repair: $($Run.Stdout)"
@@ -168,6 +172,32 @@ function Get-ScheduledSetupBrokerLastResult {
         return $info.LastTaskResult
     } catch {
         return $null
+    }
+}
+
+function Get-ExecutionGateSummary {
+    $gateDirectory = Join-Path ([Environment]::GetFolderPath("CommonApplicationData")) "RunSeal\execution-gates"
+    if (-not (Test-Path -LiteralPath $gateDirectory -PathType Container)) {
+        return "state_dir=missing"
+    }
+
+    try {
+        $files = @(Get-ChildItem -LiteralPath $gateDirectory -File -Force -ErrorAction Stop)
+        $stateFiles = @($files | Where-Object { $_.Name -match '^[0-9a-f]{64}\.json$' })
+        $cleanupMarkers = @($files | Where-Object { $_.Name -like "*.cleanup-failed" })
+        $activeReservations = 0
+        $unreadableStateFiles = 0
+        foreach ($file in $stateFiles) {
+            try {
+                $state = [System.IO.File]::ReadAllText($file.FullName) | ConvertFrom-Json
+                $activeReservations += @($state.active).Count
+            } catch {
+                $unreadableStateFiles += 1
+            }
+        }
+        return "state_files=$($stateFiles.Count), active_reservations=$activeReservations, cleanup_markers=$($cleanupMarkers.Count), unreadable_state_files=$unreadableStateFiles"
+    } catch {
+        return "state=unavailable"
     }
 }
 
@@ -248,6 +278,7 @@ try {
     Assert-SetupReady (Invoke-Setup).Json
 
     Write-Host "Checking sandboxed exec after explicit setup"
+    $gateBeforeReadyExec = Get-ExecutionGateSummary
     $readyExec = Invoke-RunSealJson -AllowFailure -RunArgs @(
         "exec", "--json", "--policy", "workspace-write", "--network", "disabled", "--cwd", $workspace, "--timeout-ms", "60000", "--",
         "whoami.exe"
@@ -256,13 +287,15 @@ try {
         $errorCode = $readyExec.Json.error.data.code
         $errorReason = $readyExec.Json.error.data.error.reason
         $cleanupComplete = $readyExec.Json.error.data.cleanup_complete
-        throw "sandboxed exec failed after explicit setup (code=$errorCode, reason=$errorReason, cleanup_complete=$cleanupComplete)"
+        $gateAfterReadyExec = Get-ExecutionGateSummary
+        throw "sandboxed exec failed after explicit setup (code=$errorCode, reason=$errorReason, cleanup_complete=$cleanupComplete, gate_before=$gateBeforeReadyExec, gate_after=$gateAfterReadyExec)"
     }
     if ($readyExec.Json.exit_code -ne 0 -or $readyExec.Json.stdout -notmatch "runsealsandbox") {
         throw "sandboxed exec after explicit setup did not run as the sandbox identity: $($readyExec.Stdout)"
     }
 
     Write-Host "Checking setup status stays read-only when setup is stale"
+    $gateBeforeStaleExec = Get-ExecutionGateSummary
     $sandboxHomeOverride = [Environment]::GetEnvironmentVariable("RUNSEAL_WINDOWS_SANDBOX_HOME")
     if ([string]::IsNullOrWhiteSpace($sandboxHomeOverride)) {
         $localAppData = [Environment]::GetEnvironmentVariable("LOCALAPPDATA")
@@ -286,7 +319,7 @@ try {
         "exec", "--json", "--policy", "workspace-write", "--network", "disabled", "--cwd", $workspace, "--timeout-ms", "60000", "--",
         "whoami.exe"
     ) -TimeoutSeconds 240
-    Assert-ExecRepairedSetup $staleExec
+    Assert-ExecRepairedSetup $staleExec $gateBeforeStaleExec
     $repairedStatus = (Invoke-RunSealJson -RunArgs @("setup", "windows-sandbox", "--status", "--json", "--cwd", $workspace)).Json
     if ($repairedStatus.requires_setup) {
         throw "sandboxed exec returned without repairing stale setup"
