@@ -1,5 +1,9 @@
 # RunSeal conformance tests
 
+See [ACCEPTANCE.md](ACCEPTANCE.md) for the AC01-28 evidence matrix: each RFC-0021
+acceptance criterion mapped to its test location, command, platform and mode,
+expected behavior, and actual result.
+
 `configured_active_execution_limit_refuses_an_extra_target_while_controls_stay_live`
 uses real RPC and service processes configured for two active executions. Both
 targets report readiness and wait for input; a third target must be rejected

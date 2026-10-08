@@ -311,7 +311,7 @@ RunSeal 的 MCP surface 是窄执行 adapter，不是通用 MCP server framework
 
 ## 运行测试
 
-conformance 测试是 Rust 集成测试。`cargo test` 会构建并运行本地 `runseal` 二进制。
+conformance 测试是 Rust 集成测试。`cargo test` 会构建并运行本地 `runseal` 二进制。`tests/ACCEPTANCE.md` 把 RFC-0021 的每一条验收条件（AC01–28）映射到测试位置、命令、平台/模式、预期行为与实际结果。
 
 ```bash
 cargo fmt --check

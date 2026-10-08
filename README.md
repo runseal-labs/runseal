@@ -456,7 +456,7 @@ Every sandboxed execution is bound to a policy epoch derived from the canonical 
 
 ## Running tests
 
-The conformance tests are Rust integration tests. `cargo test` builds and runs the local `runseal` binary.
+The conformance tests are Rust integration tests. `cargo test` builds and runs the local `runseal` binary. `tests/ACCEPTANCE.md` maps every RFC-0021 acceptance criterion (AC01-28) to its test location, command, platform and mode, expected behavior, and actual result.
 
 ```bash
 cargo fmt --check
