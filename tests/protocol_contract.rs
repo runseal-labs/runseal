@@ -414,7 +414,7 @@ fn expected_proxy_feature_status() -> &'static str {
 }
 
 fn expected_network_proxy_status() -> &'static str {
-    expected_status(expected_proxy_feature_reported())
+    expected_proxy_feature_status()
 }
 
 fn expected_resource_limits_supported() -> bool {
@@ -431,7 +431,7 @@ fn expected_status(supported: bool) -> &'static str {
 
 fn expected_network_disabled_status() -> &'static str {
     if cfg!(any(target_os = "linux", target_os = "macos")) {
-        "supported"
+        "experimental"
     } else {
         expected_status(expected_windows_sandbox_supported())
     }
@@ -439,7 +439,7 @@ fn expected_network_disabled_status() -> &'static str {
 
 fn expected_read_only_status() -> &'static str {
     if cfg!(any(target_os = "linux", target_os = "macos")) {
-        "supported"
+        "experimental"
     } else {
         expected_status(expected_windows_sandbox_supported())
     }
@@ -447,7 +447,7 @@ fn expected_read_only_status() -> &'static str {
 
 fn expected_workspace_write_status() -> &'static str {
     if cfg!(any(target_os = "linux", target_os = "macos")) {
-        "supported"
+        "experimental"
     } else {
         expected_status(expected_windows_sandbox_supported())
     }
@@ -455,7 +455,7 @@ fn expected_workspace_write_status() -> &'static str {
 
 fn expected_workspace_contained_status() -> &'static str {
     if cfg!(any(target_os = "linux", target_os = "macos")) {
-        "supported"
+        "experimental"
     } else if cfg!(windows) {
         expected_status(expected_windows_sandbox_supported())
     } else {
@@ -4604,8 +4604,85 @@ fn execution_capability_profiles_are_complete_and_consistent() -> Result<()> {
         let requestable = sandbox != "unsupported"
             && network != "unsupported"
             && (key.2 == "pipe" || capabilities["pty"] != "unsupported");
-        assert_eq!(status != "unsupported", requestable, "{key:?}");
+        let expected_status = if requestable {
+            if sandbox == "unsupported" || network == "unsupported" {
+                "unsupported"
+            } else if [sandbox, network].contains(&"unavailable") {
+                "unavailable"
+            } else if [sandbox, network].contains(&"requires_setup") {
+                "requires_setup"
+            } else if [sandbox, network].contains(&"experimental") {
+                "experimental"
+            } else {
+                "supported"
+            }
+        } else {
+            "unsupported"
+        };
+        assert_eq!(status, expected_status, "{key:?}");
+        for (name, capability_status) in capabilities {
+            let applicable = if key.2 == "pty" {
+                !matches!(
+                    name.as_str(),
+                    "stdin_bytes" | "stdin_file" | "control_channel"
+                )
+            } else {
+                !matches!(name.as_str(), "pty" | "pty_resize" | "pty_interrupt")
+            };
+            assert_eq!(
+                features[name],
+                if requestable && applicable {
+                    capability_status.as_str().context("capability status")?
+                } else {
+                    "unsupported"
+                },
+                "{key:?}: {name}"
+            );
+        }
     }
     assert_eq!(seen.len(), profiles.len());
+    Ok(())
+}
+
+#[cfg(not(windows))]
+#[test]
+fn portable_unsupported_interactive_modes_fail_before_execution_start() -> Result<()> {
+    let capabilities = run_rpc(&rpc_request("getCapabilities", json!({})))?;
+    let capability_messages = stdout_json_lines(&capabilities)?;
+    let reported = &capability_messages[0]["result"]["execution_capabilities"];
+    let tmp = TempDir::new()?;
+    let marker = tmp.path().join("unsupported-io.ran");
+    for (name, io) in [
+        ("pty", json!({"mode":"pty","rows":24,"cols":80})),
+        (
+            "control_channel",
+            json!({"mode":"pipe","control":{"mode":"pipe","child_fd":3}}),
+        ),
+    ] {
+        assert_eq!(reported[name], "unsupported", "{name}");
+        let output = run_rpc(&rpc_request(
+            "execute",
+            json!({
+                "command": [
+                    python_bin(),
+                    "-c",
+                    "import pathlib,sys; pathlib.Path(sys.argv[1]).write_text('ran')",
+                    marker
+                ],
+                "cwd": tmp.path(),
+                "policy": "danger-full-access",
+                "stdin": {"mode":"stream"},
+                "io": io
+            }),
+        ))?;
+        let messages = stdout_json_lines(&output)?;
+        let response = response_with_id(&messages, 1)?;
+        assert_eq!(
+            response["error"]["data"]["code"],
+            "BACKEND_CAPABILITY_MISSING"
+        );
+        assert!(response.get("result").is_none(), "{response}");
+        assert!(!marker.exists(), "unsupported {name} started the command");
+    }
     Ok(())
 }

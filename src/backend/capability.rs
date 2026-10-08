@@ -29,6 +29,30 @@ impl CapabilityStatus {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(usize)]
+enum ExecutionCapability {
+    StreamingOutput,
+    ActiveExecutionQuery,
+    ExecutionCancel,
+    StdinBytes,
+    StdinFile,
+    StdinStream,
+    TransparentExec,
+    Pty,
+    PtyResize,
+    PtyInterrupt,
+    ControlChannel,
+    SamePolicyConcurrency,
+    MixedPolicyConcurrency,
+}
+
+impl ExecutionCapability {
+    const fn index(self) -> usize {
+        self as usize
+    }
+}
+
 pub const EXECUTION_CAPABILITY_NAMES: [&str; 13] = [
     "streaming_output",
     "active_execution_query",
@@ -44,6 +68,9 @@ pub const EXECUTION_CAPABILITY_NAMES: [&str; 13] = [
     "same_policy_concurrency",
     "mixed_policy_concurrency",
 ];
+const _: () = assert!(
+    ExecutionCapability::MixedPolicyConcurrency.index() + 1 == EXECUTION_CAPABILITY_NAMES.len()
+);
 
 /// Per-execution capability statuses ordered like EXECUTION_CAPABILITY_NAMES.
 pub type ExecutionCapabilityStatuses = [CapabilityStatus; EXECUTION_CAPABILITY_NAMES.len()];
@@ -51,31 +78,41 @@ pub type ExecutionCapabilityStatuses = [CapabilityStatus; EXECUTION_CAPABILITY_N
 /// Engine-level baseline: the shared lifecycle and byte I/O work, but no
 /// interactive terminal or explicit control channel.
 pub fn baseline_execution_capabilities() -> ExecutionCapabilityStatuses {
-    use CapabilityStatus::{Supported, Unsupported};
-    [
-        Supported,
-        Supported,
-        Supported,
-        Supported,
-        Supported,
-        Supported,
-        Supported,
-        Unsupported,
-        Unsupported,
-        Unsupported,
-        Unsupported,
-        Supported,
-        Unsupported,
-    ]
+    use CapabilityStatus::{Experimental, Unsupported};
+    use ExecutionCapability as E;
+    let mut statuses = [Unsupported; EXECUTION_CAPABILITY_NAMES.len()];
+    for capability in [
+        E::StreamingOutput,
+        E::ActiveExecutionQuery,
+        E::ExecutionCancel,
+        E::StdinBytes,
+        E::StdinFile,
+        E::StdinStream,
+        E::TransparentExec,
+        E::SamePolicyConcurrency,
+    ] {
+        statuses[capability.index()] = Experimental;
+    }
+    for capability in [
+        E::Pty,
+        E::PtyResize,
+        E::PtyInterrupt,
+        E::ControlChannel,
+        E::MixedPolicyConcurrency,
+    ] {
+        statuses[capability.index()] = Unsupported;
+    }
+    statuses
 }
 
 /// Baseline plus real terminal and control-channel support.
+#[cfg(windows)]
 pub fn interactive_execution_capabilities() -> ExecutionCapabilityStatuses {
+    use ExecutionCapability as E;
     let mut statuses = baseline_execution_capabilities();
-    statuses[7] = CapabilityStatus::Supported;
-    statuses[8] = CapabilityStatus::Supported;
-    statuses[9] = CapabilityStatus::Supported;
-    statuses[10] = CapabilityStatus::Supported;
+    for capability in [E::Pty, E::PtyResize, E::PtyInterrupt, E::ControlChannel] {
+        statuses[capability.index()] = CapabilityStatus::Supported;
+    }
     statuses
 }
 
@@ -87,7 +124,7 @@ fn execution_capabilities_object(statuses: &ExecutionCapabilityStatuses) -> Valu
     Value::Object(map)
 }
 
-fn strongest(statuses: &[&'static str]) -> &'static str {
+fn strongest<'a>(statuses: &[&'a str]) -> &'a str {
     if statuses.contains(&CapabilityStatus::Unsupported.as_str()) {
         CapabilityStatus::Unsupported.as_str()
     } else if statuses.contains(&CapabilityStatus::Unavailable.as_str()) {
@@ -104,7 +141,7 @@ fn strongest(statuses: &[&'static str]) -> &'static str {
 fn io_mode_supported(statuses: &ExecutionCapabilityStatuses, io_mode: &str) -> bool {
     match io_mode {
         "pty" => matches!(
-            statuses[7],
+            statuses[ExecutionCapability::Pty.index()],
             CapabilityStatus::Supported | CapabilityStatus::Experimental
         ),
         _ => true,
@@ -134,8 +171,8 @@ fn profile_feature_statuses(
 
 fn execution_profiles_json(
     statuses: &ExecutionCapabilityStatuses,
-    sandbox_levels: &[(&'static str, &'static str)],
-    network_modes: &[(&'static str, &'static str)],
+    sandbox_levels: &[(&'static str, &str)],
+    network_modes: &[(&'static str, &str)],
 ) -> Value {
     let mut profiles = Vec::new();
     for (sandbox_level, sandbox_status) in sandbox_levels {
@@ -160,6 +197,49 @@ fn execution_profiles_json(
         }
     }
     Value::Array(profiles)
+}
+
+/// Rebuild profiles after platform code adjusts sandbox, network, or execution
+/// capability status. Profiles must describe the same final report as the
+/// top-level capability fields.
+pub(super) fn refresh_execution_profiles(payload: &mut Value) {
+    fn parse_status(value: Option<&str>) -> CapabilityStatus {
+        match value {
+            Some("supported") => CapabilityStatus::Supported,
+            Some("experimental") => CapabilityStatus::Experimental,
+            Some("unavailable") => CapabilityStatus::Unavailable,
+            Some("requires_setup") => CapabilityStatus::RequiresSetup,
+            _ => CapabilityStatus::Unsupported,
+        }
+    }
+
+    let statuses = std::array::from_fn(|index| {
+        parse_status(payload["execution_capabilities"][EXECUTION_CAPABILITY_NAMES[index]].as_str())
+    });
+    let sandbox_levels = [
+        "read-only",
+        "workspace-write",
+        "workspace-contained",
+        "danger-full-access",
+    ]
+    .map(|name| {
+        (
+            name,
+            payload["sandbox_levels"][name]
+                .as_str()
+                .unwrap_or(CapabilityStatus::Unsupported.as_str()),
+        )
+    });
+    let network_modes = ["unmanaged", "disabled", "proxy"].map(|name| {
+        (
+            name,
+            payload["network_modes"][name]
+                .as_str()
+                .unwrap_or(CapabilityStatus::Unsupported.as_str()),
+        )
+    });
+    payload["execution_profiles"] =
+        execution_profiles_json(&statuses, &sandbox_levels, &network_modes);
 }
 
 /// Platform execution boundary for RunSeal sandbox policies.
@@ -202,14 +282,15 @@ pub(super) fn capabilities_json_for(backend: &dyn SandboxBackend, notes: &[&'sta
         ],
     );
     let execution_statuses = backend.execution_capabilities();
+    let local_execution_status = CapabilityStatus::Supported.as_str();
     let sandbox_level_rows = [
         ("read-only", read_only),
         ("workspace-write", workspace_write),
         ("workspace-contained", read_only),
-        ("danger-full-access", CapabilityStatus::Supported.as_str()),
+        ("danger-full-access", local_execution_status),
     ];
     let network_mode_rows = [
-        ("unmanaged", CapabilityStatus::Supported.as_str()),
+        ("unmanaged", local_execution_status),
         ("disabled", network_disabled),
         ("proxy", network_proxy),
     ];
@@ -266,10 +347,10 @@ pub(super) fn capabilities_json_for(backend: &dyn SandboxBackend, notes: &[&'sta
             "read-only": read_only,
             "workspace-contained": read_only,
             "workspace-write": workspace_write,
-            "danger-full-access": CapabilityStatus::Supported.as_str(),
+            "danger-full-access": local_execution_status,
         },
         "network_modes": {
-            "unmanaged": CapabilityStatus::Supported.as_str(),
+            "unmanaged": local_execution_status,
             "disabled": network_disabled,
             "proxy": network_proxy,
         },

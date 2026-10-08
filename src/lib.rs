@@ -79,6 +79,10 @@ fn run() -> Result<(), String> {
         }
         [command] if command == "version" => commands::version::print_plain(),
         [command] if command == "capabilities" => commands::capabilities::run(),
+        #[cfg(windows)]
+        [command, rest @ ..] if command == "__console-output" => {
+            commands::exec::run_console_output_worker(rest)
+        }
         #[cfg(target_os = "linux")]
         [command, rest @ ..] if command == "__linux-proxy-relay" => {
             backend::run_linux_proxy_relay(rest).map(|code| std::process::exit(code))

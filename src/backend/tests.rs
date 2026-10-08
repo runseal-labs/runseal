@@ -389,18 +389,18 @@ fn linux_skeleton_reports_experimental_disabled_features() {
         "experimental"
     );
     assert_eq!(capabilities["features"]["policy_epoch"], true);
-    assert_eq!(capabilities["sandbox_levels"]["read-only"], "supported");
+    assert_eq!(capabilities["sandbox_levels"]["read-only"], "experimental");
     assert_eq!(
         capabilities["sandbox_levels"]["workspace-write"],
-        "supported"
+        "experimental"
     );
     assert_eq!(
         capabilities["sandbox_levels"]["workspace-contained"],
-        "supported"
+        "experimental"
     );
     assert_eq!(capabilities["network_modes"]["unmanaged"], "supported");
-    assert_eq!(capabilities["network_modes"]["disabled"], "supported");
-    assert_eq!(capabilities["network_modes"]["proxy"], "supported");
+    assert_eq!(capabilities["network_modes"]["disabled"], "experimental");
+    assert_eq!(capabilities["network_modes"]["proxy"], "experimental");
     let probes = capabilities["capability_probes"].as_array().unwrap();
     assert_eq!(probes.len(), 10);
     assert_probe_schema(&probes[0], "filesystem_policy", "landlock");
@@ -579,18 +579,18 @@ fn macos_skeleton_reports_experimental_disabled_features() {
         "experimental"
     );
     assert_eq!(capabilities["features"]["policy_epoch"], true);
-    assert_eq!(capabilities["sandbox_levels"]["read-only"], "supported");
+    assert_eq!(capabilities["sandbox_levels"]["read-only"], "experimental");
     assert_eq!(
         capabilities["sandbox_levels"]["workspace-write"],
-        "supported"
+        "experimental"
     );
     assert_eq!(
         capabilities["sandbox_levels"]["workspace-contained"],
-        "supported"
+        "experimental"
     );
     assert_eq!(capabilities["network_modes"]["unmanaged"], "supported");
-    assert_eq!(capabilities["network_modes"]["disabled"], "supported");
-    assert_eq!(capabilities["network_modes"]["proxy"], "supported");
+    assert_eq!(capabilities["network_modes"]["disabled"], "experimental");
+    assert_eq!(capabilities["network_modes"]["proxy"], "experimental");
     let probes = capabilities["capability_probes"].as_array().unwrap();
     assert_eq!(probes.len(), 6);
     assert_probe_schema(&probes[0], "filesystem_policy", "sandbox_exec");

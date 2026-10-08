@@ -5,7 +5,9 @@ use std::sync::mpsc::{SyncSender, TrySendError};
 pub enum OutputStream {
     Stdout,
     Stderr,
+    #[cfg_attr(not(windows), allow(dead_code))]
     Terminal,
+    #[cfg_attr(not(windows), allow(dead_code))]
     Control,
 }
 
@@ -14,6 +16,9 @@ pub enum ExecutionIo {
     #[default]
     Pipe,
     PipeControl,
+    // Parsed on every platform so unsupported requests can be rejected before
+    // execution; only the Windows reference backend consumes the dimensions.
+    #[cfg_attr(not(windows), allow(dead_code))]
     Pty {
         rows: u16,
         cols: u16,
@@ -43,7 +48,9 @@ pub enum BackendMessage {
 #[derive(Clone)]
 pub struct ExecutionOutputSink {
     pub sender: SyncSender<BackendMessage>,
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub io: ExecutionIo,
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub control_input: Option<ExecutionInput>,
     pub(crate) control: crate::execution::ExecutionControl,
 }

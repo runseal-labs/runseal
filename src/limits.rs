@@ -48,11 +48,19 @@ impl DeploymentLimits {
     }
 
     pub(crate) fn queued_protocol_bytes(&self) -> usize {
-        self.sender_bytes - 2 * 1024 * 1024
+        self.sender_bytes * 3 / 4
     }
 
     pub(crate) fn protocol_data_bytes(&self) -> usize {
-        self.queued_protocol_bytes() - 1024 * 1024
+        self.queued_protocol_bytes() - self.sender_bytes / 8
+    }
+
+    pub(crate) fn pending_protocol_bytes(&self) -> usize {
+        self.sender_bytes - self.queued_protocol_bytes()
+    }
+
+    pub(crate) fn pending_input_pause_bytes(&self) -> usize {
+        self.pending_protocol_bytes() / 2
     }
 
     pub(crate) fn query_response_bytes(&self) -> usize {

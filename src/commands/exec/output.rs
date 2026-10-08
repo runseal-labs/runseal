@@ -3,6 +3,17 @@ use crate::execution::ExecutionControl;
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
+#[cfg(windows)]
+use std::process::{Child, Command, Stdio};
+#[cfg(windows)]
+use std::sync::Arc;
+#[cfg(windows)]
+use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(windows)]
+use std::sync::mpsc::{self, SyncSender, TrySendError};
+#[cfg(windows)]
+use std::thread::JoinHandle;
+
 pub(super) struct Output {
     stderr: bool,
     control: ExecutionControl,
@@ -10,7 +21,7 @@ pub(super) struct Output {
     #[cfg(windows)]
     pipe: Option<codex_windows_sandbox::NonblockingOutputPipe>,
     #[cfg(windows)]
-    native: Option<codex_windows_sandbox::CancellableOutput>,
+    console: Option<ConsoleOutputWorker>,
 }
 
 impl Output {
@@ -23,14 +34,10 @@ impl Output {
         }
         .map_err(|_| RunSealError::new("CLIENT_DISCONNECTED", "output pipe unavailable"))?;
         #[cfg(windows)]
-        let native = if pipe.is_none() {
+        let console = if pipe.is_none() {
             Some(
-                if stderr {
-                    codex_windows_sandbox::CancellableOutput::stderr()
-                } else {
-                    codex_windows_sandbox::CancellableOutput::stdout()
-                }
-                .map_err(|_| RunSealError::new("CLIENT_DISCONNECTED", "output unavailable"))?,
+                ConsoleOutputWorker::spawn(stderr)
+                    .map_err(|_| RunSealError::new("CLIENT_DISCONNECTED", "output unavailable"))?,
             )
         } else {
             None
@@ -42,7 +49,7 @@ impl Output {
             #[cfg(windows)]
             pipe,
             #[cfg(windows)]
-            native,
+            console,
         })
     }
 
@@ -52,10 +59,7 @@ impl Output {
         }
         let mut progress = Instant::now();
         #[cfg(windows)]
-        let mut native_progress = self
-            .native
-            .as_ref()
-            .map(codex_windows_sandbox::CancellableOutput::write_progress);
+        let mut console_progress = self.console.as_ref().map(ConsoleOutputWorker::progress);
         while !bytes.is_empty() {
             match self.write_some(bytes) {
                 Ok(0) => return self.fail("CLIENT_DISCONNECTED", "output disconnected"),
@@ -71,10 +75,10 @@ impl Output {
                         );
                     }
                     #[cfg(windows)]
-                    if let Some(native) = &self.native {
-                        let current = Some(native.write_progress());
-                        if current != native_progress {
-                            native_progress = current;
+                    if let Some(console) = &self.console {
+                        let current = Some(console.progress());
+                        if current != console_progress {
+                            console_progress = current;
                             progress = Instant::now();
                         }
                     }
@@ -105,8 +109,8 @@ impl Output {
             return pipe.write(bytes);
         }
         #[cfg(windows)]
-        if let Some(native) = &mut self.native {
-            return native.write(bytes);
+        if let Some(console) = &mut self.console {
+            return console.write(bytes);
         }
         let output: &mut dyn Write = if self.stderr {
             &mut std::io::stderr().lock()
@@ -120,16 +124,178 @@ impl Output {
 
     pub(super) fn finish(&mut self, deadline: Instant) -> Result<(), String> {
         #[cfg(windows)]
-        if let Some(native) = &mut self.native {
-            let result = if self.failure.is_some() {
-                native.finish(deadline)
-            } else {
-                native.flush(deadline)
-            };
-            result.map_err(|_| "output cleanup could not be verified".to_string())?;
+        if let Some(console) = &mut self.console {
+            console
+                .finish(deadline, self.failure.is_some())
+                .map_err(|_| "output cleanup could not be verified".to_string())?;
         }
         #[cfg(not(windows))]
         let _ = deadline;
         Ok(())
     }
+}
+
+#[cfg(windows)]
+struct ConsoleOutputWorker {
+    child: Child,
+    sender: Option<SyncSender<Vec<u8>>>,
+    writer: Option<JoinHandle<io::Result<()>>>,
+    progress: Arc<AtomicU64>,
+}
+
+#[cfg(windows)]
+impl ConsoleOutputWorker {
+    fn spawn(stderr: bool) -> io::Result<Self> {
+        let executable = std::env::current_exe()?;
+        let mut child = Command::new(executable)
+            .args(["__console-output", if stderr { "stderr" } else { "stdout" }])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .spawn()?;
+        let mut stdin = match child.stdin.take() {
+            Some(stdin) => stdin,
+            None => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(io::Error::other("console output worker input unavailable"));
+            }
+        };
+        let (sender, receiver) = mpsc::sync_channel::<Vec<u8>>(4);
+        let progress = Arc::new(AtomicU64::new(0));
+        let writer_progress = progress.clone();
+        let writer = match std::thread::Builder::new()
+            .name("runseal-console-output-feed".into())
+            .spawn(move || {
+                while let Ok(bytes) = receiver.recv() {
+                    stdin.write_all(&bytes)?;
+                    writer_progress.fetch_add(bytes.len() as u64, Ordering::Release);
+                }
+                Ok(())
+            }) {
+            Ok(writer) => writer,
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error);
+            }
+        };
+        Ok(Self {
+            child,
+            sender: Some(sender),
+            writer: Some(writer),
+            progress,
+        })
+    }
+
+    fn progress(&self) -> u64 {
+        self.progress.load(Ordering::Acquire)
+    }
+
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let Some(sender) = &self.sender else {
+            return Err(io::ErrorKind::BrokenPipe.into());
+        };
+        let count = bytes.len().min(64 * 1024);
+        match sender.try_send(bytes[..count].to_vec()) {
+            Ok(()) => Ok(count),
+            Err(TrySendError::Full(_)) => Err(io::ErrorKind::WouldBlock.into()),
+            Err(TrySendError::Disconnected(_)) => Err(io::ErrorKind::BrokenPipe.into()),
+        }
+    }
+
+    fn finish(&mut self, deadline: Instant, abort: bool) -> io::Result<()> {
+        self.sender.take();
+        let mut forced = abort;
+        if forced {
+            self.kill_child()?;
+        }
+        let status = loop {
+            if let Some(status) = self.child.try_wait()? {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                forced = true;
+                self.kill_child()?;
+                break self.child.wait()?;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        let writer = self
+            .writer
+            .take()
+            .ok_or_else(|| io::Error::other("console output writer unavailable"))?;
+        let write_result = writer
+            .join()
+            .map_err(|_| io::Error::other("console output writer panicked"))?;
+        if !forced && !status.success() {
+            return Err(io::Error::other("console output worker failed"));
+        }
+        if let Err(error) = write_result
+            && !(forced
+                && matches!(
+                    error.kind(),
+                    io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset
+                ))
+        {
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn kill_child(&mut self) -> io::Result<()> {
+        match self.child.kill() {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::InvalidInput => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for ConsoleOutputWorker {
+    fn drop(&mut self) {
+        self.sender.take();
+        let _ = self.kill_child();
+        let _ = self.child.wait();
+        if let Some(writer) = self.writer.take() {
+            let _ = writer.join();
+        }
+    }
+}
+
+#[cfg(windows)]
+pub(crate) fn run_console_output_worker(args: &[String]) -> Result<(), String> {
+    use std::io::Read;
+
+    let mut output = match args {
+        [stream] if stream == "stdout" => codex_windows_sandbox::CancellableOutput::stdout(),
+        [stream] if stream == "stderr" => codex_windows_sandbox::CancellableOutput::stderr(),
+        _ => return Err("invalid internal console output stream".to_string()),
+    }
+    .map_err(|_| "console output unavailable".to_string())?;
+    let mut input = io::stdin().lock();
+    let mut buffer = [0; 16 * 1024];
+    loop {
+        let count = input
+            .read(&mut buffer)
+            .map_err(|_| "console output input failed".to_string())?;
+        if count == 0 {
+            break;
+        }
+        let mut offset = 0;
+        while offset < count {
+            match output.write(&buffer[offset..count]) {
+                Ok(0) => return Err("console output disconnected".to_string()),
+                Ok(written) => offset += written,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(_) => return Err("console output failed".to_string()),
+            }
+        }
+    }
+    output
+        .flush(Instant::now() + Duration::from_secs(60))
+        .map_err(|_| "console output flush failed".to_string())
 }

@@ -14,7 +14,12 @@ fn windows_test_gate() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 #[cfg(not(windows))]
-fn windows_test_gate() {}
+struct NoopWindowsTestGuard;
+
+#[cfg(not(windows))]
+fn windows_test_gate() -> NoopWindowsTestGuard {
+    NoopWindowsTestGuard
+}
 
 #[test]
 fn configured_active_execution_limit_refuses_an_extra_target_while_controls_stay_live() -> Result<()>
@@ -2770,6 +2775,263 @@ fn python() -> Result<String> {
         .context("Python executable")
 }
 
+#[cfg(unix)]
+fn unix_process_present(pid: u32) -> Result<bool> {
+    let pid = i32::try_from(pid).context("process id out of range")?;
+    if unsafe { libc::kill(pid, 0) } == 0 {
+        #[cfg(target_os = "linux")]
+        if let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+            && let Some((_, fields)) = stat.rsplit_once(") ")
+            && fields.starts_with('Z')
+        {
+            return Ok(false);
+        }
+        return Ok(true);
+    }
+    match std::io::Error::last_os_error().raw_os_error() {
+        Some(libc::EPERM) => Ok(true),
+        Some(libc::ESRCH) => Ok(false),
+        _ => Err(std::io::Error::last_os_error().into()),
+    }
+}
+
+#[cfg(unix)]
+fn process_present(pid: u32) -> Result<bool> {
+    unix_process_present(pid)
+}
+
+#[cfg(unix)]
+fn wait_terminal_unix(client: &Client, id: &str) -> Result<Value> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let message = client.next(deadline.saturating_duration_since(Instant::now()))?;
+        let event = &message["params"];
+        if event["execution_id"] == id
+            && matches!(
+                event["type"].as_str(),
+                Some("execution.failed" | "execution.finished")
+            )
+        {
+            return Ok(event.clone());
+        }
+    }
+}
+
+#[cfg(unix)]
+fn wait_response_unix(client: &Client, id: u64) -> Result<Value> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let message = client.next(deadline.saturating_duration_since(Instant::now()))?;
+        if message["id"] == id {
+            return Ok(message);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn wait_process_exit_unix(pid: u32) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while unix_process_present(pid)? {
+        assert!(Instant::now() < deadline, "process {pid} survived cleanup");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn portable_local_execution_cleans_process_groups_on_exit_and_cancel() -> Result<()> {
+    let _guard = windows_test_gate();
+    for cancel in [false, true] {
+        let tmp = TempDir::new()?;
+        let mut client = Client::spawn("service")?;
+        let child_code = "import pathlib,sys,time; path=pathlib.Path(sys.argv[1]); n=0\nwhile True:\n n+=1; path.write_text(str(n)); time.sleep(0.01)";
+        let root_code = "import subprocess,sys; child=subprocess.Popen([sys.executable,'-u','-c',sys.argv[1],sys.argv[2]]); print('READY '+str(child.pid),flush=True)\nif sys.argv[3]=='wait': sys.stdin.buffer.read()";
+        let mut start = |request_id: u64,
+                         path: &std::path::Path,
+                         hold: bool|
+         -> Result<(String, u32)> {
+            client.send(request_id, "execute", json!({
+                "command": [python()?, "-u", "-c", root_code, child_code, path, if hold { "wait" } else { "exit" }],
+                "cwd": tmp.path(),
+                "policy": "danger-full-access",
+                "stdin": {"mode":"stream"}
+            }))?;
+            let receipt = client.next(Duration::from_secs(2))?;
+            assert_eq!(receipt["id"], request_id, "{receipt}");
+            assert_eq!(receipt["result"]["status"], "preparing", "{receipt}");
+            let id = receipt["result"]["execution_id"]
+                .as_str()
+                .context("execution id")?
+                .to_owned();
+            let pid = wait_ready_pid(&client, &id)?;
+            Ok((id, pid))
+        };
+
+        let (peer_id, peer_pid) = start(1, &tmp.path().join("peer.beat"), true)?;
+        let (owned_id, owned_pid) = start(2, &tmp.path().join("owned.beat"), cancel)?;
+        assert!(unix_process_present(peer_pid)?);
+        if cancel {
+            assert!(unix_process_present(owned_pid)?);
+            client.send(3, "cancelExecution", json!({"execution_id":owned_id}))?;
+            assert_eq!(wait_response_unix(&client, 3)?["id"], 3);
+        }
+        let owned_terminal = wait_terminal_unix(&client, &owned_id)?;
+        assert_eq!(
+            owned_terminal["type"],
+            if cancel {
+                "execution.failed"
+            } else {
+                "execution.finished"
+            },
+            "{owned_terminal}"
+        );
+        assert_eq!(owned_terminal["result"]["cleanup_complete"], true);
+        assert_eq!(
+            owned_terminal["result"]["termination_reason"],
+            if cancel { "cancelled" } else { "exited" }
+        );
+        wait_process_exit_unix(owned_pid)?;
+
+        assert!(
+            unix_process_present(peer_pid)?,
+            "peer group must remain live"
+        );
+        let heartbeat_before = std::fs::read_to_string(tmp.path().join("peer.beat"))?;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while std::fs::read_to_string(tmp.path().join("peer.beat"))? == heartbeat_before {
+            assert!(Instant::now() < deadline, "peer heartbeat stopped");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        client.send(4, "cancelExecution", json!({"execution_id":peer_id}))?;
+        assert_eq!(wait_response_unix(&client, 4)?["id"], 4);
+        let peer_terminal = wait_terminal_unix(&client, &peer_id)?;
+        assert_eq!(peer_terminal["result"]["cleanup_complete"], true);
+        wait_process_exit_unix(peer_pid)?;
+        drop(client.input.take());
+        assert!(client.child.wait()?.success());
+    }
+    Ok(())
+}
+
+#[test]
+fn execution_capability_profiles_match_live_supported_and_rejected_behavior() -> Result<()> {
+    let _guard = windows_test_gate();
+    let tmp = TempDir::new()?;
+    let mut client = Client::spawn("service")?;
+    client.send(1, "getCapabilities", json!({}))?;
+    let capabilities = client.next(Duration::from_secs(5))?;
+    let profiles = capabilities["result"]["execution_profiles"]
+        .as_array()
+        .context("execution profiles")?;
+    assert_eq!(profiles.len(), 24, "all public profiles must be reported");
+
+    let mut supported_profiles = 0;
+    let mut rejected_profiles = 0;
+    let mut request_id = 2;
+    for profile in profiles {
+        let status = profile["status"].as_str().context("profile status")?;
+        let sandbox_level = profile["sandbox_level"].as_str().context("sandbox level")?;
+        let network_mode = profile["network_mode"].as_str().context("network mode")?;
+        let io_mode = profile["io_mode"].as_str().context("I/O mode")?;
+        if status == "experimental" {
+            continue;
+        }
+
+        let command = [
+            python()?,
+            "-u".to_string(),
+            "-c".to_string(),
+            "import os,sys; expected=sys.argv[1]=='pty'; assert all(os.isatty(fd)==expected for fd in (0,1,2)); print('AC26_PROFILE_OK',flush=True)".to_string(),
+            io_mode.to_string(),
+        ];
+        let mut request = json!({
+            "command": command,
+            "cwd": tmp.path(),
+            "policy": sandbox_level,
+            "network": network_mode,
+            "stdin": {"mode": if io_mode == "pty" { "stream" } else { "empty" }},
+        });
+        request["io"] = if io_mode == "pty" {
+            json!({"mode":"pty","rows":24,"cols":80})
+        } else {
+            json!({"mode":"pipe"})
+        };
+        client.send(request_id, "execute", request)?;
+
+        if matches!(status, "unsupported" | "unavailable" | "requires_setup") {
+            let rejected = client.next(Duration::from_secs(5))?;
+            assert_eq!(rejected["id"], request_id, "{profile}: {rejected}");
+            assert!(rejected.get("result").is_none(), "{profile}: {rejected}");
+            assert!(
+                matches!(
+                    rejected["error"]["data"]["code"].as_str(),
+                    Some("BACKEND_CAPABILITY_MISSING" | "BACKEND_UNAVAILABLE")
+                ),
+                "unsupported profile must fail before admission: {profile}: {rejected}"
+            );
+            rejected_profiles += 1;
+        } else if status == "supported" {
+            let receipt = client.next(Duration::from_secs(15))?;
+            assert_eq!(receipt["id"], request_id, "{profile}: {receipt}");
+            assert_eq!(receipt["result"]["status"], "preparing", "{profile}");
+            let execution_id = receipt["result"]["execution_id"]
+                .as_str()
+                .context("execution ID")?
+                .to_owned();
+            let mut output = Vec::new();
+            let deadline = Instant::now() + Duration::from_secs(30);
+            let terminal = loop {
+                let message = client.next(deadline.saturating_duration_since(Instant::now()))?;
+                let event = &message["params"];
+                if event["execution_id"] != execution_id {
+                    continue;
+                }
+                if matches!(
+                    event["type"].as_str(),
+                    Some("execution.stdout" | "execution.stderr" | "execution.terminal")
+                ) {
+                    let data = event["data"].as_str().context("output data")?;
+                    output.extend(
+                        STANDARD.decode(data.strip_prefix("base64:").context("base64 prefix")?)?,
+                    );
+                }
+                if matches!(
+                    event["type"].as_str(),
+                    Some("execution.finished" | "execution.failed")
+                ) {
+                    break event.clone();
+                }
+            };
+            assert_eq!(
+                terminal["type"], "execution.finished",
+                "{profile}: {terminal}"
+            );
+            assert_eq!(terminal["result"]["exit_code"], 0, "{profile}: {terminal}");
+            assert_eq!(terminal["result"]["cleanup_complete"], true, "{profile}");
+            assert!(
+                output
+                    .windows(b"AC26_PROFILE_OK".len())
+                    .any(|window| window == b"AC26_PROFILE_OK"),
+                "supported profile did not run the target: {profile}"
+            );
+            supported_profiles += 1;
+        } else {
+            anyhow::bail!("unknown profile status {status:?}: {profile}");
+        }
+        request_id += 2;
+    }
+    assert!(supported_profiles > 0, "test must execute claimed profiles");
+    #[cfg(not(windows))]
+    assert!(
+        rejected_profiles > 0,
+        "portable PTY profiles must fail closed"
+    );
+    #[cfg(windows)]
+    let _ = rejected_profiles;
+    Ok(())
+}
+
 fn activity_query_and_cancel(mode: &str, policy: &str) -> Result<()> {
     let _guard = windows_test_gate();
     let tmp = TempDir::new()?;
@@ -2919,7 +3181,6 @@ fn process_present(pid: u32) -> Result<bool> {
     }
 }
 
-#[cfg(windows)]
 fn wait_ready_pid(client: &Client, id: &str) -> Result<u32> {
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut output = Vec::new();
@@ -2960,7 +3221,7 @@ fn wait_ready_pid(client: &Client, id: &str) -> Result<u32> {
 
 #[cfg(windows)]
 #[test]
-fn windows_natural_exit_and_cancel_clear_descendants_without_stopping_peer() -> Result<()> {
+fn windows_ac07_cancelling_execution_a_keeps_execution_b_live_and_bound() -> Result<()> {
     verify_natural_exit_and_cancel_range("workspace-write")
 }
 
@@ -3382,6 +3643,8 @@ fn verify_natural_exit_and_cancel_range(policy: &str) -> Result<()> {
         let child_code = "import pathlib,sys,time; target=pathlib.Path(sys.argv[1]); stop=pathlib.Path(sys.argv[1]+'.stop'); count=0\nwhile not stop.exists():\n count+=1; target.write_text(str(count)); time.sleep(0.01)";
         let root_code = "import pathlib,subprocess,sys,time; child=subprocess.Popen([sys.executable,'-u','-c',sys.argv[1],sys.argv[2]]); target=pathlib.Path(sys.argv[2]);\nwhile not target.exists():\n if child.poll() is not None: sys.exit(2)\n time.sleep(0.01)\nprint('READY '+str(child.pid),flush=True); sys.stdin.buffer.read()";
         let mut executions = Vec::new();
+        let mut peer_policy_hash = Value::Null;
+        let mut peer_policy_epoch = Value::Null;
         for (request_id, name) in [(1, "first"), (2, "peer")] {
             client.send(request_id, "execute", json!({"command":[python()?,"-u","-c",root_code,child_code,name],"cwd":tmp.path(),"policy":policy,"stdin":{"mode":"stream"}}))?;
             let receipt = client.next(Duration::from_secs(2))?;
@@ -3391,6 +3654,10 @@ fn verify_natural_exit_and_cancel_range(policy: &str) -> Result<()> {
                 .as_str()
                 .context("execution ID")?
                 .to_owned();
+            if request_id == 2 {
+                peer_policy_hash = receipt["result"]["policy_hash"].clone();
+                peer_policy_epoch = receipt["result"]["policy_epoch"].clone();
+            }
             let pid = wait_ready_pid(&client, &id)?;
             assert!(process_present(pid)?);
             fixture.pids.push(pid);
@@ -3435,6 +3702,16 @@ fn verify_natural_exit_and_cancel_range(policy: &str) -> Result<()> {
             process_present(executions[1].1)?,
             "peer descendant must remain live"
         );
+        client.send(4, "getExecution", json!({"execution_id":executions[1].0}))?;
+        let peer_state = loop {
+            let message = client.next(Duration::from_secs(2))?;
+            if message["id"] == 4 {
+                break message;
+            }
+        };
+        assert_eq!(peer_state["result"]["status"], "running", "{peer_state}");
+        assert_eq!(peer_state["result"]["policy_hash"], peer_policy_hash);
+        assert_eq!(peer_state["result"]["policy_epoch"], peer_policy_epoch);
         let previous = std::fs::read(tmp.path().join("peer"))?;
         let deadline = Instant::now() + Duration::from_secs(2);
         while std::fs::read(tmp.path().join("peer"))? == previous && Instant::now() < deadline {
@@ -3446,11 +3723,11 @@ fn verify_natural_exit_and_cancel_range(policy: &str) -> Result<()> {
             "peer heartbeat must continue"
         );
         client.send(
-            4,
+            5,
             "cancelExecution",
             json!({"execution_id":executions[1].0}),
         )?;
-        assert_eq!(client.next(Duration::from_secs(2))?["id"], 4);
+        assert_eq!(client.next(Duration::from_secs(2))?["id"], 5);
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             let message = client.next(deadline.saturating_duration_since(Instant::now()))?;
@@ -3917,6 +4194,7 @@ fn unsubscribe_replay_and_replacement_are_ordered_without_duplicate_delivery() -
         {
             break;
         }
+        std::thread::sleep(Duration::from_millis(10));
     }
     client.send(
         6,
@@ -4007,6 +4285,7 @@ fn evicted_history_is_reported_and_audit_queries_exclude_live_payloads() -> Resu
         {
             break;
         }
+        std::thread::sleep(Duration::from_millis(10));
     }
     client.send(
         5,
@@ -4688,40 +4967,32 @@ fn cli_native_file_output_preserves_binary_streams_and_child_exit() -> Result<()
 }
 
 #[cfg(windows)]
-#[ignore = "known limitation: a sandboxed plain console whose reader stalls cannot cancel the native console write worker, so the run may not terminate; recorded in README and RFC-0021"]
 #[test]
-fn sandboxed_stalled_console_output_is_a_known_limitation() -> Result<()> {
-    // Reproduction: run `runseal exec` in plain mode inside a ConPTY whose read
-    // endpoint stays open but is never drained, on a sandboxed policy. The target
-    // range is terminated and the runtime root removed, but the terminal may
-    // report EXECUTION_CLEANUP_FAILED with requested_termination_reason
-    // `backpressure`, and the process can stay blocked in the native console
-    // write worker. The ignored status keeps this out of the pass set; it is not
-    // a conformance pass.
-    Ok(())
+fn sandboxed_stalled_console_output_cleans_owned_range_and_preserves_peer() -> Result<()> {
+    cli_stalled_console_output_for_policy("workspace-write")
 }
 
 #[cfg(windows)]
 #[test]
 fn cli_stalled_console_output_cleans_owned_range_and_preserves_peer() -> Result<()> {
+    cli_stalled_console_output_for_policy("danger-full-access")
+}
+
+#[cfg(windows)]
+fn cli_stalled_console_output_for_policy(policy: &str) -> Result<()> {
     use std::io::Read;
     let _guard = windows_test_gate();
-    // Sandboxed policies are not run here: see the ignored known-limitation test
-    // above. Local execution keeps the strict backpressure classification.
-    for (policy, stream, timeout) in ["danger-full-access"].into_iter().flat_map(|policy| {
-        [1, 2].into_iter().flat_map(move |stream| {
-            [false, true]
-                .into_iter()
-                .map(move |timeout| (policy, stream, timeout))
-        })
-    }) {
+    for (stream, timeout) in [1, 2]
+        .into_iter()
+        .flat_map(|stream| [false, true].map(move |timeout| (stream, timeout)))
+    {
         let tmp = TempDir::new()?;
         let mut peer_client = Client::spawn("service")?;
         peer_client.send(1,"execute",json!({"command":[python()?,"-u","-c","import os,pathlib,time; print('READY '+str(os.getpid()),flush=True); count=0\nwhile True:\n count+=1; pathlib.Path('console-peer.beat').write_text(str(count)); time.sleep(0.01)"],"cwd":tmp.path(),"policy":policy}))?;
         let receipt = peer_client.next(Duration::from_secs(2))?;
         let peer = receipt["result"]["execution_id"]
             .as_str()
-            .context("peer")?
+            .with_context(|| format!("peer receipt: {receipt}"))?
             .to_owned();
         let peer_pid = wait_ready_pid(&peer_client, &peer)?;
         let child_code = format!(
@@ -4736,7 +5007,7 @@ fn cli_stalled_console_output_cleans_owned_range_and_preserves_peer() -> Result<
             env!("CARGO_BIN_EXE_runseal").into(),
             "exec".into(),
             "--timeout-ms".into(),
-            if timeout { "4000" } else { "20000" }.into(),
+            if timeout { "10000" } else { "20000" }.into(),
             "--policy".into(),
             policy.into(),
             "--cwd".into(),
@@ -4747,10 +5018,15 @@ fn cli_stalled_console_output_cleans_owned_range_and_preserves_peer() -> Result<
             "-c".into(),
             child_code,
         ];
+        let mut environment = std::env::vars().collect::<std::collections::HashMap<_, _>>();
+        environment.insert(
+            "RUNSEAL_BACKPRESSURE_MS".into(),
+            if timeout { "15000" } else { "3000" }.into(),
+        );
         let mut driver = codex_windows_sandbox::LocalExecutionProcess::spawn_with_terminal(
             &command,
             tmp.path(),
-            &std::env::vars().collect(),
+            &environment,
             true,
             Some((24, 80)),
         )?;
@@ -4775,17 +5051,15 @@ fn cli_stalled_console_output_cleans_owned_range_and_preserves_peer() -> Result<
         );
         std::fs::write(tmp.path().join("console.go"), b"G")?;
         // Retain the outer terminal read endpoint without consuming any output.
-        let deadline = Instant::now() + Duration::from_secs(15);
+        let deadline = Instant::now() + Duration::from_secs(30);
         while !tmp.path().join("console.done").exists() {
-            assert!(
-                Instant::now() < deadline,
-                "stalled Console CLI cleanup: {policy}"
-            );
+            if Instant::now() >= deadline {
+                anyhow::bail!("stalled Console CLI cleanup did not finish for {policy}");
+            }
             std::thread::sleep(Duration::from_millis(5));
         }
         let done: Value =
             serde_json::from_str(&std::fs::read_to_string(tmp.path().join("console.done"))?)?;
-        assert_eq!(done["exit"], if timeout { 124 } else { 125 }, "{done}");
         assert!(!process_present(
             done["pid"].as_u64().context("CLI PID")? as u32
         )?);
@@ -4807,8 +5081,13 @@ fn cli_stalled_console_output_cleans_owned_range_and_preserves_peer() -> Result<
                 }
             }
         }
-        assert_eq!(terminals.len(), 1, "{terminals:?}");
+        assert_eq!(terminals.len(), 1, "expected one terminal audit event");
         let terminal = &terminals[0];
+        assert_eq!(
+            done["exit"],
+            if timeout { 124 } else { 125 },
+            "unexpected CLI exit code for {policy}"
+        );
         assert_eq!(
             terminal["result"]["error"]["code"],
             if timeout {
@@ -4816,13 +5095,17 @@ fn cli_stalled_console_output_cleans_owned_range_and_preserves_peer() -> Result<
             } else {
                 "CLIENT_BACKPRESSURE"
             },
-            "{terminal}"
+            "unexpected terminal error for {policy}"
         );
         assert_eq!(
             terminal["result"]["termination_reason"],
-            if timeout { "timeout" } else { "backpressure" }
+            if timeout { "timeout" } else { "backpressure" },
+            "unexpected termination reason for {policy}"
         );
-        assert_eq!(terminal["result"]["cleanup_complete"], true, "{terminal}");
+        assert_eq!(
+            terminal["result"]["cleanup_complete"], true,
+            "cleanup should complete for {policy}"
+        );
         assert!(
             !tmp.path()
                 .join(".runseal/runtime")

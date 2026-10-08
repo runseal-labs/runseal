@@ -103,7 +103,26 @@ fn repair_execution_gates(
             }
             Err(format!("[runseal:EXECUTION_CLEANUP_FAILED] {MESSAGE}"))
         }
-        Err(error) => Err(error.to_string()),
+        Err(error) => {
+            let unavailable = crate::backend::backend_unavailable_reason(&error).is_some();
+            let (code, message) = if unavailable {
+                (
+                    "BACKEND_UNAVAILABLE",
+                    "execution gate repair cannot inspect the sandbox process boundary",
+                )
+            } else {
+                (
+                    "EXECUTION_CLEANUP_FAILED",
+                    "execution gate repair could not verify or update the binding",
+                )
+            };
+            if json_output {
+                println!("{}", cli_error_payload(RunSealError::new(code, message)));
+                Err(String::new())
+            } else {
+                Err(format!("[runseal:{code}] {message}"))
+            }
+        }
     }
 }
 
@@ -113,11 +132,8 @@ fn print_repair_report(report: &crate::backend::ExecutionGateRepair, json_output
         println!(
             "{}",
             json!({
-                "binding_key": report.binding_key,
-                "state_path": report.state_path,
                 "repaired": report.repaired,
-                "cleared_executions": report.cleared_tokens.len(),
-                "cleared_pids": report.cleared_pids,
+                "cleared_executions": report.cleared_executions,
                 "removed_runtime_roots": report.removed_runtime_roots,
                 "cleared_cleanup_failed_marker": report.cleared_cleanup_failed_marker,
                 "cleared_quarantine": report.cleared_quarantine,
@@ -129,15 +145,10 @@ fn print_repair_report(report: &crate::backend::ExecutionGateRepair, json_output
     }
     if report.repaired {
         println!(
-            "repaired execution gate binding {}: cleared {} reservation(s), removed {} runtime root(s)",
-            report.binding_key,
-            report.cleared_tokens.len(),
-            report.removed_runtime_roots.len()
+            "repaired execution gate: cleared {} reservation(s), removed {} runtime root(s)",
+            report.cleared_executions, report.removed_runtime_roots
         );
     } else {
-        println!(
-            "no execution gate repair needed for binding {}",
-            report.binding_key
-        );
+        println!("no execution gate repair needed");
     }
 }

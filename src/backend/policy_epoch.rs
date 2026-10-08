@@ -656,12 +656,9 @@ fn write_cross_process_gate_state(
 #[cfg(windows)]
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct ExecutionGateRepair {
-    pub(crate) binding_key: String,
-    pub(crate) state_path: String,
     pub(crate) repaired: bool,
-    pub(crate) cleared_tokens: Vec<String>,
-    pub(crate) cleared_pids: Vec<u32>,
-    pub(crate) removed_runtime_roots: Vec<String>,
+    pub(crate) cleared_executions: usize,
+    pub(crate) removed_runtime_roots: usize,
     pub(crate) cleared_cleanup_failed_marker: bool,
     pub(crate) cleared_quarantine: bool,
     pub(crate) unverified_runtime_roots: bool,
@@ -688,8 +685,34 @@ pub(super) fn repair_execution_gate_for_binding(
     accept_unverified_release: bool,
     deadline: std::time::Instant,
 ) -> io::Result<ExecutionGateRepair> {
+    repair_execution_gate_for_binding_with_process_probe(
+        binding_key,
+        accept_unverified_release,
+        deadline,
+        inspect_sandbox_process_group,
+    )
+}
+
+#[cfg(windows)]
+fn inspect_sandbox_process_group() -> io::Result<(Vec<u32>, usize)> {
     use crate::windows::processes::pids_with_token_group;
 
+    let group_sid = codex_windows_sandbox::resolve_sid(codex_windows_sandbox::SANDBOX_USERS_GROUP)
+        .map_err(|_| {
+            io::Error::other(BackendUnavailableError {
+                reason: "windows sandbox process binding unavailable".to_string(),
+            })
+        })?;
+    pids_with_token_group(&group_sid)
+}
+
+#[cfg(windows)]
+fn repair_execution_gate_for_binding_with_process_probe(
+    binding_key: &str,
+    accept_unverified_release: bool,
+    deadline: std::time::Instant,
+    process_probe: impl FnOnce() -> io::Result<(Vec<u32>, usize)>,
+) -> io::Result<ExecutionGateRepair> {
     let state_path = cross_process_gate_state_path(binding_key)?;
     let mutex_name = cross_process_gate_mutex_name(binding_key);
     let cleanup_marker = state_path.with_extension("cleanup-failed");
@@ -699,11 +722,7 @@ pub(super) fn repair_execution_gate_for_binding(
     let state = read_cross_process_gate_state(&state_path)?;
     let marker_present = cleanup_marker.exists();
     let quarantine_signaled = quarantine.check().is_err();
-    let mut report = ExecutionGateRepair {
-        binding_key: binding_key.to_string(),
-        state_path: path_string(&state_path),
-        ..ExecutionGateRepair::default()
-    };
+    let mut report = ExecutionGateRepair::default();
     if state.active.is_empty() && !marker_present && !quarantine_signaled {
         return Ok(report);
     }
@@ -717,13 +736,7 @@ pub(super) fn repair_execution_gate_for_binding(
     }
     // The single-identity model means the process range is empty exactly when no
     // process token belongs to the sandbox identity group.
-    let group_sid = codex_windows_sandbox::resolve_sid(codex_windows_sandbox::SANDBOX_USERS_GROUP)
-        .map_err(|_| {
-            io::Error::other(BackendUnavailableError {
-                reason: "windows sandbox process binding unavailable".to_string(),
-            })
-        })?;
-    let (running, uninspectable) = pids_with_token_group(&group_sid)?;
+    let (running, uninspectable) = process_probe()?;
     if !running.is_empty() {
         return Err(io::Error::other(BackendCleanupError));
     }
@@ -737,13 +750,12 @@ pub(super) fn repair_execution_gate_for_binding(
     // Recorded runtime roots must be absent or safely removable before the
     // reservation can be dropped.
     for entry in &state.active {
-        report.cleared_pids.push(entry.pid);
-        report.cleared_tokens.push(entry.token.clone());
+        report.cleared_executions += 1;
         match &entry.runtime_roots {
             Some(roots) => {
                 for root in roots {
                     if remove_recorded_runtime_root(root)? {
-                        report.removed_runtime_roots.push(root.clone());
+                        report.removed_runtime_roots += 1;
                     }
                 }
             }
@@ -2179,6 +2191,18 @@ mod execution_gate_repair_tests {
         Ok((pid, marker_path))
     }
 
+    fn repair_with_no_sandbox_processes(
+        binding_key: &str,
+        accept_unverified_release: bool,
+    ) -> io::Result<ExecutionGateRepair> {
+        repair_execution_gate_for_binding_with_process_probe(
+            binding_key,
+            accept_unverified_release,
+            std::time::Instant::now() + std::time::Duration::from_secs(5),
+            || Ok((Vec::new(), 0)),
+        )
+    }
+
     #[test]
     fn execution_gate_repair_refuses_while_a_recorded_owner_is_live() -> io::Result<()> {
         let tmp = TempDir::new()?;
@@ -2189,17 +2213,40 @@ mod execution_gate_repair_tests {
         let guard = WindowsSandboxCrossProcessGate::acquire(&key)?;
         let state_path = guard.state_path.clone();
         let before = fs::read(&state_path)?;
-        let failed = repair_execution_gate_for_binding(
-            &key.binding_key,
-            false,
-            std::time::Instant::now() + std::time::Duration::from_secs(2),
-        )
-        .is_err_and(|error| cleanup_failed(&error));
+        let failed = repair_with_no_sandbox_processes(&key.binding_key, false)
+            .is_err_and(|error| cleanup_failed(&error));
         let unchanged = fs::read(&state_path)? == before;
         drop(guard);
         fs::remove_file(&state_path)?;
         assert!(failed, "a live owner must refuse the repair");
         assert!(unchanged, "a refused repair must not modify any state");
+        Ok(())
+    }
+
+    #[test]
+    fn execution_gate_repair_refuses_while_process_probe_finds_live_processes() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let key = WindowsSandboxPolicyCohortKey {
+            binding_key: format!("repair-live-process-fixture:{}", tmp.path().display()),
+            policy_hash: "policy-a".into(),
+        };
+        let fixture = WindowsSandboxCrossProcessGate::acquire(&key)?;
+        let state_path = fixture.state_path.clone();
+        let (_, marker_path) = inject_dead_reservation(&key, &fixture, Some(Vec::new()))?;
+        drop(fixture);
+        let before = fs::read(&state_path)?;
+        let failed = repair_execution_gate_for_binding_with_process_probe(
+            &key.binding_key,
+            false,
+            std::time::Instant::now() + std::time::Duration::from_secs(5),
+            || Ok((vec![42], 0)),
+        )
+        .is_err_and(|error| cleanup_failed(&error));
+        let unchanged = fs::read(&state_path)? == before;
+        fs::remove_file(&state_path)?;
+        let _ = fs::remove_file(marker_path);
+        assert!(failed, "a live sandbox process must refuse the repair");
+        assert!(unchanged, "a refused repair must preserve the binding");
         Ok(())
     }
 
@@ -2212,13 +2259,9 @@ mod execution_gate_repair_tests {
         };
         let fixture = WindowsSandboxCrossProcessGate::acquire(&key)?;
         let state_path = fixture.state_path.clone();
-        let (dead_pid, marker_path) = inject_dead_reservation(&key, &fixture, Some(Vec::new()))?;
+        let (_, marker_path) = inject_dead_reservation(&key, &fixture, Some(Vec::new()))?;
         drop(fixture);
-        let report = repair_execution_gate_for_binding(
-            &key.binding_key,
-            true,
-            std::time::Instant::now() + std::time::Duration::from_secs(5),
-        )?;
+        let report = repair_with_no_sandbox_processes(&key.binding_key, true)?;
         let empty = read_cross_process_gate_state(&state_path)?
             .active
             .is_empty();
@@ -2230,10 +2273,10 @@ mod execution_gate_repair_tests {
             report.repaired,
             "a provably dead reservation must be repaired"
         );
-        assert_eq!(report.cleared_pids, vec![dead_pid]);
+        assert_eq!(report.cleared_executions, 1);
         assert!(report.cleared_cleanup_failed_marker);
         assert!(report.cleared_quarantine);
-        assert!(report.removed_runtime_roots.is_empty());
+        assert_eq!(report.removed_runtime_roots, 0);
         assert!(!report.unverified_runtime_roots);
         assert!(
             empty && marker_gone,
@@ -2254,17 +2297,9 @@ mod execution_gate_repair_tests {
         let state_path = fixture.state_path.clone();
         inject_dead_reservation(&key, &fixture, None)?;
         drop(fixture);
-        let refused = repair_execution_gate_for_binding(
-            &key.binding_key,
-            false,
-            std::time::Instant::now() + std::time::Duration::from_secs(5),
-        )
-        .is_err_and(|error| cleanup_failed(&error));
-        let accepted = repair_execution_gate_for_binding(
-            &key.binding_key,
-            true,
-            std::time::Instant::now() + std::time::Duration::from_secs(5),
-        );
+        let refused = repair_with_no_sandbox_processes(&key.binding_key, false)
+            .is_err_and(|error| cleanup_failed(&error));
+        let accepted = repair_with_no_sandbox_processes(&key.binding_key, true);
         let unverified = accepted
             .as_ref()
             .is_ok_and(|report| report.unverified_runtime_roots);

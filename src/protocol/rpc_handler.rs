@@ -53,6 +53,7 @@ fn run_stdio(stateful: bool) -> Result<(), String> {
     let mut pending_bytes = 0usize;
     let mut input_closed = false;
     let mut aborted = None;
+    let service_tick = std::time::Duration::from_millis(10);
     loop {
         if aborted.is_none() && (writer.failed() || writer.stalled()) {
             let cause = if writer.failed() {
@@ -78,8 +79,11 @@ fn run_stdio(stateful: bool) -> Result<(), String> {
             }
         }
         let mut messages = Vec::new();
-        if !input_closed && aborted.is_none() && pending_bytes < 1024 * 1024 {
-            match input_receiver.try_recv() {
+        if !input_closed
+            && aborted.is_none()
+            && pending_bytes < crate::limits::deployment().pending_input_pause_bytes()
+        {
+            match input_receiver.recv_timeout(service_tick) {
                 Ok(Ok(Some(line))) => {
                     if !line.iter().all(u8::is_ascii_whitespace) {
                         messages = match serde_json::from_slice::<Value>(&line) {
@@ -93,34 +97,42 @@ fn run_stdio(stateful: bool) -> Result<(), String> {
                 Ok(Err(err)) if err.kind() == io::ErrorKind::InvalidData => messages.push(
                     rpc::parse_error("JSON-RPC frame exceeds maximum length".to_string()),
                 ),
-                Ok(Ok(None)) | Ok(Err(_)) | Err(mpsc::TryRecvError::Disconnected) => {
+                Ok(Ok(None)) | Ok(Err(_)) | Err(mpsc::RecvTimeoutError::Disconnected) => {
                     input_closed = true;
                     service.cancel_owned();
                 }
-                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
+        } else {
+            std::thread::sleep(service_tick);
         }
         messages.extend(service.poll_admissions());
         messages.extend(service.poll_disposal_deadlines());
         let mut starts = service.take_admitted_starts();
-        let last = messages.len().saturating_sub(1);
-        for (index, message) in messages.into_iter().enumerate() {
-            let permits = if index == last {
-                std::mem::take(&mut starts)
-            } else {
-                Vec::new()
-            };
-            match Frame::encode(&message, service.delivery_guard(&message), permits) {
-                Ok(frame) => {
-                    pending_bytes += frame.resident();
-                    pending.push_back(frame);
-                }
-                Err(_) => {
-                    aborted = Some(crate::execution::TerminationCause::ClientDisconnected);
+        if messages.is_empty() {
+            // A dropped start sender closes its one-shot gate, so an execution
+            // cannot launch unless its receipt has a frame to carry the permit.
+            drop(starts);
+        } else {
+            let last = messages.len() - 1;
+            for (index, message) in messages.into_iter().enumerate() {
+                let permits = if index == last {
+                    std::mem::take(&mut starts)
+                } else {
+                    Vec::new()
+                };
+                match Frame::encode(&message, service.delivery_guard(&message), permits) {
+                    Ok(frame) => {
+                        pending_bytes += frame.resident();
+                        pending.push_back(frame);
+                    }
+                    Err(_) => {
+                        aborted = Some(crate::execution::TerminationCause::ClientDisconnected);
+                    }
                 }
             }
         }
-        if pending_bytes > 2 * 1024 * 1024 {
+        if pending_bytes > crate::limits::deployment().pending_protocol_bytes() {
             aborted = Some(crate::execution::TerminationCause::Backpressure);
         }
         if aborted.is_some() || (pending.is_empty() && writer.can_poll_events()) {
@@ -151,7 +163,6 @@ fn run_stdio(stateful: bool) -> Result<(), String> {
         } else if input_closed && !service.has_active() && pending.is_empty() && writer.idle() {
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(1));
     }
     reader_stop.store(true, Ordering::Release);
     drop(input_receiver);
@@ -232,7 +243,7 @@ impl std::io::Read for PollInput {
 // Bound allocations while draining an oversized frame to its newline.
 fn read_frame(reader: &mut impl BufRead) -> io::Result<Option<Vec<u8>>> {
     let max_frame = crate::limits::deployment().rpc_frame_bytes;
-    let mut frame = Vec::with_capacity(max_frame);
+    let mut frame = Vec::new();
     let mut oversized = false;
     loop {
         let buffer = reader.fill_buf()?;

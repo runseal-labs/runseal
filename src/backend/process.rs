@@ -7,7 +7,7 @@ use super::{
 use std::env;
 use std::ffi::OsString;
 use std::io::{self, Read, Write};
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 #[cfg(any(not(windows), test))]
@@ -420,6 +420,8 @@ pub(super) fn spawn_local_command_with_output(
         .env_clear()
         .envs(minimal_environment(plan))
         .envs(env.entries.iter().map(|(key, value)| (key, value)));
+    #[cfg(unix)]
+    process.process_group(0);
     match &stdin {
         ExecutionStdin::Empty => {
             process.stdin(Stdio::null());
@@ -449,23 +451,6 @@ pub(super) fn spawn_local_command_with_output(
                 }
             });
         }
-    }
-
-    if timeout.is_none() && output.is_none() && !matches!(&stdin, ExecutionStdin::Stream(_)) {
-        let mut child = process.spawn()?;
-        if let ExecutionStdin::Bytes(bytes) | ExecutionStdin::File(bytes) = stdin
-            && let Err(err) = write_child_stdin(&mut child, bytes)
-        {
-            return Err(cleanup_child_after_setup_error(child, err));
-        }
-        return child
-            .wait_with_output()
-            .map(|output| BackendExecutionOutput {
-                output,
-                timed_out: false,
-                cleanup_complete: false,
-                events: Vec::new(),
-            });
     }
 
     let mut child = process.spawn()?;
@@ -532,7 +517,7 @@ pub(super) fn spawn_local_command_with_output(
             stderr: join_pipe_reader(stderr_reader)?,
         },
         timed_out,
-        cleanup_complete: false,
+        cleanup_complete: true,
         events: Vec::new(),
     })
 }
@@ -574,6 +559,7 @@ fn wait_child_with_timeout(
     let start = Instant::now();
     loop {
         if let Some(status) = child.try_wait()? {
+            terminate_process_group(child.id())?;
             return Ok((status, false));
         }
 
@@ -585,15 +571,34 @@ fn wait_child_with_timeout(
         }
         let cancelled = output.is_some_and(|output| output.control.is_cancelled());
         if timed_out || cancelled {
-            if let Err(err) = child.kill()
+            let group_result = terminate_process_group(child.id());
+            let child_result = child.kill();
+            let wait_result = child.wait();
+            group_result?;
+            if let Err(err) = child_result
                 && err.kind() != io::ErrorKind::InvalidInput
             {
                 return Err(err);
             }
-            return child.wait().map(|status| (status, timed_out));
+            return wait_result.map(|status| (status, timed_out));
         }
 
         thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(unix)]
+fn terminate_process_group(process_id: u32) -> io::Result<()> {
+    let process_group = i32::try_from(process_id)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "process id is out of range"))?;
+    if unsafe { libc::kill(-process_group, libc::SIGKILL) } == 0 {
+        return Ok(());
+    }
+    let error = io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        Ok(())
+    } else {
+        Err(error)
     }
 }
 
@@ -633,15 +638,7 @@ fn join_pipe_reader(reader: Option<JoinHandle<io::Result<Vec<u8>>>>) -> io::Resu
         .map_err(|_| io::Error::other("output reader thread panicked"))?
 }
 
-#[cfg(not(windows))]
-fn write_child_stdin(child: &mut Child, bytes: Vec<u8>) -> io::Result<()> {
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(&bytes)?;
-    }
-    Ok(())
-}
-
-#[cfg(any(not(windows), test))]
+#[cfg(test)]
 pub(super) fn cleanup_child_after_setup_error(mut child: Child, setup_err: io::Error) -> io::Error {
     let kill_err = match child.kill() {
         Ok(()) => None,

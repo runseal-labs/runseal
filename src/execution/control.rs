@@ -15,7 +15,11 @@ pub(crate) struct ExecutionControl {
 
 #[derive(Clone, Copy)]
 pub(crate) enum TerminalCommand {
-    Resize { rows: u16, cols: u16 },
+    #[cfg_attr(not(windows), allow(dead_code))]
+    Resize {
+        rows: u16,
+        cols: u16,
+    },
     Interrupt,
 }
 

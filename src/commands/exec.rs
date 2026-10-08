@@ -5,6 +5,11 @@ mod output;
 mod signals;
 mod terminal;
 
+#[cfg(windows)]
+pub(crate) fn run_console_output_worker(args: &[String]) -> Result<(), String> {
+    output::run_console_output_worker(args)
+}
+
 const EXEC_HELP_TEXT: &str = "\
 Usage: runseal exec [--json|--events] [--policy <policy>] [--network <mode>] [--cwd <path>] [--timeout-ms <ms>] -- <command> [args...]
 

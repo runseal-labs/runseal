@@ -811,9 +811,10 @@ state. A reservation whose owner is provably gone, whose binding has no
 sandbox-identity process, and whose runtime roots were recorded and are absent
 must clear the reservation, the cleanup-failure marker, and the native quarantine
 signal, after which the binding admits again. A reservation without recorded
-runtime roots is unverified evidence: the default repair must refuse it and only
-`--accept-unverified-release` may proceed, marking `unverified_runtime_roots` in
-the report. The CLI help and unknown-argument handling are asserted separately.
+runtime roots is unverified evidence, so the default repair must refuse it. The
+explicit `--accept-unverified-release` override does not prove cleanup; its
+report marks `unverified_runtime_roots` when used. The CLI help and
+unknown-argument handling are asserted separately.
 
 `execution_capability_profiles_are_complete_and_consistent` in
 `tests/protocol_contract.rs` requires `getCapabilities` to report all 13
@@ -844,15 +845,11 @@ is `adv.process.orphan-child-after-cancel.v1`. Classifying the cancelled
 preparation as unverified cleanup instead quarantines the shared binding and
 blocks every later sandboxed execution until an explicit repair.
 
-`cli_stalled_console_output_cleans_owned_range_and_preserves_peer` keeps the
-strict local-execution classification for a stalled console: the target range is
-terminated, the runtime root removed, exactly one audit terminal is written, the
-CLI exits 124/125, and the peer execution survives. The sandboxed variant is a
-recorded known limitation: in plain mode a sandboxed execution whose console
-handle stays open but is never drained cannot cancel the native `WriteConsoleW`
-worker, so the terminal may report `EXECUTION_CLEANUP_FAILED` with
-`requested_termination_reason:backpressure`, and the process can remain blocked
-beyond the cleanup deadline. `sandboxed_stalled_console_output_is_a_known_limitation`
-records that limitation with `#[ignore]`; an ignored case is not a conformance
-pass. The execution range, runtime roots, and policy binding are still released,
-and the limitation is documented in README and RFC-0021.
+`cli_stalled_console_output_cleans_owned_range_and_preserves_peer` and
+`sandboxed_stalled_console_output_cleans_owned_range_and_preserves_peer` cover
+stalled plain-console output with local and sandboxed execution. RunSeal forwards
+console bytes through an owned helper process; when backpressure or timeout
+requires cancellation, cleanup terminates and waits for that process before
+reporting completion. Both tests require the target range and runtime roots to be
+cleaned, exactly one audit terminal, the expected CLI exit code, and an unaffected
+peer execution.

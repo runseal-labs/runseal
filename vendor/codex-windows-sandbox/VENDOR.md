@@ -78,6 +78,35 @@ Local vendor patches:
   quarantine the shared binding. Guarded by the spawn-event regression in
   `tests/execution_conformance.rs`.
 
+## Upstream file patch manifest
+
+The implementation changes below are the complete RunSeal patch set under
+`upstream/`, based on the imported commit above. They are limited to the Windows
+runner boundary needed for the single-identity model, live I/O, cancellation,
+terminal/control support, and confirmed cleanup. RunSeal-level behavior evidence
+is in `tests/execution_conformance.rs`; vendor boundary and setup invariants are
+in `tests/vendor_boundary.rs`.
+
+| File | RunSeal patch |
+|---|---|
+| `upstream/Cargo.toml` | Use the trimmed local vendor dependencies and enable the runner interfaces required by RunSeal. |
+| `upstream/bin/command_runner/win.rs` | Apply single-identity setup and process ownership; carry bounded input/output and cleanup state across the runner boundary. |
+| `upstream/bin/setup_main/win.rs` | Keep setup binary imports and unsafe-code linting consistent with the vendored build. |
+| `upstream/conpty/mod.rs` | Preserve explicit process identity, terminal dimensions, interrupt handling, and argv quoting for terminal launches. |
+| `upstream/control.rs` | Add the bounded duplex child control endpoint, half-close behavior, and retained writer ownership. |
+| `upstream/elevated/ipc_framed.rs` | Validate the v11 runner frame and carry the frozen cleanup budget and deadline. |
+| `upstream/elevated/runner_client.rs` | Bound runner preparation, retain process ownership, and confirm termination before releasing startup state. |
+| `upstream/elevated_impl.rs` | Bridge live stdin/output, cancellation, terminal results, and cleanup evidence between host and runner. |
+| `upstream/host_coordinator.rs` | Add the named host coordination event with a restricted access descriptor. |
+| `upstream/lib.rs` | Export the cleanup, control, output, and terminal interfaces used by the RunSeal adapter. |
+| `upstream/logging.rs` | Keep raw argv and native error text out of vendor logs. |
+| `upstream/output_pipe.rs` | Add cancellable native output workers and owned nonblocking pipe handles with confirmed worker exit. |
+| `upstream/process.rs` | Track process identity and execution-range ownership through local/elevated launch, terminal/control, and cleanup. |
+| `upstream/unified_exec/backends/elevated.rs` | Wire cancellation and cleanup ownership into the elevated execution backend. |
+| `upstream/unified_exec/backends/legacy.rs` | Set explicit default terminal dimensions for the legacy launch path. |
+| `upstream/unified_exec/backends/windows_common.rs` | Carry framed runner and output failures to the shared Windows backend. |
+| `upstream/winutil.rs` | Normalize argv[0] and quote Windows command-line arguments at the process boundary. |
+
 Prior non-public integrations may be used as pitfall evidence only after
 redaction. Land those lessons as public acceptance criteria, adapter behavior,
 or conformance tests; do not copy product-specific names, local paths, account

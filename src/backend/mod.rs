@@ -72,7 +72,7 @@ pub use core::SandboxBackend;
 use error::BackendCleanupError;
 pub(crate) use error::BackendCleanupFacts;
 pub use error::BackendError;
-#[cfg(test)]
+#[cfg(all(test, windows))]
 pub(crate) use error::BackendInputFacts;
 #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 use error::BackendUnavailableError;

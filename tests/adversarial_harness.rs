@@ -28,7 +28,12 @@ fn windows_test_gate() -> std::sync::MutexGuard<'static, ()> {
 }
 
 #[cfg(not(windows))]
-fn windows_test_gate() {}
+struct NoopWindowsTestGuard;
+
+#[cfg(not(windows))]
+fn windows_test_gate() -> NoopWindowsTestGuard {
+    NoopWindowsTestGuard
+}
 
 fn runseal_bin() -> PathBuf {
     env::var_os("RUNSEAL_BIN")

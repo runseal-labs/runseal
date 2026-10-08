@@ -785,7 +785,7 @@ fn expected_proxy_feature_status() -> &'static str {
 }
 
 fn expected_network_proxy_status() -> &'static str {
-    expected_status(expected_proxy_feature_reported())
+    expected_proxy_feature_status()
 }
 
 fn expected_resource_limits_supported() -> bool {
@@ -802,7 +802,7 @@ fn expected_status(supported: bool) -> &'static str {
 
 fn expected_read_only_status() -> &'static str {
     if cfg!(any(target_os = "linux", target_os = "macos")) {
-        "supported"
+        "experimental"
     } else {
         expected_status(expected_windows_sandbox_supported())
     }
@@ -810,7 +810,7 @@ fn expected_read_only_status() -> &'static str {
 
 fn expected_workspace_write_status() -> &'static str {
     if cfg!(any(target_os = "linux", target_os = "macos")) {
-        "supported"
+        "experimental"
     } else {
         expected_status(expected_windows_sandbox_supported())
     }
@@ -818,7 +818,7 @@ fn expected_workspace_write_status() -> &'static str {
 
 fn expected_workspace_contained_status() -> &'static str {
     if cfg!(any(target_os = "linux", target_os = "macos")) {
-        "supported"
+        "experimental"
     } else if cfg!(windows) {
         expected_status(expected_windows_sandbox_supported())
     } else {
@@ -828,7 +828,7 @@ fn expected_workspace_contained_status() -> &'static str {
 
 fn expected_network_disabled_status() -> &'static str {
     if cfg!(any(target_os = "linux", target_os = "macos")) {
-        "supported"
+        "experimental"
     } else {
         expected_status(expected_windows_sandbox_supported())
     }
