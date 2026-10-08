@@ -290,8 +290,6 @@ def assert_macos_read_only(payload: dict) -> None:
 
 
 def assert_portable_proxy(system: str, enforcement: str, policy: str, command: str) -> None:
-    contained_command = "/usr/bin/python3"
-    proxy_command = contained_command if Path(contained_command).exists() else command
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     listener.bind(("127.0.0.1", 0))
     listener.listen(1)
@@ -347,7 +345,7 @@ def assert_portable_proxy(system: str, enforcement: str, policy: str, command: s
                 "--cwd",
                 cwd,
                 "--",
-                proxy_command,
+                command,
                 "-c",
                 code,
             ],
@@ -364,7 +362,7 @@ def assert_portable_proxy(system: str, enforcement: str, policy: str, command: s
                 "--cwd",
                 cwd,
                 "--",
-                proxy_command,
+                command,
                 "-c",
                 "import socket; socket.create_connection(('1.1.1.1', 53), timeout=0.5); print('direct-network-ok')",
             ],
