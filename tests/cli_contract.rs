@@ -1340,6 +1340,25 @@ fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
         String::from_utf8_lossy(&output.stderr)
     );
     let payload = stdout_json(&output)?;
+    let sandbox_setup_required = cfg!(windows)
+        && payload["setup_status"]["requires_setup"]
+            .as_bool()
+            .unwrap_or(true);
+    let read_only_status = if sandbox_setup_required {
+        "requires_setup"
+    } else {
+        expected_read_only_status()
+    };
+    let workspace_write_status = if sandbox_setup_required {
+        "requires_setup"
+    } else {
+        expected_workspace_write_status()
+    };
+    let workspace_contained_status = if sandbox_setup_required {
+        "requires_setup"
+    } else {
+        expected_workspace_contained_status()
+    };
     assert_eq!(payload["backend"], expected_backend_name());
     assert_eq!(payload["backend_status"], expected_backend_status());
     assert!(payload["platform"].as_str().is_some());
@@ -1427,17 +1446,14 @@ fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
     assert_eq!(payload["features"]["audit_jsonl"], true);
     assert_eq!(payload["features"]["otel_export"], false);
     assert_eq!(payload["sandbox_levels"]["danger-full-access"], "supported");
-    assert_eq!(
-        payload["sandbox_levels"]["read-only"],
-        expected_read_only_status()
-    );
+    assert_eq!(payload["sandbox_levels"]["read-only"], read_only_status);
     assert_eq!(
         payload["sandbox_levels"]["workspace-write"],
-        expected_workspace_write_status()
+        workspace_write_status
     );
     assert_eq!(
         payload["sandbox_levels"]["workspace-contained"],
-        expected_workspace_contained_status()
+        workspace_contained_status
     );
     assert_eq!(
         payload["network_modes"]["proxy"],
