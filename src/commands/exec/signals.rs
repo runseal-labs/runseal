@@ -5,19 +5,16 @@ use std::time::Instant;
 #[cfg(windows)]
 mod windows {
     use super::*;
-    use std::os::windows::io::AsRawHandle;
     use std::sync::{
         Mutex, MutexGuard,
         atomic::{AtomicBool, Ordering},
-        mpsc::{self, Sender},
+        mpsc::{self, Receiver, Sender},
     };
     use std::thread::JoinHandle;
     use std::time::Duration;
-    use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
     use windows_sys::Win32::System::Console::{
         CTRL_BREAK_EVENT, CTRL_C_EVENT, SetConsoleCtrlHandler,
     };
-    use windows_sys::Win32::System::Threading::WaitForSingleObject;
     use windows_sys::core::BOOL;
 
     static EXCLUSIVE: Mutex<()> = Mutex::new(());
@@ -38,6 +35,7 @@ mod windows {
         exclusive: Option<MutexGuard<'static, ()>>,
         registered: bool,
         stop: Option<Sender<()>>,
+        finished: Receiver<()>,
         worker: Option<JoinHandle<()>>,
         cleanup_deadline: Option<Instant>,
     }
@@ -55,9 +53,11 @@ mod windows {
                 ));
             }
             let (stop, receiver) = mpsc::channel();
+            let (finished, finished_receiver) = mpsc::channel();
             let worker = std::thread::Builder::new()
                 .name("execution-console-cancellation".into())
                 .spawn(move || {
+                    let _finished = finished;
                     loop {
                         if INTERRUPTED.swap(false, Ordering::AcqRel) {
                             control.cancel();
@@ -73,6 +73,7 @@ mod windows {
                     exclusive: Some(exclusive),
                     registered: true,
                     stop: Some(stop),
+                    finished: finished_receiver,
                     worker: Some(worker),
                     cleanup_deadline: None,
                 }),
@@ -100,12 +101,15 @@ mod windows {
             if let Some(stop) = self.stop.take() {
                 let _ = stop.send(());
             }
-            if let Some(worker) = self.worker.as_ref() {
-                while unsafe { WaitForSingleObject(worker.as_raw_handle(), 0) } != WAIT_OBJECT_0 {
-                    if Instant::now() >= deadline {
+            if self.worker.is_some() {
+                match self
+                    .finished
+                    .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                {
+                    Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => {}
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
                         return Err("console cancellation worker did not stop".into());
                     }
-                    std::thread::sleep(Duration::from_millis(5));
                 }
             }
             if let Some(worker) = self.worker.take() {
@@ -149,6 +153,25 @@ mod windows {
             {
                 std::mem::forget(exclusive);
             }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::SignalFrontend;
+        use crate::execution::ExecutionControl;
+        use std::time::{Duration, Instant};
+
+        #[test]
+        fn console_cancellation_worker_stops_after_normal_execution() {
+            let mut frontend = SignalFrontend::new(ExecutionControl::default())
+                .expect("create console cancellation frontend");
+            frontend
+                .finish(Instant::now() + Duration::from_secs(2))
+                .expect("stop console cancellation worker");
+            frontend
+                .unregister()
+                .expect("unregister console cancellation handler");
         }
     }
 }
