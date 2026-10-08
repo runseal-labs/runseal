@@ -2487,6 +2487,7 @@ impl Client {
 
 #[cfg(windows)]
 #[test]
+#[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn sandboxed_workspace_cannot_cover_protected_execution_state() -> Result<()> {
     use std::ffi::OsString;
     use std::os::windows::ffi::OsStringExt;
@@ -2577,6 +2578,7 @@ fn sandboxed_workspace_cannot_cover_protected_execution_state() -> Result<()> {
 
 #[cfg(windows)]
 #[test]
+#[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn cross_process_policy_gate_survives_caller_appdata_override_and_accepts_after_drain() -> Result<()>
 {
     let _guard = windows_test_gate();
@@ -3099,6 +3101,7 @@ fn rpc_and_service_query_and_cancel_while_execution_is_running() -> Result<()> {
 
 #[cfg(windows)]
 #[test]
+#[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn windows_node_client_round_trips_inside_sandbox() -> Result<()> {
     let _guard = windows_test_gate();
     let node = if let Ok(path) = std::env::var("RUNSEAL_TEST_NODE") {
@@ -3135,6 +3138,7 @@ fn windows_node_client_round_trips_inside_sandbox() -> Result<()> {
 
 #[cfg(windows)]
 #[test]
+#[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn windows_sandboxed_rpc_and_service_active_cancellation() -> Result<()> {
     for mode in ["rpc", "service"] {
         activity_query_and_cancel(mode, "workspace-write")?;
@@ -3221,12 +3225,14 @@ fn wait_ready_pid(client: &Client, id: &str) -> Result<u32> {
 
 #[cfg(windows)]
 #[test]
+#[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn windows_ac07_cancelling_execution_a_keeps_execution_b_live_and_bound() -> Result<()> {
     verify_natural_exit_and_cancel_range("workspace-write")
 }
 
 #[cfg(windows)]
 #[test]
+#[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn windows_environment_override_is_case_insensitive_for_local_and_sandbox_execution() -> Result<()>
 {
     let _guard = windows_test_gate();
@@ -3745,6 +3751,7 @@ fn verify_natural_exit_and_cancel_range(policy: &str) -> Result<()> {
 
 #[cfg(windows)]
 #[test]
+#[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn windows_timeout_clears_descendant_range_and_retains_timeout_cause() -> Result<()> {
     let _guard = windows_test_gate();
     let tmp = TempDir::new()?;
@@ -3788,6 +3795,7 @@ fn windows_timeout_clears_descendant_range_and_retains_timeout_cause() -> Result
 
 #[cfg(windows)]
 #[test]
+#[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn windows_preparation_timeout_aborts_cleanly_without_quarantining_the_binding() -> Result<()> {
     let _guard = windows_test_gate();
     let tmp = TempDir::new()?;
@@ -3848,6 +3856,7 @@ fn windows_preparation_timeout_aborts_cleanly_without_quarantining_the_binding()
 
 #[cfg(windows)]
 #[test]
+#[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn windows_spawn_failure_keeps_raw_backend_diagnostics_out_of_audit() -> Result<()> {
     let _guard = windows_test_gate();
     let tmp = TempDir::new()?;
@@ -3882,6 +3891,7 @@ fn windows_spawn_failure_keeps_raw_backend_diagnostics_out_of_audit() -> Result<
 
 #[cfg(windows)]
 #[test]
+#[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn windows_output_limit_terminates_with_verified_cleanup_and_correct_cause() -> Result<()> {
     let _guard = windows_test_gate();
     let tmp = TempDir::new()?;
@@ -4022,12 +4032,14 @@ fn local_stream_stdin_three_round_trips_and_ordered_eof() -> Result<()> {
 
 #[cfg(windows)]
 #[test]
+#[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn windows_sandboxed_stream_stdin_three_round_trips_and_ordered_eof() -> Result<()> {
     stream_round_trips("workspace-write")
 }
 
 #[cfg(windows)]
 #[test]
+#[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn windows_unread_stream_input_does_not_block_cancellation() -> Result<()> {
     let _guard = windows_test_gate();
     let tmp = TempDir::new()?;
@@ -4080,6 +4092,7 @@ fn windows_unread_stream_input_does_not_block_cancellation() -> Result<()> {
 
 #[cfg(windows)]
 #[test]
+#[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn sandboxed_binary_bytes_file_and_empty_stdin_deliver_exact_bytes_then_eof() -> Result<()> {
     let _guard = windows_test_gate();
     for (mode, size) in [("empty", 0), ("bytes", 64 * 1024), ("file", 192 * 1024)] {
@@ -4392,6 +4405,7 @@ fn required_audit_failure_rejects_before_receipt_and_child_spawn() -> Result<()>
 
 #[cfg(windows)]
 #[test]
+#[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn live_event_sequence_and_unique_terminal_match_committed_audit() -> Result<()> {
     let _guard = windows_test_gate();
     for (policy, cancel) in [
@@ -4504,6 +4518,7 @@ fn live_event_sequence_and_unique_terminal_match_committed_audit() -> Result<()>
 
 #[cfg(windows)]
 #[test]
+#[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn dispose_session_waits_for_owned_range_and_runtime_cleanup_without_stopping_peer() -> Result<()> {
     let _guard = windows_test_gate();
     for (mode, policy) in [
@@ -4625,6 +4640,7 @@ fn dispose_session_waits_for_owned_range_and_runtime_cleanup_without_stopping_pe
 
 #[cfg(windows)]
 #[test]
+#[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn local_completion_drains_output_with_foreign_pipe_handles_without_stopping_peer() -> Result<()> {
     let _guard = windows_test_gate();
     for stdin_mode in ["empty", "file"] {
@@ -4695,6 +4711,7 @@ fn local_completion_drains_output_with_foreign_pipe_handles_without_stopping_pee
 
 #[cfg(windows)]
 #[test]
+#[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn started_event_requires_real_spawn_and_precedes_child_output() -> Result<()> {
     let _guard = windows_test_gate();
     for policy in ["danger-full-access", "workspace-write"] {
@@ -4781,6 +4798,7 @@ fn started_event_requires_real_spawn_and_precedes_child_output() -> Result<()> {
 
 #[cfg(windows)]
 #[test]
+#[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn sandboxed_pty_has_real_console_dimensions_and_merged_binary_events() -> Result<()> {
     pty_console_case("workspace-write")
 }
@@ -4897,6 +4915,7 @@ fn pty_console_case(policy: &str) -> Result<()> {
 
 #[cfg(windows)]
 #[test]
+#[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn pty_interrupt_stops_foreground_task_and_keeps_shell_and_peer_alive() -> Result<()> {
     pty_interrupt_case("workspace-write")
 }
@@ -4909,6 +4928,7 @@ fn local_pty_interrupt_keeps_shell_and_peer_alive() -> Result<()> {
 
 #[cfg(windows)]
 #[test]
+#[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn cli_native_file_output_preserves_binary_streams_and_child_exit() -> Result<()> {
     use std::io::{Read, Seek};
     let _guard = windows_test_gate();
@@ -4968,6 +4988,7 @@ fn cli_native_file_output_preserves_binary_streams_and_child_exit() -> Result<()
 
 #[cfg(windows)]
 #[test]
+#[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn sandboxed_stalled_console_output_cleans_owned_range_and_preserves_peer() -> Result<()> {
     cli_stalled_console_output_for_policy("workspace-write")
 }
@@ -5373,6 +5394,7 @@ sys.exit(result.returncode)
 
 #[cfg(windows)]
 #[test]
+#[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn cli_console_output_preserves_unicode_without_changing_caller_code_page() -> Result<()> {
     use std::io::Read;
     let _guard = windows_test_gate();
@@ -5504,6 +5526,7 @@ fn cli_console_output_preserves_unicode_without_changing_caller_code_page() -> R
 
 #[cfg(windows)]
 #[test]
+#[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn cli_pty_forwards_real_console_input_resize_and_restores_modes() -> Result<()> {
     use std::io::Read;
     let _guard = windows_test_gate();
@@ -5628,6 +5651,7 @@ fn cli_pty_forwards_real_console_input_resize_and_restores_modes() -> Result<()>
 
 #[cfg(windows)]
 #[test]
+#[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn cli_plain_console_inherit_delivers_unicode_and_stops_on_partial_input_exit() -> Result<()> {
     use std::io::Read;
     let _guard = windows_test_gate();
@@ -5830,6 +5854,7 @@ print('PLAIN_RESTORED',flush=True); sys.exit(result.returncode)
 
 #[cfg(windows)]
 #[test]
+#[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn cli_pty_input_eof_cancels_range_and_keeps_peer_alive() -> Result<()> {
     use std::io::Read;
     struct OwnedCli(std::process::Child);
@@ -6370,6 +6395,7 @@ fn contained_python_fixture(workspace: &std::path::Path) -> Result<String> {
 
 #[cfg(windows)]
 #[test]
+#[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn rpc_control_fd3_three_binary_rounds_and_half_close_preserve_streams_and_audit() -> Result<()> {
     let _guard = windows_test_gate();
     for policy in [
@@ -6666,6 +6692,7 @@ sys.exit(7)
 
 #[cfg(windows)]
 #[test]
+#[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn rpc_control_remains_live_with_blocked_stdin_and_cancels_after_control_backpressure() -> Result<()>
 {
     let _guard = windows_test_gate();
@@ -6794,6 +6821,7 @@ fn rpc_control_remains_live_with_blocked_stdin_and_cancels_after_control_backpre
 
 #[cfg(windows)]
 #[test]
+#[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn rpc_control_output_shares_the_execution_output_limit() -> Result<()> {
     let _guard = windows_test_gate();
     for policy in ["danger-full-access", "workspace-write"] {
@@ -6849,6 +6877,7 @@ fn rpc_control_output_shares_the_execution_output_limit() -> Result<()> {
 
 #[cfg(windows)]
 #[test]
+#[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn cli_control_fd3_forwards_binary_rounds_and_half_close_with_separate_stdio() -> Result<()> {
     use std::io::{Read, Write};
     let _guard = windows_test_gate();
@@ -6992,6 +7021,7 @@ sys.exit(7)
 
 #[cfg(windows)]
 #[test]
+#[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn cli_control_stalled_caller_cleans_owned_range_and_preserves_peer() -> Result<()> {
     use std::io::{Read, Write};
     let _guard = windows_test_gate();
@@ -7122,6 +7152,7 @@ fn cli_control_stalled_caller_cleans_owned_range_and_preserves_peer() -> Result<
 
 #[cfg(windows)]
 #[test]
+#[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn cli_stdio_stalled_or_disconnected_caller_cleans_owned_range_and_preserves_peer() -> Result<()> {
     use std::io::Read;
     let _guard = windows_test_gate();

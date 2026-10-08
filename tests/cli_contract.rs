@@ -569,6 +569,7 @@ fn exec_events_delivers_ready_before_child_gate_is_released() -> Result<()> {
 
 #[cfg(windows)]
 #[test]
+#[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn sandboxed_exec_events_delivers_ready_before_child_gate_is_released() -> Result<()> {
     assert_exec_events_ready_before_gate("workspace-write")
 }

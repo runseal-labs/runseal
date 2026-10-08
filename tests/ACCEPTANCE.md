@@ -7,8 +7,10 @@ platform and mode, the expected observable behavior, and the actual result.
 Candidate validation results for this revision are recorded after the matrix.
 
 Reproduce a single row with the command in the "Command" column. Windows rows
-require a Windows host with the sandbox user prepared; portable rows run
-anywhere.
+that require sandbox enforcement need a prepared sandbox identity. Those tests
+are marked ignored on generic Windows hosts; ignored cases are skipped, not
+passing evidence. Run the full matrix on a prepared Windows reference host with
+`cargo test --all-targets -- --include-ignored`. Portable rows run anywhere.
 
 | AC | Scenario | Test location | Command | Platform / mode | Expected | Actual |
 |---|---|---|---|---|---|---|
@@ -46,6 +48,9 @@ anywhere.
 - Windows sandboxed rows require a prepared sandbox identity. Run
   `scripts/build-windows.ps1` once; use the default repair only after reviewing
   the current binding state and confirming that recorded owners are gone.
+- Generic Windows CI marks sandboxed conformance cases as ignored because its
+  runner has no prepared identity. Run `cargo test --all-targets -- --include-ignored`
+  on a prepared Windows reference host; ignored results do not satisfy an AC.
 - Portable rows report `unsupported` or `experimental` for Windows-only
   capabilities and fail closed rather than running unrestricted.
 - `danger-full-access` rows assert explicit local execution, not a sandbox.

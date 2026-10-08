@@ -601,7 +601,7 @@ fn windows_sandbox_binding_key() -> io::Result<String> {
     let binding = codex_windows_sandbox::resolve_sid(codex_windows_sandbox::SANDBOX_USERS_GROUP)
         .map_err(|_| {
             io::Error::other(BackendUnavailableError {
-                reason: "windows sandbox process binding unavailable".to_string(),
+                reason: public_windows_setup_unavailable_reason("process_binding_unavailable"),
             })
         })?;
     Ok(format!("{:x}", Sha256::digest(binding)))
@@ -700,7 +700,7 @@ fn inspect_sandbox_process_group() -> io::Result<(Vec<u32>, usize)> {
     let group_sid = codex_windows_sandbox::resolve_sid(codex_windows_sandbox::SANDBOX_USERS_GROUP)
         .map_err(|_| {
             io::Error::other(BackendUnavailableError {
-                reason: "windows sandbox process binding unavailable".to_string(),
+                reason: public_windows_setup_unavailable_reason("process_binding_unavailable"),
             })
         })?;
     pids_with_token_group(&group_sid)

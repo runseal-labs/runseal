@@ -114,7 +114,14 @@ They are black-box protocol tests. `cargo test` builds and runs the local binary
 RUNSEAL_BIN=/path/to/runseal cargo test --test cli_contract --test protocol_contract --test filesystem_conformance
 ```
 
-On Windows, the tests serialize shared sandbox setup state internally, so the default `cargo test` path is supported.
+Windows sandboxed conformance cases require a prepared sandbox identity. The
+generic Windows test job marks those cases ignored; ignored cases are not
+acceptance evidence. On a prepared Windows reference host, run the complete
+suite, including those cases, with:
+
+```powershell
+cargo test --all-targets -- --include-ignored
+```
 
 Run the suite on Windows before claiming reference-backend readiness. Other
 platforms can run the same tests to verify platform selection and fail-closed
