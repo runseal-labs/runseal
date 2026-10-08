@@ -18,7 +18,7 @@
 
 字节设置使用十进制字节数。`getCapabilities.limits` 以 `completed_executions`、`completed_execution_bytes`、`audit_cache_bytes` 回报实际值。摘要数量和字节预算同时生效，活动执行仍可查询。审计缓存淘汰会报告历史不完整，落盘审计文件保留；这些设置不改变执行策略哈希。
 
-`RUNSEAL_STREAM_CHUNK_BYTES` 配置 stream/input/control 解码后 chunk 上限，默认 64 KiB，允许 8 KiB..64 KiB。`RUNSEAL_INPUT_PENDING_BYTES` 配置 stdin/control 各自待写预算，默认 256 KiB，允许 8 KiB..16 MiB，计入已取出但尚未确认写完的数据，且不得小于一个 chunk。两者使用十进制字节数，启动时冻结，由 `limits.stream_chunk_bytes` 和 `limits.input_pending_bytes` 回报。RPC 超限 chunk 在写入目标前拒绝；输出和 plain CLI 原始输入按上限分片，字节、offset 和策略哈希不变。其他资源限制的配置仍在实现中。
+`RUNSEAL_STREAM_CHUNK_BYTES` 配置 stream/input/control 解码后 chunk 上限，默认 64 KiB，允许 8 KiB..64 KiB。`RUNSEAL_INPUT_PENDING_BYTES` 配置 stdin/control 各自待写预算，默认 256 KiB，允许 8 KiB..16 MiB，计入已取出但尚未确认写完的数据，且不得小于一个 chunk。两者使用十进制字节数，启动时冻结，由 `limits.stream_chunk_bytes` 和 `limits.input_pending_bytes` 回报。RPC 超限 chunk 在写入目标前拒绝；输出和 plain CLI 原始输入按上限分片，字节、offset 和策略哈希不变。其他部署资源限制也可配置，具体项见下文。
 
 `RUNSEAL_RPC_FRAME_BYTES` 限制 JSON-RPC 输入和输出行的字节数（包含换行），默认 1 MiB，允许 128 KiB..1 MiB。`limits.rpc_frame_bytes` 回报冻结后的启动值；`limits.query_response_bytes` 回报快照响应预算 `min(256 KiB, rpc_frame_bytes)`。超长输入排空至换行后拒绝，目标不启动，后续请求仍可处理。快照保留最新完整记录并明确报告截断；输出帧无法容纳时关闭连接并清理活动执行。此传输设置不改变策略哈希。
 
@@ -82,7 +82,7 @@ Windows 是一等公民的 reference backend。下面的 macOS 和 Linux 项追�
 | Audit/events | Supported | 当前 portable paths supported | 当前 portable paths supported | Execution、denial、setup failure 和 network decision events 必须和 JSONL audit records 对齐，并且不暴露 backend-private details。 |
 | Adversarial conformance | Reference readiness 必需 | 持续追踪 experimental portable paths | 持续追踪 experimental portable paths | 每个 capability 在提升状态前，RFC-0016 manifest cases 都必须产出 public-safe passing results；unsupported gaps 必须保持 explicit fail closed。 |
 
-协议和策略版本字符串为 `runseal.protocol/v2` 和 `runseal.policy/v1`。v2 实现仍在进行：admission 回执、backend 确认后的启动事件、pipe 实时输出、流式 stdin、活动查询、取消、订阅替换/重放/退订、有界保留、客户端暂停读取时取消、排队通知失效、writer 停滞清理、必需审计的 admission 拒绝、带序号的 live/审计终态一致性、终态保留范围快照和等待所属进程/runtime root 清理的 session disposal 已有针对性的 Windows pipe 验收证据。运行中审计写失败已有真实本地进程与只读文件句柄故障测试，结果明确报告缺少持久记录。Windows 本地与 sandboxed PTY 启动、终端 bytes、resize 和前台 interrupt 后 Shell/并行 Execution 继续运行已有 danger-full-access 和 workspace-write/unmanaged 针对性测试；CLI PTY 也已通过这些 profile 的真实终端 Unicode 输入、中断、resize、退出码/模式恢复和输入 EOF 清理测试；可配置 transport 限制、完整清理证明及平台/组合验收矩阵仍待完成。Unix 协议 writer 已使用非阻塞输出，但尚未在当前 Windows 主机上验证该路径。当前 checkout 还不是完成验收的 v2 发布候选。
+协议和策略版本字符串为 `runseal.protocol/v2` 和 `runseal.policy/v1`。源码包候选版本 `0.2.0-rc.1` 已实现 v2 生命周期、流式 stdin/output、取消、PTY、control channel、可配置 transport 限制、审计和 session 清理。跨平台 CI 与已运行的 portable/local conformance 对应路径通过。仍需在 prepared Windows reference host 上完成 sandboxed pipe/stdin/cancel/PTY/control、filesystem/network enforcement、跨进程 policy gate 和 capability profile 矩阵。通用 Windows CI 会忽略依赖预置身份的用例；这些 skip 不计为 conformance 通过。`danger-full-access` 本地测试和示例明确不属于 sandbox 证据。停滞 Console 路径由拥有的 helper process 转发；本地 Console 回归通过，sandboxed 对应项仍待预置主机验证。Linux/macOS CI 已覆盖当前声明的 portable 路径，包括 Unix 非阻塞协议 writer。完整 Windows 矩阵通过前，此候选版本不得作为可发布版本。
 
 标准 `read-only` profile 允许广泛读取、禁止 workspace 写入，执行私有 runtime root 仍可写。
 自定义策略显式声明的读取范围保持不变。Windows 内部权限 profile 在选择隔离模式前包含 runtime root。

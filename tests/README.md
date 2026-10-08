@@ -857,6 +857,6 @@ blocks every later sandboxed execution until an explicit repair.
 stalled plain-console output with local and sandboxed execution. RunSeal forwards
 console bytes through an owned helper process; when backpressure or timeout
 requires cancellation, cleanup terminates and waits for that process before
-reporting completion. Both tests require the target range and runtime roots to be
-cleaned, exactly one audit terminal, the expected CLI exit code, and an unaffected
-peer execution.
+reporting completion. The local test runs on generic Windows. The sandboxed test
+requires a prepared Windows identity and remains ignored on generic Windows CI;
+its result is pending and is not counted as an acceptance pass.
