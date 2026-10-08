@@ -178,6 +178,9 @@ impl ExecutionJournal {
         if let Some(failure) = summary.get("error") {
             terminal["error"] = failure.clone();
         }
+        if let Some(setup_status) = summary.get("setup_status") {
+            terminal["setup_status"] = setup_status.clone();
+        }
         // The transport samples insertion/eviction before the owner commits the immutable terminal.
         // Entry points without event replay expose an empty transport-retention range.
         let earliest = if let Some(range) = &mut self.terminal_range {
