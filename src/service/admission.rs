@@ -407,7 +407,7 @@ mod tests {
             };
             let version =
                 service.handle_rpc_request(&json!({"jsonrpc":"2.0","id":2,"method":"getVersion"}));
-            let mut peer=service.handle_rpc_request(&json!({"jsonrpc":"2.0","id":3,"method":"execute","params":{"command":[python,"-u","-c","import os,pathlib,sys; pathlib.Path('peer.pid').write_text(str(os.getpid())); print('READY',flush=True); sys.stdin.buffer.read()"],"cwd":tmp.path(),"policy":"danger-full-access","stdin":{"mode":"stream"}}}));
+            let mut peer=service.handle_rpc_request(&json!({"jsonrpc":"2.0","id":3,"method":"execute","params":{"command":[python,"-u","-c","import os,pathlib,sys; p=pathlib.Path('peer.pid'); t=p.with_suffix('.tmp'); t.write_text(str(os.getpid())); t.replace(p); print('READY',flush=True); sys.stdin.buffer.read()"],"cwd":tmp.path(),"policy":"danger-full-access","stdin":{"mode":"stream"}}}));
             let deadline = Instant::now() + Duration::from_secs(2);
             while peer.is_empty() {
                 peer.extend(service.poll_admissions());

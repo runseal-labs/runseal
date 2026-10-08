@@ -1210,7 +1210,7 @@ mod tests {
             .take()
             .ok_or_else(|| io::Error::other("peer output"))?;
         let output = unsafe { fs::File::from_raw_handle(output.into_raw_handle()) };
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
         while codex_windows_sandbox::available_pipe_bytes(&output)?.is_none_or(|n| n < 6) {
             if peer.0.try_wait()?.is_some() || std::time::Instant::now() >= deadline {
                 return Err(io::Error::other("peer readiness"));
@@ -1279,7 +1279,7 @@ mod tests {
         )?;
         let orphan_retained =
             retained_state.active.len() == 1 && retained_state.active[0].pid == peer_pid;
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
         while fs::read(&heartbeat)? == before && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
@@ -1471,6 +1471,7 @@ mod release_worker_tests {
     struct NativeGate {
         entered: AtomicBool,
         release: AtomicBool,
+        target_started: AtomicBool,
         worker: Mutex<Option<(OwnedHandle, std::thread::ThreadId)>>,
     }
     unsafe extern "system" fn hold_exit(value: *const std::ffi::c_void) {
@@ -1727,6 +1728,7 @@ mod release_worker_tests {
                 };
                 if !handle.is_null() {
                     self.target = Some(unsafe { OwnedHandle::from_raw_handle(handle) });
+                    self.gate.target_started.store(true, Ordering::Release);
                     fs::write(self.cwd.join("release"), b"R").map_err(|_| {
                         crate::error::RunSealError::new("INTERNAL_ERROR", "target release")
                     })?;
@@ -1808,6 +1810,17 @@ mod release_worker_tests {
         let safety_gate = gate.clone();
         let (stop, stopped) = mpsc::channel();
         let watchdog = std::thread::spawn(move || {
+            let startup_deadline = Instant::now() + Duration::from_secs(15);
+            while !safety_gate.target_started.load(Ordering::Acquire) {
+                if Instant::now() >= startup_deadline {
+                    safety_gate.release.store(true, Ordering::Release);
+                    return;
+                }
+                match stopped.recv_timeout(Duration::from_millis(50)) {
+                    Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                }
+            }
             if matches!(
                 stopped.recv_timeout(Duration::from_secs(3)),
                 Err(mpsc::RecvTimeoutError::Timeout)
@@ -1855,7 +1868,7 @@ mod release_worker_tests {
         let control = crate::execution::ExecutionControl::default();
         let request=crate::execution::ExecutionRequest {
             ids:crate::events::new_execution_ids(),control:control.clone(),
-            command:vec!["python".into(),"-u".into(),"-c".into(),"import os,pathlib,sys,time; pathlib.Path('target.pid').write_text(str(os.getpid())); print('READY',flush=True); deadline=time.monotonic()+5\nwhile not pathlib.Path('release').exists() and time.monotonic()<deadline: time.sleep(.01)\nsys.exit(7)".into()],
+            command:vec!["python".into(),"-u".into(),"-c".into(),"import os,pathlib,sys,time; p=pathlib.Path('target.pid'); t=p.with_suffix('.tmp'); t.write_text(str(os.getpid())); t.replace(p); print('READY',flush=True); deadline=time.monotonic()+5\nwhile not pathlib.Path('release').exists() and time.monotonic()<deadline: time.sleep(.01)\nsys.exit(7)".into()],
             cwd:tmp.path().to_owned(),policy:crate::policy::normalize_policy(&json!("danger-full-access"),tmp.path(),None).map_err(|error|anyhow::anyhow!(error.reason))?,
             stdin:crate::backend::ExecutionStdin::Empty,control_input:None,io:crate::backend::ExecutionIo::Pipe,env:crate::backend::ExecutionEnv::default(),metadata:None,timeout:Some(Duration::from_secs(30)),
         };

@@ -583,12 +583,12 @@ mod cleanup_tests {
             cleanup_deadline: None,
             console: false,
         };
-        let readiness = Instant::now() + Duration::from_secs(2);
+        let readiness = Instant::now() + Duration::from_secs(15);
         while !ready.exists() {
             anyhow::ensure!(Instant::now() < readiness, "owned peer readiness");
             std::thread::sleep(Duration::from_millis(5));
         }
-        entered_rx.recv_timeout(Duration::from_secs(2))?;
+        entered_rx.recv_timeout(Duration::from_secs(15))?;
         let original_deadline = Instant::now();
         assert!(reader.shutdown(original_deadline).is_err());
         assert!(

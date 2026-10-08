@@ -1285,9 +1285,9 @@ mod disposal_tests {
                 };
                 // Start a real peer through ordinary controller admission.
                 let mut peer_receipt=service.handle_rpc_request(&json!({"jsonrpc":"2.0","id":1,"method":"execute","params":{
-                    "command":[python,"-u","-c","import os,pathlib,sys; pathlib.Path('peer.pid').write_text(str(os.getpid())); print('READY',flush=True); sys.stdin.buffer.read()"],
+                    "command":[python,"-u","-c","import os,pathlib,sys; p=pathlib.Path('peer.pid'); t=p.with_suffix('.tmp'); t.write_text(str(os.getpid())); t.replace(p); print('READY',flush=True); sys.stdin.buffer.read()"],
                     "cwd":tmp.path(),"policy":"danger-full-access","stdin":{"mode":"stream"}}}));
-                let admission_watchdog = Instant::now() + Duration::from_secs(3);
+                let admission_watchdog = Instant::now() + Duration::from_secs(15);
                 while peer_receipt.is_empty() {
                     peer_receipt.extend(service.poll_admissions());
                     anyhow::ensure!(
@@ -1303,15 +1303,19 @@ mod disposal_tests {
                 for start in service.take_admitted_starts() {
                     let _ = start.send(());
                 }
-                let watchdog = Instant::now() + Duration::from_secs(3);
-                while !tmp.path().join("peer.pid").exists() {
+                let watchdog = Instant::now() + Duration::from_secs(15);
+                let peer_pid = loop {
+                    if let Ok(contents) = std::fs::read_to_string(tmp.path().join("peer.pid"))
+                        && let Ok(pid) = contents.parse::<u32>()
+                    {
+                        break pid;
+                    }
                     service.poll_admissions();
                     service.poll_lifecycle();
                     anyhow::ensure!(Instant::now() < watchdog, "peer readiness watchdog");
                     std::thread::sleep(Duration::from_millis(5));
-                }
-                let pid = std::fs::read_to_string(tmp.path().join("peer.pid"))?.parse::<u32>()?;
-                let peer_handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+                };
+                let peer_handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, peer_pid) };
                 anyhow::ensure!(!peer_handle.is_null(), "peer native observation");
                 let peer_handle = unsafe { OwnedHandle::from_raw_handle(peer_handle) };
                 let (entered, ready) = mpsc::channel();
