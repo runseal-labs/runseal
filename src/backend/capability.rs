@@ -242,6 +242,14 @@ pub(super) fn refresh_execution_profiles(payload: &mut Value) {
         execution_profiles_json(&statuses, &sandbox_levels, &network_modes);
 }
 
+#[cfg(windows)]
+pub(super) fn set_sandbox_level_status(payload: &mut Value, status: CapabilityStatus) {
+    for level in ["read-only", "workspace-write", "workspace-contained"] {
+        payload["sandbox_levels"][level] = json!(status.as_str());
+    }
+    refresh_execution_profiles(payload);
+}
+
 /// Platform execution boundary for RunSeal sandbox policies.
 ///
 pub(super) fn capabilities_json_for(backend: &dyn SandboxBackend, notes: &[&'static str]) -> Value {

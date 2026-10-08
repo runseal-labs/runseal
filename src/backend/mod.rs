@@ -66,6 +66,11 @@ use {
 
 pub use capability::CapabilityStatus;
 use capability::capabilities_json_for;
+
+#[cfg(windows)]
+pub(crate) fn set_sandbox_level_capability_status(payload: &mut Value, status: CapabilityStatus) {
+    capability::set_sandbox_level_status(payload, status);
+}
 #[cfg(test)]
 use capability::missing_backend_features;
 pub use core::SandboxBackend;

@@ -23,12 +23,24 @@ pub(crate) fn payload() -> Value {
 
 #[cfg(windows)]
 fn attach_windows_setup_status(mut payload: Value) -> Value {
-    if let (Some(payload), Ok(setup_status)) = (
-        payload.as_object_mut(),
-        windows_sandbox_setup_status_for_cwd(&current_dir()),
-    ) {
-        payload.insert("setup_status".to_string(), setup_status);
-    }
+    let status = match windows_sandbox_setup_status_for_cwd(&current_dir()) {
+        Ok(setup_status) => {
+            if let Some(object) = payload.as_object_mut() {
+                object.insert("setup_status".to_string(), setup_status.clone());
+            }
+            match (
+                setup_status["platform_supported"].as_bool(),
+                setup_status["requires_setup"].as_bool(),
+            ) {
+                (Some(false), _) => backend::CapabilityStatus::Unsupported,
+                (Some(true), Some(false)) => backend::CapabilityStatus::Supported,
+                (Some(true), Some(true)) => backend::CapabilityStatus::RequiresSetup,
+                _ => backend::CapabilityStatus::Unavailable,
+            }
+        }
+        Err(_) => backend::CapabilityStatus::Unavailable,
+    };
+    backend::set_sandbox_level_capability_status(&mut payload, status);
     payload
 }
 
