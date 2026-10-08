@@ -267,6 +267,24 @@ impl Drop for ConsoleOutputWorker {
 #[cfg(windows)]
 pub(crate) fn run_console_output_worker(args: &[String]) -> Result<(), String> {
     use std::io::Read;
+    use windows_sys::Win32::System::Console::{
+        CTRL_BREAK_EVENT, CTRL_C_EVENT, SetConsoleCtrlHandler,
+    };
+
+    // The execution process owns console cancellation. Its output helper must
+    // keep the delivery channel alive when the same console event is broadcast
+    // to all attached processes.
+    unsafe extern "system" fn ignore_console_control(event: u32) -> windows_sys::core::BOOL {
+        if matches!(event, CTRL_C_EVENT | CTRL_BREAK_EVENT) {
+            1
+        } else {
+            0
+        }
+    }
+
+    if unsafe { SetConsoleCtrlHandler(Some(ignore_console_control), 1) } == 0 {
+        return Err("console output control handler unavailable".to_string());
+    }
 
     let mut output = match args {
         [stream] if stream == "stdout" => codex_windows_sandbox::CancellableOutput::stdout(),
