@@ -5015,7 +5015,7 @@ fn cli_stalled_console_output_for_policy(policy: &str) -> Result<()> {
         let child_code = format!(
             "import os,pathlib,subprocess,sys,time; child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(120)']); pathlib.Path('console.ready').write_text(str(os.getpid())+' '+str(child.pid))\nwhile not pathlib.Path('console.go').exists(): time.sleep(0.005)\nwhile True: os.write({stream},b'Z'*65536)"
         );
-        let driver_code = "import json,pathlib,subprocess,sys; child=subprocess.Popen(sys.argv[1:]); code=child.wait(); pathlib.Path('console.done').write_text(json.dumps({'pid':child.pid,'exit':code})); sys.exit(0)";
+        let driver_code = "import json,pathlib,subprocess,sys; child=subprocess.Popen(sys.argv[1:]); code=child.wait(); path=pathlib.Path('console.done.tmp'); path.write_text(json.dumps({'pid':child.pid,'exit':code})); path.replace('console.done'); sys.exit(0)";
         let command = vec![
             python()?,
             "-u".into(),
@@ -5224,7 +5224,7 @@ assert not watcher.is_alive()
 pathlib.Path('paced.done').write_text(json.dumps(dict(state,exit=result.returncode,before=before,after=k.GetConsoleOutputCP(),finished_tick=finished_tick)))
 sys.exit(result.returncode)
 "#;
-    let child_code = "import os,pathlib,sys,time; pathlib.Path('paced.ready').write_text(str(os.getpid()))\nwhile not pathlib.Path('paced.go').exists(): time.sleep(0.005)\ncount=24 if sys.argv[1]=='hold' else 4096\ndata=''.join('X'*1023+chr(0x1f600+i) for i in range(count))+'END'; os.write(1,data.encode('utf-8'))\nwhile sys.argv[1]=='hold' and not pathlib.Path('paced.release').exists(): time.sleep(0.005)\nsys.exit(7)";
+    let child_code = "import os,pathlib,sys,time; pathlib.Path('paced.ready').write_text(str(os.getpid()))\nwhile not pathlib.Path('paced.go').exists(): time.sleep(0.005)\ncount=24 if sys.argv[1]=='hold' else 4096\ndata=''.join('X'*1023+chr(0x1f600+i) for i in range(count))+'END'\nif sys.argv[1]=='hold': os.write(1,data.encode('utf-8'))\nelse:\n try: os.write(1,data.encode('utf-8'))\n except OSError: pass\nwhile sys.argv[1]=='hold' and not pathlib.Path('paced.release').exists(): time.sleep(0.005)\nsys.exit(7)";
     let command = vec![
         python()?,
         "-u".into(),
@@ -5339,10 +5339,16 @@ sys.exit(result.returncode)
     );
     let modes: Value =
         serde_json::from_str(&std::fs::read_to_string(tmp.path().join("paced.done"))?)?;
-    assert_eq!(modes["exit"], exit);
+    assert_eq!(
+        modes["exit"], exit,
+        "hold_until_consumed={hold_until_consumed}: {modes}"
+    );
     assert_eq!(modes["before"], 437);
     assert_eq!(modes["after"], 437);
-    assert_eq!(modes["native_exit_code"], 7);
+    assert_eq!(
+        modes["native_exit_code"], 7,
+        "hold_until_consumed={hold_until_consumed}: {modes}"
+    );
     if !hold_until_consumed {
         let native_exit_tick = modes["native_exit_tick"]
             .as_u64()
