@@ -2141,7 +2141,11 @@ while True: time.sleep(.01)
             let stderr = STANDARD.decode(result["stderr"].as_str().context("stderr")?)?;
             if mode == "plain" {
                 assert!(stdout.is_empty());
-                assert!(stderr.starts_with(b"[runseal:EXECUTION_CANCELLED]"));
+                assert!(
+                    stderr.starts_with(b"[runseal:EXECUTION_CANCELLED]"),
+                    "mode={mode}, event={event}: {result}, stderr={:?}",
+                    String::from_utf8_lossy(&stderr)
+                );
             } else if mode == "json" {
                 assert!(stderr.is_empty());
                 let error: Value = serde_json::from_slice(&stdout)?;
@@ -5220,7 +5224,7 @@ assert not watcher.is_alive()
 pathlib.Path('paced.done').write_text(json.dumps(dict(state,exit=result.returncode,before=before,after=k.GetConsoleOutputCP(),finished_tick=finished_tick)))
 sys.exit(result.returncode)
 "#;
-    let child_code = "import os,pathlib,sys,time; pathlib.Path('paced.ready').write_text(str(os.getpid()))\nwhile not pathlib.Path('paced.go').exists(): time.sleep(0.005)\ndata=''.join('X'*1023+chr(0x1f600+i) for i in range(24))+'END'; os.write(1,data.encode('utf-8'))\nwhile sys.argv[1]=='hold' and not pathlib.Path('paced.release').exists(): time.sleep(0.005)\nsys.exit(7)";
+    let child_code = "import os,pathlib,sys,time; pathlib.Path('paced.ready').write_text(str(os.getpid()))\nwhile not pathlib.Path('paced.go').exists(): time.sleep(0.005)\ncount=24 if sys.argv[1]=='hold' else 4096\ndata=''.join('X'*1023+chr(0x1f600+i) for i in range(count))+'END'; os.write(1,data.encode('utf-8'))\nwhile sys.argv[1]=='hold' and not pathlib.Path('paced.release').exists(): time.sleep(0.005)\nsys.exit(7)";
     let command = vec![
         python()?,
         "-u".into(),
@@ -5309,7 +5313,13 @@ sys.exit(result.returncode)
             .map_err(|_| anyhow::anyhow!("paced Console close panic"))??;
     }
     output.read_to_end(&mut bytes)?;
-    assert_eq!(exit, if hold_until_consumed { 7 } else { 125 });
+    assert_eq!(
+        exit,
+        if hold_until_consumed { 7 } else { 125 },
+        "hold_until_consumed={hold_until_consumed}, pulses={pulses}, elapsed={:?}, bytes={}",
+        start.elapsed(),
+        bytes.len()
+    );
     assert!(
         pulses >= 4 && start.elapsed() > Duration::from_secs(5),
         "actual paced reads required"

@@ -180,7 +180,12 @@ fn run_inner(
     let (_events, mut result) = match execution_result {
         Ok(result) => result,
         Err(err) if request.events && err.terminal_event.is_some() => {
-            return Ok(failure_exit(&err));
+            let code = failure_exit(&err);
+            return Ok(if stdout.finish(control.begin_cleanup()).is_ok() {
+                code
+            } else {
+                125
+            });
         }
         Err(err) => {
             let code = failure_exit(&err);
@@ -193,7 +198,11 @@ fn run_inner(
                 )
             };
             // The channel may be gone; never append a second diagnostic after a partial write.
-            let _ = target.write(bytes.as_bytes());
+            if target.write(bytes.as_bytes()).is_err()
+                || target.finish(control.begin_cleanup()).is_err()
+            {
+                return Ok(125);
+            }
             return Ok(code);
         }
     };
