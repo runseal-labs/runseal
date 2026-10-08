@@ -61,38 +61,48 @@ passing evidence. Run the full matrix on a prepared Windows reference host with
 
 ## Candidate validation evidence
 
-Candidate source revision: `c8c74e8470edd78a922de46ed9a5c87324458f05`.
+Candidate package version: `0.2.0-rc.1` (unreleased).
 
-- WSL2 Linux at `c8c74e8`: `cargo fmt --check`,
+Candidate source revision: `7a7c2de5f7cc9e48f91e7576b7b461df68f86842`.
+
+Accepted RFC revision: `runseal-labs/rfcs@5fe5c5b4b6b8553c58e17f325aa99abc75fda4c0`.
+
+- WSL2 Linux at `7a7c2de`: `cargo fmt --check`,
   `cargo clippy --tests -- -D warnings`, `cargo test --all-targets --quiet`, and
   `python3 scripts/portable-probe-smoke.py` passed. The Rust suites reported
   352 passed, 0 failed, and 0 ignored; the portable probe reported success.
-- AC07 direct evidence at `c8c74e8`:
+- AC07 direct evidence at `7a7c2de`:
   `cargo test --test execution_conformance portable_local_execution_cleans_process_groups_on_exit_and_cancel -- --exact`
   passed in WSL2. The test starts A and B, cancels A, verifies A's descendant
   is gone, and verifies B remains alive and continues its heartbeat. Baseline
   `001b0dd6c833bf58586a276b375b8658291b5a6a` contains no direct AC07 test.
   This proves portable local process isolation; it does not prove the Windows
   sandbox binding, runtime-root, or proxy-lease behavior in AC07.
-- Windows local checks at `c8c74e8`: `cargo fmt --check`,
-  `cargo clippy --tests -- -D warnings`, `cargo test --lib` (215 passed), and
+- Windows local checks at `7a7c2de`: `cargo fmt --check`,
+  `cargo clippy --locked --tests -- -D warnings`, `cargo test --locked --lib`
+  (215 passed), and
   `cargo test --test execution_conformance configured_output_cap_plain_cli_preserves_child_exit_or_reports_resource_failure -- --exact --nocapture`
-  passed. These checks do not run prepared sandbox conformance cases.
-- GitHub cross-platform CI for exact source `c8c74e8` is run
-  [37836131497](https://github.com/runseal-labs/runseal/actions/runs/37836131497).
-  Ubuntu, Windows, and macOS jobs all passed formatting, Clippy, tests, and the
-  configured smoke/whitespace/redaction checks. The generic Windows run reported
-  35 ignored cases (1 in `cli_contract`, 34 in `execution_conformance`) because
-  its runner has no prepared sandbox identity; ignored cases do not satisfy an
-  acceptance criterion. Earlier macOS runs had intermittent AC21 output-cap
-  failures; the final exact-revision run passed those cases.
+  passed. The exact summary/audit-retention test also passed on Windows locally.
+  These checks do not run prepared sandbox conformance cases.
+- GitHub cross-platform CI for exact source `7a7c2de` is run
+  [37839313510](https://github.com/runseal-labs/runseal/actions/runs/37839313510).
+  Ubuntu and Windows passed formatting, Clippy, tests, and their configured
+  smoke/whitespace/redaction checks. The first macOS attempt failed in
+  `configured_summary_and_audit_retention_preserves_active_targets_and_durable_terminals`
+  when cancellation reported `cleanup_complete:false`; [the macOS job passed on
+  attempt 2 against the same SHA](https://github.com/runseal-labs/runseal/actions/runs/37839313510/attempts/2).
+  The generic Windows run reported 35 ignored
+  cases (1 in `cli_contract`, 34 in `execution_conformance`) because its runner
+  has no prepared sandbox identity; ignored cases do not satisfy an acceptance
+  criterion.
 - Prepared Windows validation remains pending. Sandbox setup status is ready,
   but the execution gate on the available Windows test host is quarantined; an
   ignored sandbox case was rejected before the target started. No repair or
   `--accept-unverified-release` escape was used. The PRD-required sandboxed
   stdin, cancellation, PTY, control, filesystem, network, and capability-profile
   cases are not counted as passes.
-- Node consumer example at `c8c74e8`: `node --check
-  examples/stdio-json-rpc/runseal_stdio_example.mjs` and the run with
-  `--policy danger-full-access --allow-experimental` passed. It completed three
-  control round trips and cancellation with `cleanup_complete:true`.
+- Windows local examples at `7a7c2de`: the Python JSON-RPC example, Node
+  consumer example, and Python control CLI example passed with explicit
+  `danger-full-access`. They completed replay/audit/dispose, three control
+  round trips with cancellation, and three binary control rounds plus
+  half-close and native exit-code propagation, respectively.
