@@ -222,7 +222,21 @@ try {
     Assert-SetupReady (Invoke-Setup).Json
 
     Write-Host "Checking stale setup fails closed"
-    $marker = Join-Path $workspace ".runseal\sandbox\.sandbox\setup_marker.json"
+    $sandboxHomeOverride = [Environment]::GetEnvironmentVariable("RUNSEAL_WINDOWS_SANDBOX_HOME")
+    if ([string]::IsNullOrWhiteSpace($sandboxHomeOverride)) {
+        $localAppData = [Environment]::GetEnvironmentVariable("LOCALAPPDATA")
+        if ([string]::IsNullOrWhiteSpace($localAppData)) {
+            $sandboxHome = Join-Path $workspace ".runseal\sandbox"
+        } else {
+            $sandboxHome = Join-Path $localAppData "RunSeal\windows-sandbox"
+        }
+    } else {
+        $sandboxHome = [System.IO.Path]::GetFullPath($sandboxHomeOverride)
+    }
+    $marker = Join-Path $sandboxHome ".sandbox\setup_marker.json"
+    if (-not (Test-Path -LiteralPath $marker -PathType Leaf)) {
+        throw "sandbox setup marker missing after successful setup"
+    }
     Remove-Item -LiteralPath $marker -Force
     $staleStatus = (Invoke-RunSealJson -RunArgs @("setup", "windows-sandbox", "--status", "--json", "--cwd", $workspace)).Json
     Assert-SetupRequiredStatus $staleStatus
