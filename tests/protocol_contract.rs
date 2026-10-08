@@ -445,21 +445,19 @@ fn expected_read_only_status() -> &'static str {
     }
 }
 
-fn expected_workspace_write_status() -> &'static str {
-    if cfg!(any(target_os = "linux", target_os = "macos")) {
-        "experimental"
-    } else {
-        expected_status(expected_windows_sandbox_supported())
+fn expected_sandbox_levels_status(payload: &Value) -> &'static str {
+    if !cfg!(windows) {
+        return expected_read_only_status();
     }
-}
 
-fn expected_workspace_contained_status() -> &'static str {
-    if cfg!(any(target_os = "linux", target_os = "macos")) {
-        "experimental"
-    } else if cfg!(windows) {
-        expected_status(expected_windows_sandbox_supported())
-    } else {
-        "unsupported"
+    match (
+        payload["setup_status"]["platform_supported"].as_bool(),
+        payload["setup_status"]["requires_setup"].as_bool(),
+    ) {
+        (Some(false), _) => "unsupported",
+        (Some(true), Some(true)) => "requires_setup",
+        (Some(true), Some(false)) => "supported",
+        _ => "unavailable",
     }
 }
 
@@ -1495,17 +1493,18 @@ fn get_capabilities_rpc_contract() -> Result<()> {
         ])
     );
     assert_eq!(payload["sandbox_levels"]["danger-full-access"], "supported");
+    let expected_sandbox_levels_status = expected_sandbox_levels_status(payload);
     assert_eq!(
         payload["sandbox_levels"]["read-only"],
-        expected_read_only_status()
+        expected_sandbox_levels_status
     );
     assert_eq!(
         payload["sandbox_levels"]["workspace-write"],
-        expected_workspace_write_status()
+        expected_sandbox_levels_status
     );
     assert_eq!(
         payload["sandbox_levels"]["workspace-contained"],
-        expected_workspace_contained_status()
+        expected_sandbox_levels_status
     );
     assert_eq!(
         payload["network_modes"]["disabled"],

@@ -109,7 +109,11 @@ fn compile_backend_error(
     RunSealError::with_details(code, reason, details)
 }
 
-fn reservation_error(error: &std::io::Error, cwd: &std::path::Path) -> RunSealError {
+fn reservation_error(
+    error: &std::io::Error,
+    cwd: &std::path::Path,
+    plan: &crate::backend::PlatformSandboxPlan,
+) -> RunSealError {
     let cleanup_complete = !crate::backend::cleanup_failed(error);
     let code = if !cleanup_complete {
         "EXECUTION_CLEANUP_FAILED"
@@ -118,8 +122,14 @@ fn reservation_error(error: &std::io::Error, cwd: &std::path::Path) -> RunSealEr
     } else {
         "BACKEND_UNAVAILABLE"
     };
-    let details =
-        attach_windows_setup_status(json!({"cleanup_complete":cleanup_complete}), code, cwd);
+    let details = attach_windows_setup_status(
+        json!({
+            "cleanup_complete":cleanup_complete,
+            "platform_plan": plan.json(),
+        }),
+        code,
+        cwd,
+    );
     RunSealError::with_details(code, "execution admission rejected", details)
 }
 
@@ -201,7 +211,7 @@ fn prepare_and_run(
             return Err(finish_admission_error(
                 journal,
                 &control,
-                reservation_error(&error, &request.cwd),
+                reservation_error(&error, &request.cwd, &plan),
             ));
         }
     };
