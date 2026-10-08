@@ -77,6 +77,70 @@ fn spawn_with<F: FnOnce() + Send + 'static>(
     })
 }
 
+fn finish_admission_error(
+    journal: crate::execution::ExecutionJournal,
+    control: &ExecutionControl,
+    mut error: RunSealError,
+) -> RunSealError {
+    control.request(crate::execution::TerminationCause::FailedToStart);
+    let details = error.details.get_or_insert_with(|| json!({}));
+    if let Some(object) = details.as_object_mut() {
+        object
+            .entry("cleanup_complete")
+            .or_insert_with(|| Value::Bool(true));
+    }
+    match journal.finish(Err(error), control, &mut |_| Ok(())) {
+        Err(error) => error,
+        Ok(_) => RunSealError::new(
+            "INTERNAL_ERROR",
+            "admission failure was not recorded as a terminal event",
+        ),
+    }
+}
+
+fn compile_backend_error(
+    error: crate::backend::BackendError,
+    cwd: &std::path::Path,
+) -> RunSealError {
+    let details = error.details_json();
+    let code = error.code;
+    let reason = error.reason;
+    let details = attach_windows_setup_status(details, code, cwd);
+    RunSealError::with_details(code, reason, details)
+}
+
+fn reservation_error(error: &std::io::Error, cwd: &std::path::Path) -> RunSealError {
+    let cleanup_complete = !crate::backend::cleanup_failed(error);
+    let code = if !cleanup_complete {
+        "EXECUTION_CLEANUP_FAILED"
+    } else if crate::backend::policy_transition_busy_reason(error).is_some() {
+        "POLICY_TRANSITION_BUSY"
+    } else {
+        "BACKEND_UNAVAILABLE"
+    };
+    let details =
+        attach_windows_setup_status(json!({"cleanup_complete":cleanup_complete}), code, cwd);
+    RunSealError::with_details(code, "execution admission rejected", details)
+}
+
+#[cfg(windows)]
+fn attach_windows_setup_status(mut details: Value, code: &str, cwd: &std::path::Path) -> Value {
+    if code == "BACKEND_UNAVAILABLE"
+        && let Some(object) = details.as_object_mut()
+    {
+        object.insert(
+            "setup_status".to_string(),
+            crate::execution::windows_setup_status_for_backend_error(cwd),
+        );
+    }
+    details
+}
+
+#[cfg(not(windows))]
+fn attach_windows_setup_status(details: Value, _code: &str, _cwd: &std::path::Path) -> Value {
+    details
+}
+
 fn prepare_and_run(
     params: Value,
     control: ExecutionControl,
@@ -109,40 +173,36 @@ fn prepare_and_run(
         };
         return Err(crate::execution::ExecutionJournal::prepare(&request)?.reject(code, reason));
     }
-    let plan = crate::backend::active_backend().compile_plan(
+    let mut journal = crate::execution::ExecutionJournal::prepare(&request)?;
+    let plan = match crate::backend::active_backend().compile_plan(
         &request.ids.execution_id,
         &request.cwd,
         &request.policy,
-    )?;
+    ) {
+        Ok(plan) => plan,
+        Err(error) => {
+            return Err(finish_admission_error(
+                journal,
+                &control,
+                compile_backend_error(error, &request.cwd),
+            ));
+        }
+    };
     if control.is_cancelled() {
-        return Err(RunSealError::new(
-            "CLIENT_DISCONNECTED",
-            "execution admission stopped",
+        return Err(finish_admission_error(
+            journal,
+            &control,
+            RunSealError::new("CLIENT_DISCONNECTED", "execution admission stopped"),
         ));
     }
-    let mut reservation = crate::backend::reserve_execution(&plan).map_err(|err| {
-        let code = if crate::backend::cleanup_failed(&err) {
-            "EXECUTION_CLEANUP_FAILED"
-        } else if crate::backend::policy_transition_busy_reason(&err).is_some() {
-            "POLICY_TRANSITION_BUSY"
-        } else {
-            "BACKEND_UNAVAILABLE"
-        };
-        RunSealError::new(code, "execution admission rejected")
-    })?;
-    let mut journal = match crate::execution::ExecutionJournal::prepare(&request) {
-        Ok(journal) => journal,
+    let mut reservation = match crate::backend::reserve_execution(&plan) {
+        Ok(reservation) => reservation,
         Err(error) => {
-            reservation
-                .finish(control.begin_cleanup(), true)
-                .map_err(|_| {
-                    RunSealError::with_details(
-                        "EXECUTION_CLEANUP_FAILED",
-                        "execution admission cleanup could not be verified",
-                        json!({"cleanup_complete":false}),
-                    )
-                })?;
-            return Err(error);
+            return Err(finish_admission_error(
+                journal,
+                &control,
+                reservation_error(&error, &request.cwd),
+            ));
         }
     };
     let execution_id = request.ids.execution_id.clone();

@@ -9,6 +9,8 @@ pub(crate) mod retained;
 #[cfg(windows)]
 pub(crate) use control::TerminalCommand;
 pub(crate) use control::{ExecutionControl, TerminationCause};
+#[cfg(windows)]
+pub(crate) use errors::windows_setup_status_for_backend_error;
 
 use crate::backend::{ExecutionEnv, ExecutionStdin};
 use crate::policy::SandboxPolicy;
