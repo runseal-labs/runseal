@@ -1036,7 +1036,7 @@ fn configured_output_cap_matches_effective_policy_hash_and_real_execution_bounda
             let explanation = client.next(Duration::from_secs(2))?;
             client.send(2, "getCapabilities", json!({}))?;
             let capabilities = client.next(Duration::from_secs(2))?;
-            client.send(3,"execute",json!({"command":[python()?,"-u","-c","import os,pathlib,sys; pathlib.Path('target.pid').write_text(str(os.getpid())); count=int(sys.argv[1]); first=min(count,8192); os.write(1,b'X'*first); os.write(2,b'E'*(count-first)); sys.exit(7)",total.to_string()],"cwd":directory.path(),"policy":policy}))?;
+            client.send(3,"execute",json!({"command":[python()?,"-u","-c","import os,pathlib,sys,time; pathlib.Path('target.pid').write_text(str(os.getpid())); count=int(sys.argv[1]); limit=int(sys.argv[2]); first=min(count,8192); os.write(1,b'X'*first); os.write(2,b'E'*(count-first));\nif count>limit: time.sleep(120)\nsys.exit(7)",total.to_string(),effective.to_string()],"cwd":directory.path(),"policy":policy}))?;
             let receipt = client.next(Duration::from_secs(2))?;
             let execution = receipt["result"]["execution_id"]
                 .as_str()
@@ -7276,13 +7276,17 @@ fn cli_stdio_stalled_or_disconnected_caller_cleans_owned_range_and_preserves_pee
         let disconnect = failure == "closed";
         let tmp = TempDir::new()?;
         let mut peer_client = Client::spawn("service")?;
-        peer_client.send(1,"execute",json!({"command":[python()?,"-u","-c","import os,pathlib,time; print('READY '+str(os.getpid()),flush=True); count=0\nwhile True:\n count+=1; pathlib.Path('cli-control-peer.beat').write_text(str(count)); time.sleep(0.01)"],"cwd":tmp.path(),"policy":policy}))?;
+        peer_client.send(1,"execute",json!({"command":[python()?,"-u","-c","import os,pathlib,time; print('READY '+str(os.getpid()),flush=True); count=0\nwhile not pathlib.Path('peer.stop').exists():\n count+=1; pathlib.Path('cli-control-peer.beat').write_text(str(count)); time.sleep(0.01)"],"cwd":tmp.path(),"policy":policy}))?;
         let receipt = peer_client.next(Duration::from_secs(2))?;
         let peer = receipt["result"]["execution_id"]
             .as_str()
             .context("peer")?
             .to_owned();
         let peer_pid = wait_ready_pid(&peer_client, &peer)?;
+        let mut fixture = HeartbeatFixture {
+            directory: tmp.path().to_owned(),
+            pids: vec![peer_pid],
+        };
         let code = format!(
             "import os,pathlib,subprocess,sys,time; child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(120)']); ready='READY '+str(os.getpid())+' '+str(child.pid); print(ready,flush=True); pathlib.Path('stdio-ready.txt').write_text(ready)\nwhile not pathlib.Path('stdio-go.txt').exists(): time.sleep(0.005)\nwhile True: os.write({stream},b'Z'*65536)"
         );
@@ -7312,28 +7316,40 @@ fn cli_stdio_stalled_or_disconnected_caller_cleans_owned_range_and_preserves_pee
             false,
         )?;
         let mut stdout = cli.stdout.take().context("stdout")?;
-        let mut ready = Vec::new();
+        let ready_path = tmp.path().join("stdio-ready.txt");
+        let mut ready_contents = String::new();
         let deadline = Instant::now() + Duration::from_secs(10);
-        while !tmp.path().join("stdio-ready.txt").exists() {
+        let pids = loop {
+            if let Ok(contents) = std::fs::read_to_string(&ready_path) {
+                ready_contents = contents;
+                if let Some(pids) = ready_contents
+                    .trim()
+                    .strip_prefix("READY ")
+                    .and_then(|pids| {
+                        let pids = pids
+                            .split_whitespace()
+                            .map(str::parse::<u32>)
+                            .collect::<std::result::Result<Vec<_>, _>>()
+                            .ok()?;
+                        (pids.len() == 2).then_some(pids)
+                    })
+                {
+                    break pids;
+                }
+            }
             if let Some(count) = codex_windows_sandbox::available_pipe_bytes(&stdout)?
                 && count > 0
             {
                 let mut bytes = vec![0; count.min(8192)];
-                let count = stdout.read(&mut bytes)?;
-                ready.extend_from_slice(&bytes[..count]);
+                stdout.read(&mut bytes)?;
             }
-            assert!(Instant::now() < deadline, "CLI control readiness");
+            assert!(
+                Instant::now() < deadline,
+                "CLI control readiness: {ready_contents:?}"
+            );
             std::thread::sleep(Duration::from_millis(5));
-        }
-        let ready = std::fs::read_to_string(tmp.path().join("stdio-ready.txt"))?;
-        let pids = ready
-            .trim()
-            .strip_prefix("READY ")
-            .context("READY")?
-            .split_whitespace()
-            .map(str::parse::<u32>)
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        assert_eq!(pids.len(), 2);
+        };
+        fixture.pids.extend(pids.iter().copied());
         let held_output = if stream == 1 {
             Some(stdout)
         } else {
@@ -7346,12 +7362,6 @@ fn cli_stdio_stalled_or_disconnected_caller_cleans_owned_range_and_preserves_pee
             held_output
         };
         std::fs::write(tmp.path().join("stdio-go.txt"), b"G")?;
-        let mut fixture_pids = pids.clone();
-        fixture_pids.push(peer_pid);
-        let _fixture = HeartbeatFixture {
-            directory: tmp.path().to_owned(),
-            pids: fixture_pids,
-        };
         let deadline = Instant::now() + Duration::from_secs(15);
         while cli.try_wait()?.is_none() {
             assert!(
