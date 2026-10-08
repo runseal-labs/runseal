@@ -46,6 +46,13 @@ fn windows_setup_status_or_fallback(status: Result<Value, String>) -> Value {
     })
 }
 
+#[cfg(windows)]
+pub(crate) fn windows_setup_status_for_backend_error(cwd: &Path) -> Value {
+    windows_setup_status_or_fallback(
+        crate::commands::setup::windows_sandbox_setup_status_for_cwd(cwd),
+    )
+}
+
 #[cfg(all(test, windows))]
 mod tests {
     use super::*;

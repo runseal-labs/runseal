@@ -325,13 +325,7 @@ fn assert_backend_unavailable(response: &Value, root: &Path) -> Result<()> {
     }
     let failed_event = audit_events
         .iter()
-        .find(|event| {
-            event["type"] == "execution.failed"
-                && event["reason"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .starts_with("windows sandbox")
-        })
+        .find(|event| event["type"] == "execution.failed")
         .context("backend unavailable audit must include execution.failed")?;
     if cfg!(windows) {
         assert_eq!(

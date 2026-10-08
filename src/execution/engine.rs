@@ -505,6 +505,15 @@ fn execute_inner<B: SandboxBackend + Send + Sync + 'static>(
             );
             journal.emit(&event, observer)?;
             let mut details = details;
+            #[cfg(windows)]
+            if err.code == "BACKEND_UNAVAILABLE"
+                && let Some(object) = details.as_object_mut()
+            {
+                object.insert(
+                    "setup_status".to_string(),
+                    super::errors::windows_setup_status_for_backend_error(cwd),
+                );
+            }
             if let Some(object) = details.as_object_mut() {
                 object.insert("cleanup_complete".to_string(), json!(true));
             }
