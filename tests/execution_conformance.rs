@@ -1205,9 +1205,17 @@ fn configured_output_cap_plain_cli_preserves_child_exit_or_reports_resource_fail
         if deployment == "8192" {
             assert_eq!(output.status.code(), Some(125));
             assert!(output.stdout.len() <= 8192);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let observed_code = stderr
+                .strip_prefix("[runseal:")
+                .and_then(|message| message.split(']').next())
+                .unwrap_or("none");
             assert!(
-                String::from_utf8_lossy(&output.stderr)
-                    .starts_with("[runseal:OUTPUT_LIMIT_EXCEEDED]")
+                stderr.starts_with("[runseal:OUTPUT_LIMIT_EXCEEDED]"),
+                "deployment={deployment}, observed_code={observed_code}, stdout_bytes={}, stderr_bytes={}, outer_exit={:?}",
+                output.stdout.len(),
+                output.stderr.len(),
+                output.status.code()
             );
         } else {
             assert_eq!(output.status.code(), Some(7));
