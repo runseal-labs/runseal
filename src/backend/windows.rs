@@ -346,7 +346,9 @@ pub(super) fn execute_windows_sandbox_plan(
     )
     .map_err(io::Error::other)?;
     let _execution_guard = windows_sandbox_execution_gate(plan)?;
-    let vendor_sandbox_home = prepare_windows_sandbox_setup(cwd)?;
+    let vendor_sandbox_home = prepare_windows_sandbox_setup(cwd).inspect_err(|_| {
+        report_windows_test_diagnostic("setup_preparation_failed");
+    })?;
 
     let _runtime_root = required_plan_path(plan.runtime_root.as_deref(), "runtime_root")?;
     let input_acknowledged = match &stdin {
@@ -421,7 +423,9 @@ pub(super) fn execute_windows_sandbox_plan(
             .map_err(|_| io::Error::other("execution gate protection unavailable"))?,
     );
     let permission_profile = plan.vendor_permission_profile()?;
-    plan.prepare_runtime_roots()?;
+    plan.prepare_runtime_roots().inspect_err(|_| {
+        report_windows_test_diagnostic("runtime_root_preparation_failed");
+    })?;
 
     let result = (|| {
         prepare_vendor_sandbox_home(cwd, &vendor_sandbox_home)?;
@@ -640,7 +644,21 @@ pub(super) fn execute_windows_sandbox_plan(
         }
         Ok((capture, events))
     })();
+    let capture_cleanup_failed = result.as_ref().err().is_some_and(super::cleanup_failed);
+    let capture_failed = result.is_err();
     let cleanup = plan.cleanup_runtime_roots();
+    if capture_cleanup_failed {
+        report_windows_test_diagnostic("sandbox_capture_cleanup_failed");
+    } else if capture_failed {
+        report_windows_test_diagnostic("sandbox_capture_failed");
+    } else {
+        report_windows_test_diagnostic("sandbox_capture_succeeded");
+    }
+    report_windows_test_diagnostic(if cleanup.is_err() {
+        "runtime_root_cleanup_failed"
+    } else {
+        "runtime_root_cleanup_succeeded"
+    });
     if result.as_ref().err().is_some_and(super::cleanup_failed) || cleanup.is_err() {
         let _ = _execution_guard.mark_cleanup_failed();
     }
@@ -673,6 +691,13 @@ pub(super) fn execute_windows_sandbox_plan(
         cleanup_complete: true,
         events,
     })
+}
+
+#[cfg(windows)]
+fn report_windows_test_diagnostic(stage: &str) {
+    if std::env::var_os("RUNSEAL_WINDOWS_TEST_DIAGNOSTICS").is_some() {
+        eprintln!("runseal-test-diagnostic: windows={stage}");
+    }
 }
 
 #[cfg(windows)]

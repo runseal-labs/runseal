@@ -435,18 +435,22 @@ impl WindowsSandboxCrossProcessGate {
             .cleanup_deadline
             .map_or(deadline, |previous| previous.min(deadline));
         self.cleanup_deadline = Some(deadline);
+        let mut stage = "precheck";
         let result = (|| {
             if self.quarantined.load(Ordering::Acquire) {
                 return Err(io::Error::other(BackendCleanupError));
             }
             self.quarantine.check()?;
+            stage = "mutex_wait";
             let _mutex = WindowsSandboxNamedMutexGuard::acquire_until(&self.mutex_name, deadline)?;
+            stage = "state_read";
             before_state_read();
             self.quarantine.check()?;
             if self.quarantined.load(Ordering::Acquire) || std::time::Instant::now() >= deadline {
                 return Err(io::Error::other(BackendCleanupError));
             }
             let mut state = read_cross_process_gate_state(&self.state_path)?;
+            stage = "owner_removal";
             let before = state.active.len();
             state.active.retain(|entry| {
                 !(entry.pid == std::process::id()
@@ -459,15 +463,20 @@ impl WindowsSandboxCrossProcessGate {
             {
                 return Err(io::Error::other(BackendCleanupError));
             }
+            stage = "state_write_check";
             self.quarantine.check()?;
             if self.quarantined.load(Ordering::Acquire) {
                 return Err(io::Error::other(BackendCleanupError));
             }
+            stage = "state_write";
             write_cross_process_gate_state(&self.state_path, &state)?;
             self.released = true;
             Ok(())
         })();
         if result.is_err() {
+            if std::env::var_os("RUNSEAL_WINDOWS_TEST_DIAGNOSTICS").is_some() {
+                eprintln!("runseal-test-diagnostic: gate={stage}");
+            }
             let _ = self.mark_quarantined();
         }
         result

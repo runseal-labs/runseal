@@ -23,6 +23,7 @@ function Invoke-RunSealJson {
     param(
         [string[]]$RunArgs,
         [switch]$AllowFailure,
+        [switch]$Diagnostics,
         [int]$TimeoutSeconds = 30
     )
 
@@ -34,6 +35,9 @@ function Invoke-RunSealJson {
         $processInfo.UseShellExecute = $false
         $processInfo.RedirectStandardOutput = $true
         $processInfo.RedirectStandardError = $true
+        if ($Diagnostics) {
+            $processInfo.Environment["RUNSEAL_WINDOWS_TEST_DIAGNOSTICS"] = "1"
+        }
         $processInfo.Arguments = ($RunArgs | ForEach-Object { Quote-ProcessArgument $_ }) -join " "
 
         $process = [System.Diagnostics.Process]::Start($processInfo)
@@ -206,7 +210,10 @@ function Get-ExecutionFailureSummary {
 
     $data = $Run.Json.error.data
     $executionIdPresent = -not [string]::IsNullOrWhiteSpace($data.execution_id)
-    return "code=$($data.code), cleanup_complete=$($data.cleanup_complete), execution_id_present=$executionIdPresent, exit_code=$($data.exit_code), requested_termination_reason=$($data.requested_termination_reason), timeout_ms=$($data.timeout_ms), stdout_bytes=$($data.stdout_bytes), stderr_bytes=$($data.stderr_bytes), terminal_bytes=$($data.terminal_bytes), control_bytes=$($data.control_bytes)"
+    $diagnostics = @($Run.Stderr -split "`r?`n" | Where-Object {
+        $_ -match '^runseal-test-diagnostic: (windows|gate)=[a-z_]+$'
+    }) -join ";"
+    return "code=$($data.code), cleanup_complete=$($data.cleanup_complete), execution_id_present=$executionIdPresent, exit_code=$($data.exit_code), requested_termination_reason=$($data.requested_termination_reason), timeout_ms=$($data.timeout_ms), stdout_bytes=$($data.stdout_bytes), stderr_bytes=$($data.stderr_bytes), terminal_bytes=$($data.terminal_bytes), control_bytes=$($data.control_bytes), diagnostics=$diagnostics"
 }
 
 function Invoke-Setup {
@@ -287,7 +294,7 @@ try {
 
     Write-Host "Checking sandboxed exec after explicit setup"
     $gateBeforeReadyExec = Get-ExecutionGateSummary
-    $readyExec = Invoke-RunSealJson -AllowFailure -RunArgs @(
+    $readyExec = Invoke-RunSealJson -AllowFailure -Diagnostics -RunArgs @(
         "exec", "--json", "--policy", "workspace-write", "--network", "disabled", "--cwd", $workspace, "--timeout-ms", "60000", "--",
         "whoami.exe"
     ) -TimeoutSeconds 120
@@ -321,7 +328,7 @@ try {
     $staleStatus = (Invoke-RunSealJson -RunArgs @("setup", "windows-sandbox", "--status", "--json", "--cwd", $workspace)).Json
     Assert-SetupRequiredStatus $staleStatus
 
-    $staleExec = Invoke-RunSealJson -AllowFailure -RunArgs @(
+    $staleExec = Invoke-RunSealJson -AllowFailure -Diagnostics -RunArgs @(
         "exec", "--json", "--policy", "workspace-write", "--network", "disabled", "--cwd", $workspace, "--timeout-ms", "60000", "--",
         "whoami.exe"
     ) -TimeoutSeconds 240
