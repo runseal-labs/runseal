@@ -21,7 +21,9 @@ Local vendor patches:
 - Adapt upstream job-first termination and control-disconnect cleanup from
   `9b33613db6` and `21c58c90f2298587c6519e077d0692ce4c563d37`. Retain the
   execution-range owner in control workers and keep RunSeal's bounded cleanup
-  confirmation and single-identity model.
+  confirmation and single-identity model. Verify active job membership before
+  issuing another termination request, and keep waiting within the cleanup
+  deadline when a concurrent termination request is already in flight.
 - Replace the legacy workspace-contained finite deny-read ACL path with an
   AppContainer/LowBox execution boundary. The active workspace and runtime
   roots receive only per-execution capability ACLs; setup or spawn failure
@@ -104,7 +106,7 @@ in `tests/vendor_boundary.rs`.
 | `upstream/lib.rs` | Export the cleanup, control, output, and terminal interfaces used by the RunSeal adapter. |
 | `upstream/logging.rs` | Keep raw argv and native error text out of vendor logs. |
 | `upstream/output_pipe.rs` | Add cancellable native output workers and owned nonblocking pipe handles with confirmed worker exit. |
-| `upstream/process.rs` | Track process identity and execution-range ownership through local/elevated launch, terminal/control, and cleanup. |
+| `upstream/process.rs` | Track process identity and execution-range ownership through local/elevated launch, terminal/control, and cleanup; verify active membership before requesting termination again. |
 | `upstream/unified_exec/backends/elevated.rs` | Wire cancellation and cleanup ownership into the elevated execution backend. |
 | `upstream/unified_exec/backends/legacy.rs` | Set explicit default terminal dimensions for the legacy launch path. |
 | `upstream/unified_exec/backends/windows_common.rs` | Carry framed runner and output failures to the shared Windows backend. |

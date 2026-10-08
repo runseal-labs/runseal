@@ -58,6 +58,10 @@ jobs:
         shell: pwsh
         run: .\scripts\windows-smoke.ps1
 
+      - name: Verify idempotent Windows job cleanup
+        if: runner.os == 'Windows'
+        run: cargo test --manifest-path vendor/codex-windows-sandbox/upstream/Cargo.toml --lib process::process_range_cleanup_tests::empty_job_cleanup_needs_only_query_access -- --exact
+
       - name: Verify stalled Windows Console cleanup first
         if: runner.os == 'Windows'
         run: cargo test --test execution_conformance sandboxed_stalled_console_output_cleans_owned_range_and_preserves_peer -- --include-ignored --exact

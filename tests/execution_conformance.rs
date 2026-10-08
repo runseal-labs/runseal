@@ -5360,7 +5360,7 @@ fn read_console_terminal_summary(workspace: &std::path::Path) -> String {
                 Some("execution.finished" | "execution.failed")
             ) {
                 results.push(format!(
-                    "{}:{}:{}",
+                    "{}:{}:{}:exit={}:timed_out={}",
                     event["result"]["termination_reason"]
                         .as_str()
                         .unwrap_or("unknown"),
@@ -5371,7 +5371,9 @@ fn read_console_terminal_summary(workspace: &std::path::Path) -> String {
                             "true"
                         } else {
                             "false"
-                        })
+                        }),
+                    event["result"]["exit_code"],
+                    event["result"]["timed_out"]
                 ));
             }
         }

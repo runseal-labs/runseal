@@ -929,6 +929,7 @@ mod tests {
                 pipe_write: tempfile::tempfile().expect("fixture write"),
                 pipe_read: tempfile::tempfile().expect("fixture read"),
             }),
+            false,
         )
         .err()
         .ok_or_else(|| anyhow::anyhow!("setup failure must be observable"))?;
@@ -946,8 +947,8 @@ mod tests {
         assert_eq!(code, 1);
         assert!(!ran, "failed setup must not resume the target");
         assert!(
-            error.downcast_ref::<crate::SandboxCleanupError>().is_some(),
-            "runner exit is not proof of the entire sandbox boundary"
+            error.downcast_ref::<crate::SandboxCleanupError>().is_none(),
+            "a confirmed pre-start runner exit must not claim an execution range"
         );
         Ok(())
     }

@@ -62,10 +62,9 @@ pub unsafe fn terminate_process_range_and_wait(
         QueryInformationJobObject, TerminateJobObject,
     };
     let job = raw_job as HANDLE;
-    if TerminateJobObject(job, 1) == 0 {
-        return Err(std::io::Error::last_os_error());
-    }
     let deadline = std::time::Instant::now() + wait;
+    let mut termination_requested = false;
+    let mut termination_error = None;
     loop {
         let mut info: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = std::mem::zeroed();
         if QueryInformationJobObject(
@@ -81,13 +80,49 @@ pub unsafe fn terminate_process_range_and_wait(
         if info.ActiveProcesses == 0 {
             return Ok(());
         }
+        if !termination_requested {
+            termination_requested = true;
+            if TerminateJobObject(job, 1) == 0 {
+                // Cancellation may have already started terminating this job.
+                // Keep checking under the same deadline instead of treating a
+                // racing second termination request as proof that cleanup failed.
+                termination_error = Some(std::io::Error::last_os_error());
+            }
+        }
         if std::time::Instant::now() >= deadline {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "execution range cleanup deadline exceeded",
-            ));
+            return Err(termination_error.unwrap_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "execution range cleanup deadline exceeded",
+                )
+            }));
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+#[cfg(test)]
+mod process_range_cleanup_tests {
+    use super::*;
+
+    #[test]
+    fn empty_job_cleanup_needs_only_query_access() -> std::io::Result<()> {
+        use windows_sys::Win32::System::JobObjects::{CreateJobObjectW, OpenJobObjectW};
+        use windows_sys::Win32::System::SystemServices::JOB_OBJECT_QUERY;
+
+        let name = to_wide(format!("Local\\RunSealEmptyJob-{}", std::process::id()));
+        let full_access = unsafe { CreateJobObjectW(std::ptr::null(), name.as_ptr()) };
+        if full_access == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let _full_access = OwnedProcessHandle(full_access);
+        let query_only = unsafe { OpenJobObjectW(JOB_OBJECT_QUERY, 0, name.as_ptr()) };
+        if query_only == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let _query_only = OwnedProcessHandle(query_only);
+
+        unsafe { terminate_process_range_and_wait(query_only as usize, std::time::Duration::ZERO) }
     }
 }
 
