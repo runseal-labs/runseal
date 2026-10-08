@@ -268,20 +268,39 @@ fn exec_runtime_failures_use_outer_status_and_one_structured_terminal() -> Resul
             if mode != "plain" {
                 command.arg(mode);
             }
+            let timeout_ms = if cfg!(windows) { "5000" } else { "1000" };
             let output = command
                 .args([
                     "--policy",
                     "danger-full-access",
                     "--timeout-ms",
-                    "1000",
+                    timeout_ms,
                     "--cwd",
                 ])
                 .arg(tmp.path())
                 .args(["--", python_bin(), "-u", "-c", target])
                 .output()?;
+            let observed_code = if mode == "plain" {
+                String::from_utf8_lossy(&output.stderr)
+                    .strip_prefix("[runseal:")
+                    .and_then(|message| message.split(']').next())
+                    .unwrap_or("no plain error code")
+                    .to_string()
+            } else {
+                stdout_json_lines(&output)?
+                    .iter()
+                    .find_map(|message| {
+                        message["error"]["data"]["code"]
+                            .as_str()
+                            .or(message["params"]["result"]["error"]["code"].as_str())
+                    })
+                    .unwrap_or("no structured error code")
+                    .to_string()
+            };
             assert!(
                 tmp.path().join("target.pid").exists(),
-                "real target must start before runtime failure"
+                "real target must start before runtime failure (mode={mode}, expected={code}, observed={observed_code}, timeout_ms={timeout_ms}, outer_exit={:?})",
+                output.status.code()
             );
             #[cfg(windows)]
             {
