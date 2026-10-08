@@ -260,6 +260,7 @@ fn execute_prepared_with_backend_and_timer<B: SandboxBackend + Send + Sync + 'st
                 | super::TerminationCause::Cancelled
                 | super::TerminationCause::ClientDisconnected
                 | super::TerminationCause::Backpressure
+                | super::TerminationCause::FailedToStart
         )
     );
     if !journal.is_admitted()
