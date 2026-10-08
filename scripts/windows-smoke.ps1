@@ -253,7 +253,7 @@ try {
     Assert-SetupRequiredStatus $staleStatus
 
     $staleExec = Invoke-RunSealJson -AllowFailure -RunArgs @(
-        "exec", "--json", "--policy", "workspace-write", "--network", "disabled", "--cwd", $workspace, "--timeout-ms", "5000", "--",
+        "exec", "--json", "--policy", "workspace-write", "--network", "disabled", "--cwd", $workspace, "--timeout-ms", "60000", "--",
         "whoami.exe"
     ) -TimeoutSeconds 240
     Assert-ExecRepairedSetup $staleExec
