@@ -327,7 +327,7 @@ fn assert_backend_unavailable(response: &Value, root: &Path) -> Result<()> {
                 && event["reason"]
                     .as_str()
                     .unwrap_or_default()
-                    .starts_with("windows sandbox setup unavailable")
+                    .starts_with("windows sandbox")
         })
         .context("backend unavailable audit must include execution.failed")?;
     if cfg!(windows) {

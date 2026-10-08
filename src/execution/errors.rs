@@ -24,7 +24,7 @@ pub(crate) fn backend_execution_error(
 fn backend_unavailable_setup_status(reason: &str, cwd: &Path) -> Option<Value> {
     #[cfg(windows)]
     {
-        if reason.starts_with("windows sandbox setup unavailable") {
+        if reason.starts_with("windows sandbox") {
             return crate::commands::setup::windows_sandbox_setup_status_for_cwd(cwd).ok();
         }
     }
@@ -46,6 +46,17 @@ mod tests {
         let err = io::Error::other("runner failed");
 
         assert_eq!(backend_execution_error(&err, true, Path::new(".")), None);
+    }
+
+    #[test]
+    fn windows_sandbox_binding_unavailability_includes_setup_status() {
+        let setup_status = backend_unavailable_setup_status(
+            "windows sandbox process binding unavailable",
+            Path::new("."),
+        )
+        .expect("Windows sandbox availability errors include setup status");
+
+        assert_eq!(setup_status["setup"], "windows-sandbox");
     }
 
     #[cfg(windows)]
