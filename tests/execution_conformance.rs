@@ -3251,7 +3251,7 @@ fn wait_ready_pid(client: &Client, id: &str) -> Result<u32> {
 #[test]
 #[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn windows_ac07_cancelling_execution_a_keeps_execution_b_live_and_bound() -> Result<()> {
-    verify_natural_exit_and_cancel_range("workspace-write")
+    verify_natural_exit_and_cancel_range("workspace-write", Some("proxy"))
 }
 
 #[cfg(windows)]
@@ -3292,7 +3292,7 @@ fn windows_environment_override_is_case_insensitive_for_local_and_sandbox_execut
 #[cfg(windows)]
 #[test]
 fn windows_local_execution_clears_descendants_without_stopping_peer() -> Result<()> {
-    verify_natural_exit_and_cancel_range("danger-full-access")
+    verify_natural_exit_and_cancel_range("danger-full-access", None)
 }
 
 #[cfg(windows)]
@@ -3679,22 +3679,32 @@ impl Drop for HeartbeatFixture {
 }
 
 #[cfg(windows)]
-fn verify_natural_exit_and_cancel_range(policy: &str) -> Result<()> {
+fn verify_natural_exit_and_cancel_range(policy: &str, network_mode: Option<&str>) -> Result<()> {
     let _guard = process_test_gate();
     for cancel in [false, true] {
         let tmp = TempDir::new()?;
+        let (proxy_port, proxy_upstream) = if network_mode.is_some() {
+            let (port, upstream) = start_ac07_proxy_upstream()?;
+            (port, Some(upstream))
+        } else {
+            (0, None)
+        };
         let mut client = Client::spawn("service")?;
         let mut fixture = HeartbeatFixture {
             directory: tmp.path().to_owned(),
             pids: Vec::new(),
         };
-        let child_code = "import pathlib,sys,time; target=pathlib.Path(sys.argv[1]); stop=pathlib.Path(sys.argv[1]+'.stop'); count=0\nwhile not stop.exists():\n count+=1; target.write_text(str(count)); time.sleep(0.01)";
-        let root_code = "import pathlib,subprocess,sys,time; child=subprocess.Popen([sys.executable,'-u','-c',sys.argv[1],sys.argv[2]]); target=pathlib.Path(sys.argv[2]);\nwhile not target.exists():\n if child.poll() is not None: sys.exit(2)\n time.sleep(0.01)\nprint('READY '+str(child.pid),flush=True); sys.stdin.buffer.read()";
+        let child_code = "import os,pathlib,socket,sys,time,urllib.parse; target=pathlib.Path(sys.argv[1]); name=target.name; port=sys.argv[2]; stop=pathlib.Path(str(target)+'.stop'); count=0\nif 'RUNSEAL_HOME' in os.environ: pathlib.Path(name+'.runtime').write_text(os.environ['RUNSEAL_HOME'])\nproxy_done=False\nwhile not stop.exists():\n count+=1; target.write_text(str(count))\n if pathlib.Path(name+'.proxy-request').exists() and not proxy_done:\n  proxy_done=True\n  try:\n   proxy=urllib.parse.urlparse(os.environ['HTTP_PROXY']); auth=os.environ['RUNSEAL_NETWORK_PROXY_AUTHORIZATION']; request=f'GET http://127.0.0.1:{port}/proxy-ok HTTP/1.1\\r\\nHost: 127.0.0.1:{port}\\r\\nProxy-Authorization: {auth}\\r\\nConnection: close\\r\\n\\r\\n'.encode('ascii')\n   with socket.create_connection((proxy.hostname,proxy.port),timeout=3) as connection:\n    connection.settimeout(3); connection.sendall(request); response=b''\n    while True:\n     chunk=connection.recv(4096)\n     if not chunk: break\n     response+=chunk\n   pathlib.Path(name+'.proxy-result').write_text('ok' if b'proxy-ok' in response else 'failed')\n  except Exception:\n   pathlib.Path(name+'.proxy-result').write_text('failed')\n time.sleep(0.01)";
+        let root_code = "import pathlib,subprocess,sys,time; child=subprocess.Popen([sys.executable,'-u','-c',sys.argv[1],sys.argv[2],sys.argv[3]]); target=pathlib.Path(sys.argv[2]);\nwhile not target.exists():\n if child.poll() is not None: sys.exit(2)\n time.sleep(0.01)\nprint('READY '+str(child.pid),flush=True); sys.stdin.buffer.read()";
         let mut executions = Vec::new();
         let mut peer_policy_hash = Value::Null;
         let mut peer_policy_epoch = Value::Null;
         for (request_id, name) in [(1, "first"), (2, "peer")] {
-            client.send(request_id, "execute", json!({"command":[python()?,"-u","-c",root_code,child_code,name],"cwd":tmp.path(),"policy":policy,"stdin":{"mode":"stream"}}))?;
+            let mut request = json!({"command":[python()?,"-u","-c",root_code,child_code,name,proxy_port.to_string()],"cwd":tmp.path(),"policy":policy,"stdin":{"mode":"stream"}});
+            if let Some(network_mode) = network_mode {
+                request["network"] = json!(network_mode);
+            }
+            client.send(request_id, "execute", request)?;
             let receipt = client.next(Duration::from_secs(2))?;
             assert_eq!(receipt["id"], request_id, "{receipt}");
             assert_eq!(receipt["result"]["status"], "preparing", "{receipt}");
@@ -3711,6 +3721,29 @@ fn verify_natural_exit_and_cancel_range(policy: &str) -> Result<()> {
             fixture.pids.push(pid);
             executions.push((id, pid));
         }
+        let first_runtime = if network_mode.is_some() {
+            let home = std::path::PathBuf::from(std::fs::read_to_string(
+                tmp.path().join("first.runtime"),
+            )?);
+            assert!(
+                home.exists(),
+                "execution A runtime home must exist while active"
+            );
+            Some(home)
+        } else {
+            None
+        };
+        let peer_runtime = if network_mode.is_some() {
+            let home =
+                std::path::PathBuf::from(std::fs::read_to_string(tmp.path().join("peer.runtime"))?);
+            assert!(
+                home.exists(),
+                "execution B runtime home must exist while active"
+            );
+            Some(home)
+        } else {
+            None
+        };
         client.send(
             3,
             if cancel {
@@ -3746,10 +3779,23 @@ fn verify_natural_exit_and_cancel_range(policy: &str) -> Result<()> {
             !process_present(executions[0].1)?,
             "descendant must be absent before cleanup success"
         );
+        if let Some(home) = first_runtime {
+            assert!(!home.exists(), "execution A runtime home must be cleaned");
+        }
         assert!(
             process_present(executions[1].1)?,
             "peer descendant must remain live"
         );
+        if let Some(home) = &peer_runtime {
+            assert!(
+                home.exists(),
+                "execution B runtime home must survive A cleanup"
+            );
+            assert!(
+                home.parent().is_some_and(std::path::Path::exists),
+                "execution B runtime root must survive A cleanup"
+            );
+        }
         client.send(4, "getExecution", json!({"execution_id":executions[1].0}))?;
         let peer_state = loop {
             let message = client.next(Duration::from_secs(2))?;
@@ -3770,6 +3816,25 @@ fn verify_natural_exit_and_cancel_range(policy: &str) -> Result<()> {
             previous,
             "peer heartbeat must continue"
         );
+        if let Some(upstream) = proxy_upstream {
+            std::fs::write(tmp.path().join("peer.proxy-request"), b"request")?;
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !tmp.path().join("peer.proxy-result").exists() {
+                assert!(
+                    Instant::now() < deadline,
+                    "peer proxy lease request watchdog"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert_eq!(
+                std::fs::read_to_string(tmp.path().join("peer.proxy-result"))?,
+                "ok",
+                "execution B proxy lease must remain usable after A cleanup"
+            );
+            upstream
+                .join()
+                .map_err(|_| anyhow::anyhow!("proxy upstream panicked"))??;
+        }
         client.send(
             5,
             "cancelExecution",
@@ -3787,8 +3852,51 @@ fn verify_natural_exit_and_cancel_range(policy: &str) -> Result<()> {
             }
         }
         assert!(!process_present(executions[1].1)?);
+        if let Some(home) = peer_runtime {
+            assert!(!home.exists(), "execution B runtime home must be cleaned");
+        }
     }
     Ok(())
+}
+
+#[cfg(windows)]
+fn start_ac07_proxy_upstream() -> Result<(u16, std::thread::JoinHandle<Result<()>>)> {
+    use std::io::Read;
+
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
+    let port = listener.local_addr()?.port();
+    listener.set_nonblocking(true)?;
+    let upstream = std::thread::spawn(move || -> Result<()> {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let (mut stream, _) = loop {
+            match listener.accept() {
+                Ok(accepted) => break accepted,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    anyhow::ensure!(Instant::now() < deadline, "proxy upstream request watchdog");
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => return Err(error.into()),
+            }
+        };
+        stream.set_read_timeout(Some(Duration::from_secs(3)))?;
+        let mut request = Vec::new();
+        while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+            let mut buffer = [0_u8; 1024];
+            let count = stream.read(&mut buffer)?;
+            anyhow::ensure!(count > 0, "proxy upstream request ended before headers");
+            request.extend_from_slice(&buffer[..count]);
+            anyhow::ensure!(request.len() <= 8192, "proxy upstream headers too large");
+        }
+        anyhow::ensure!(
+            String::from_utf8_lossy(&request).starts_with("GET /proxy-ok HTTP/1.1\r\n"),
+            "proxy upstream received an unexpected request"
+        );
+        stream.write_all(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\nproxy-ok",
+        )?;
+        Ok(())
+    });
+    Ok((port, upstream))
 }
 
 #[cfg(windows)]
@@ -7341,7 +7449,7 @@ fn cli_stdio_stalled_or_disconnected_caller_cleans_owned_range_and_preserves_pee
                 && count > 0
             {
                 let mut bytes = vec![0; count.min(8192)];
-                stdout.read(&mut bytes)?;
+                stdout.read_exact(&mut bytes)?;
             }
             assert!(
                 Instant::now() < deadline,
