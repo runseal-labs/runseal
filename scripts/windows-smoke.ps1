@@ -126,7 +126,22 @@ function Assert-ExecRepairedSetup {
     param([object]$Run)
 
     if ($Run.ExitCode -ne 0) {
-        throw "sandboxed exec could not repair setup through the broker: $($Run.Stdout) $($Run.Stderr)"
+        $setupStatus = $null
+        try {
+            $setupStatus = (Invoke-RunSealJson -RunArgs @(
+                "setup", "windows-sandbox", "--status", "--json", "--cwd", $workspace
+            )).Json
+        } catch {
+            # Keep the execution failure primary; report status as unavailable below.
+        }
+        $lastResult = Get-ScheduledSetupBrokerLastResult
+        $errorCode = $Run.Json.error.data.code
+        $errorReason = $Run.Json.error.data.error.reason
+        $cleanupComplete = $Run.Json.error.data.cleanup_complete
+        if ($null -eq $setupStatus) {
+            throw "sandboxed exec could not repair setup through the broker (code=$errorCode, reason=$errorReason, cleanup_complete=$cleanupComplete, setup_status=unavailable, broker_last_result=$lastResult)"
+        }
+        throw "sandboxed exec could not repair setup through the broker (code=$errorCode, reason=$errorReason, cleanup_complete=$cleanupComplete, setup_requires_setup=$($setupStatus.requires_setup), broker=$($setupStatus.broker), next_action=$($setupStatus.next_action), broker_last_result=$lastResult)"
     }
     if ($Run.Json.exit_code -ne 0 -or $Run.Json.stdout -notmatch "runsealsandbox") {
         throw "sandboxed exec did not run as the sandbox identity after repair: $($Run.Stdout)"
