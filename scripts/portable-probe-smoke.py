@@ -333,6 +333,31 @@ def assert_portable_proxy(system: str, enforcement: str, policy: str, command: s
             "print('managed-proxy-ok')",
         ]
     )
+    proxy_command = [command, "-c", code]
+    direct_command = [
+        command,
+        "-c",
+        "import socket; socket.create_connection(('1.1.1.1', 53), timeout=0.5); print('direct-network-ok')",
+    ]
+    if policy == "workspace-contained":
+        curl = "/usr/bin/curl"
+        netcat = "/usr/bin/nc"
+        if not Path(curl).is_file() or not Path(netcat).is_file():
+            raise SystemExit("workspace-contained proxy smoke requires system curl and nc")
+        proxy_shell = (
+            "set -eu; "
+            f"{shlex.quote(curl)} --fail --silent --show-error "
+            "--proxy \"$HTTP_PROXY\" "
+            "--proxy-header \"Proxy-Authorization: $RUNSEAL_NETWORK_PROXY_AUTHORIZATION\" "
+            f"http://127.0.0.1:{port}/proxy-ok; "
+            "printf managed-proxy-ok"
+        )
+        proxy_command = ["/bin/sh", "-c", proxy_shell]
+        direct_command = [
+            "/bin/sh",
+            "-c",
+            f"{shlex.quote(netcat)} -z -w 1 1.1.1.1 53 && printf direct-network-ok",
+        ]
     with tempfile.TemporaryDirectory(prefix="runseal-portable-proxy-") as cwd:
         _, result = run_json(
             [
@@ -345,9 +370,7 @@ def assert_portable_proxy(system: str, enforcement: str, policy: str, command: s
                 "--cwd",
                 cwd,
                 "--",
-                command,
-                "-c",
-                code,
+                *proxy_command,
             ],
             expect_success=True,
         )
@@ -362,9 +385,7 @@ def assert_portable_proxy(system: str, enforcement: str, policy: str, command: s
                 "--cwd",
                 cwd,
                 "--",
-                command,
-                "-c",
-                "import socket; socket.create_connection(('1.1.1.1', 53), timeout=0.5); print('direct-network-ok')",
+                *direct_command,
             ],
             expect_success=True,
         )
