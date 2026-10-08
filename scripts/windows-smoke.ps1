@@ -201,6 +201,14 @@ function Get-ExecutionGateSummary {
     }
 }
 
+function Get-ExecutionFailureSummary {
+    param([object]$Run)
+
+    $data = $Run.Json.error.data
+    $executionIdPresent = -not [string]::IsNullOrWhiteSpace($data.execution_id)
+    return "code=$($data.code), cleanup_complete=$($data.cleanup_complete), execution_id_present=$executionIdPresent, exit_code=$($data.exit_code), requested_termination_reason=$($data.requested_termination_reason), timeout_ms=$($data.timeout_ms), stdout_bytes=$($data.stdout_bytes), stderr_bytes=$($data.stderr_bytes), terminal_bytes=$($data.terminal_bytes), control_bytes=$($data.control_bytes)"
+}
+
 function Invoke-Setup {
     param([switch]$Elevate)
 
@@ -284,11 +292,9 @@ try {
         "whoami.exe"
     ) -TimeoutSeconds 120
     if ($readyExec.ExitCode -ne 0) {
-        $errorCode = $readyExec.Json.error.data.code
-        $errorReason = $readyExec.Json.error.data.error.reason
-        $cleanupComplete = $readyExec.Json.error.data.cleanup_complete
+        $failureSummary = Get-ExecutionFailureSummary $readyExec
         $gateAfterReadyExec = Get-ExecutionGateSummary
-        throw "sandboxed exec failed after explicit setup (code=$errorCode, reason=$errorReason, cleanup_complete=$cleanupComplete, gate_before=$gateBeforeReadyExec, gate_after=$gateAfterReadyExec)"
+        throw "sandboxed exec failed after explicit setup ($failureSummary, gate_before=$gateBeforeReadyExec, gate_after=$gateAfterReadyExec)"
     }
     if ($readyExec.Json.exit_code -ne 0 -or $readyExec.Json.stdout -notmatch "runsealsandbox") {
         throw "sandboxed exec after explicit setup did not run as the sandbox identity: $($readyExec.Stdout)"
