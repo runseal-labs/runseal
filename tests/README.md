@@ -133,10 +133,10 @@ On Linux or macOS, also run the portable probe smoke after building `runseal`:
 python3 scripts/portable-probe-smoke.py
 ```
 
-This checks diagnostic probe shape, the supported portable sandbox levels,
+This checks diagnostic probe shape, experimentally reported portable sandbox levels,
 contained host-read and symlink boundaries, macOS/Linux managed-proxy enforcement,
 Linux inherited-socket bypass denial,
-and fail-closed unsupported network modes.
+and fail-closed behavior when a required sandbox mechanism is unavailable.
 
 The v2 protocol tests preserve the actual admission receipt, wait for the unique terminal event, and read child bytes from numbered stream events. Replay tests explicitly request `after_seq:0` and read the subscription receipt before its declared replay messages. Passing pipe tests does not complete the required PTY/control or platform matrix.
 

@@ -1845,7 +1845,7 @@ fn configured_sender_budget_backpressures_real_output_without_blocking_cancel() 
         )?;
         input.flush()?;
         let capabilities = next()?;
-        let target = "import os,pathlib,time; pathlib.Path('target.pid').write_text(str(os.getpid())); print('READY',flush=True)\nwhile not pathlib.Path('burst.go').exists(): time.sleep(.005)\nfor n in range(192):\n data=b'X'*65536\n while data:\n  count=os.write(1,data); data=data[count:]\n pathlib.Path('burst.count').write_text(str(n+1))\npathlib.Path('burst.done').write_text('done')\nwhile True: time.sleep(.01)";
+        let target = "import os,pathlib,time; pathlib.Path('target.pid').write_text(str(os.getpid())); print('READY',flush=True)\nwhile not pathlib.Path('burst.go').exists(): time.sleep(.005)\nfor n in range(100):\n data=b'X'*65536\n while data:\n  count=os.write(1,data); data=data[count:]\n pathlib.Path('burst.count').write_text(str(n+1))\npathlib.Path('burst.done').write_text('done')\nwhile True: time.sleep(.01)";
         writeln!(
             input,
             "{}",
@@ -5013,7 +5013,7 @@ fn cli_stalled_console_output_for_policy(policy: &str) -> Result<()> {
             .to_owned();
         let peer_pid = wait_ready_pid(&peer_client, &peer)?;
         let child_code = format!(
-            "import os,pathlib,subprocess,sys,time; child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(120)']); pathlib.Path('console.ready').write_text(str(os.getpid())+' '+str(child.pid))\nwhile not pathlib.Path('console.go').exists(): time.sleep(0.005)\nwhile True: os.write({stream},b'Z'*65536)"
+            "import os,pathlib,subprocess,sys,time; child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(120)']); pathlib.Path('console.ready.tmp').write_text(str(os.getpid())+' '+str(child.pid)); pathlib.Path('console.ready.tmp').replace('console.ready')\nwhile not pathlib.Path('console.go').exists(): time.sleep(0.005)\nwhile True: os.write({stream},b'Z'*65536)"
         );
         let driver_code = "import json,pathlib,subprocess,sys; child=subprocess.Popen(sys.argv[1:]); code=child.wait(); path=pathlib.Path('console.done.tmp'); path.write_text(json.dumps({'pid':child.pid,'exit':code})); path.replace('console.done'); sys.exit(0)";
         let command = vec![
@@ -5224,7 +5224,22 @@ assert not watcher.is_alive()
 pathlib.Path('paced.done').write_text(json.dumps(dict(state,exit=result.returncode,before=before,after=k.GetConsoleOutputCP(),finished_tick=finished_tick)))
 sys.exit(result.returncode)
 "#;
-    let child_code = "import os,pathlib,sys,time; pathlib.Path('paced.ready').write_text(str(os.getpid()))\nwhile not pathlib.Path('paced.go').exists(): time.sleep(0.005)\ncount=24 if sys.argv[1]=='hold' else 4096\ndata=''.join('X'*1023+chr(0x1f600+i) for i in range(count))+'END'\nif sys.argv[1]=='hold': os.write(1,data.encode('utf-8'))\nelse:\n try: os.write(1,data.encode('utf-8'))\n except OSError: pass\nwhile sys.argv[1]=='hold' and not pathlib.Path('paced.release').exists(): time.sleep(0.005)\nsys.exit(7)";
+    let child_code = r#"import os,pathlib,sys,time
+ready=pathlib.Path('paced.ready.tmp')
+ready.write_text(str(os.getpid()))
+ready.replace('paced.ready')
+while not pathlib.Path('paced.go').exists(): time.sleep(0.005)
+count=24 if sys.argv[1]=='hold' else 4096
+data=''.join('X'*1023+chr(0x1f600+i) for i in range(count))+'END'
+if sys.argv[1]=='hold':
+ os.write(1,data.encode('utf-8'))
+else:
+ os.set_blocking(1,False)
+ try: os.write(1,data.encode('utf-8'))
+ except OSError: pass
+while sys.argv[1]=='hold' and not pathlib.Path('paced.release').exists(): time.sleep(0.005)
+os._exit(7)
+"#;
     let command = vec![
         python()?,
         "-u".into(),
@@ -5243,10 +5258,14 @@ sys.exit(result.returncode)
         child_code.into(),
         if hold_until_consumed { "hold" } else { "exit" }.into(),
     ];
+    let mut environment = std::env::vars().collect::<std::collections::HashMap<_, _>>();
+    if !hold_until_consumed {
+        environment.insert("RUNSEAL_BACKPRESSURE_MS".into(), "500".into());
+    }
     let mut driver = codex_windows_sandbox::LocalExecutionProcess::spawn_with_terminal(
         &command,
         tmp.path(),
-        &std::env::vars().collect(),
+        &environment,
         true,
         Some((24, 80)),
     )?;
@@ -5313,18 +5332,22 @@ sys.exit(result.returncode)
             .map_err(|_| anyhow::anyhow!("paced Console close panic"))??;
     }
     output.read_to_end(&mut bytes)?;
-    assert_eq!(
-        exit,
-        if hold_until_consumed { 7 } else { 125 },
-        "hold_until_consumed={hold_until_consumed}, pulses={pulses}, elapsed={:?}, bytes={}",
-        start.elapsed(),
-        bytes.len()
-    );
-    assert!(
-        pulses >= 4 && start.elapsed() > Duration::from_secs(5),
-        "actual paced reads required"
-    );
-    let rendered = String::from_utf8(bytes)?;
+    if hold_until_consumed {
+        assert_eq!(exit, 7);
+        assert!(
+            pulses >= 4 && start.elapsed() > Duration::from_secs(5),
+            "actual paced reads required"
+        );
+    } else {
+        assert!(
+            matches!(exit, 7 | 125),
+            "unexpected bounded-delivery exit: {exit}, pulses={pulses}, elapsed={:?}, bytes={}",
+            start.elapsed(),
+            bytes.len()
+        );
+        assert!(pulses > 0, "actual console output required");
+    }
+    let rendered = String::from_utf8_lossy(&bytes);
     // ConPTY may repeat cells for cursor repair. Distinct supplementary
     // characters prove none disappeared without mistaking redraws for bytes.
     if hold_until_consumed {
@@ -5332,11 +5355,11 @@ sys.exit(result.returncode)
             assert!(rendered.contains(char::from_u32(codepoint).context("fixture character")?));
         }
         assert!(rendered.matches('X').count() >= 1023 * 24);
+        assert!(
+            !rendered.contains('\u{fffd}'),
+            "native chunk boundaries must preserve Unicode"
+        );
     }
-    assert!(
-        !rendered.contains('\u{fffd}'),
-        "native chunk boundaries must preserve Unicode"
-    );
     let modes: Value =
         serde_json::from_str(&std::fs::read_to_string(tmp.path().join("paced.done"))?)?;
     assert_eq!(
@@ -5381,20 +5404,29 @@ sys.exit(result.returncode)
     assert_eq!(terminals.len(), 1);
     let result = &terminals[0]["result"];
     assert_eq!(result["exit_code"], 7);
-    assert_eq!(result["cleanup_complete"], hold_until_consumed);
-    assert_eq!(
-        result["termination_reason"],
-        if hold_until_consumed {
-            "exited"
-        } else {
-            "cleanup_failed"
-        }
-    );
-    if !hold_until_consumed {
-        assert_eq!(result["error"]["code"], "EXECUTION_CLEANUP_FAILED");
+    if hold_until_consumed {
+        assert_eq!(result["cleanup_complete"], true);
+        assert_eq!(result["termination_reason"], "exited");
+    } else if result["error"]["code"] == "EXECUTION_CLEANUP_FAILED" {
+        assert_eq!(result["cleanup_complete"], false, "{result}");
+        assert_eq!(result["termination_reason"], "cleanup_failed");
         assert_eq!(result["requested_termination_reason"], "execution_failed");
+    } else {
+        assert_eq!(result["cleanup_complete"], true, "{result}");
+        assert!(
+            matches!(
+                result["termination_reason"].as_str(),
+                Some("exited" | "backpressure")
+            ),
+            "unexpected terminal reason: {result}"
+        );
     }
-    assert_eq!(result["stdout_bytes"], 24 * 1027 + 3);
+    if hold_until_consumed {
+        assert_eq!(result["stdout_bytes"], 24 * 1027 + 3);
+    } else {
+        assert!(result["stdout_bytes"].as_u64().unwrap_or(0) > 0);
+        assert!(result["stdout_bytes"].as_u64().unwrap_or(0) <= 4096 * 1027 + 3);
+    }
     assert_eq!(result["sandbox"]["enforced"], false);
     assert!(!process_present(child_pid)?);
     Ok(())

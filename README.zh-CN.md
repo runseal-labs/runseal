@@ -46,7 +46,7 @@ RunSeal 不是 AI governance 平台，不是工具生态，不是云端 VM 沙�
 
 RunSeal 是当前面向第三方集成的技术预览版本。仓库包含可构建的 CLI/RPC shell、标准策略 profile 归一化、canonical policy hash、backend capability 报告、一等公民的 Windows reference backend、`PlatformSandboxPlan` 摘要、JSONL audit 输出和黑盒 conformance 测试。
 
-当前执行能力刻意保持窄边界：`danger-full-access` 以本地非沙箱方式执行。`read-only`、`workspace-write` 和 `workspace-contained` 在 Windows、macOS、Linux 三个平台都 supported。Windows 仍是完整 reference backend；experimental macOS 和 Linux backend 也支持 `network.proxy`，并通过默认拒绝的最小平台视图实现 host-read containment。
+当前执行能力刻意保持窄边界：`danger-full-access` 以本地非沙箱方式执行。Windows 是 `read-only`、`workspace-write`、`workspace-contained` 和沙箱网络模式的 reference backend。macOS 和 Linux 将这些 portable enforcement paths 报告为 `experimental`；backend 状态不代表每台主机都支持每种 profile。portable 实现通过默认拒绝的平台视图约束 host read，并在所需机制不可用时 fail closed。
 
 产品边界刻意保持简单。RunSeal 提供的是执行环境：启动命令、应用策略、强制 OS-native 边界、输出事件和审计记录，并在请求的控制能力不可用时 fail closed。它不试图变成 AI governance 平台，也不试图变成工具或应用生态。各种集成应保持为同一命令执行契约之上的薄 adapter。
 
@@ -54,19 +54,19 @@ Windows 上，沙箱请求会产生一个 `PlatformSandboxPlan`，涵盖 runtime
 
 底层 OS 强制逻辑位于专用的 Windows sandbox 实现中。RunSeal 自身的代码保持在适配层：策略归一化、`PlatformSandboxPlan` 映射、audit 事件、capability 报告和 conformance 门控。不要将 setup-helper、command-runner 或 OS 边界代码重新实现在 RunSeal 适配层中。
 
-macOS 和 Linux 上，RunSeal 支持 `read-only`、`workspace-write` 和 `workspace-contained`，默认网络语义是 unmanaged 直通。`workspace-contained` 只暴露 workspace、私有 runtime roots、显式 policy read roots 和最小只读系统执行基线，其他 host 路径不可读。需要拒绝网络时可以显式请求 `network.disabled`。两个 experimental backend 也支持 `network.proxy`：macOS 只允许连接当前 execution 的 managed proxy endpoint；Linux 使用隔离 network namespace 和 execution-local relay。Direct external、无关 loopback 和未授权 host IPC 连接仍被拒绝。
+macOS 和 Linux 的 `read-only`、`workspace-write`、`workspace-contained`、`network.disabled` 和 `network.proxy` 均报告为 `experimental`。当前实现使用默认拒绝的平台视图；`workspace-contained` 只暴露 workspace、私有 runtime roots、显式 policy read roots 和最小只读系统执行基线。macOS 只允许连接当前 execution 的 managed proxy endpoint；Linux 使用隔离 network namespace 和 execution-local relay。已执行的 portable paths 会拒绝 direct external、无关 loopback 和未授权 host IPC 连接；在平台 conformance evidence 被接受前，`experimental` 状态仍是权威状态。
 
-macOS 和 Linux 的 backend status 以及底层 feature status 仍为 `experimental`；下面的 `supported` 只针对当前 portable enforcement paths 已执行的公开 sandbox level 和 network mode。客户端应优先使用 `sandbox_levels`、`network_modes` 和 `feature_statuses` 做状态判断。旧的 `features` 布尔值只是粗粒度的存在标记；portable capability probe 仅用于诊断，不会提升 unsupported capability。
+macOS 和 Linux 的 backend status、公开 sandbox level、沙箱网络模式以及底层 feature status 均为 `experimental`。`network.unmanaged` 和 `danger-full-access` 描述普通本地执行，状态为 `supported`。客户端应优先使用 `sandbox_levels`、`network_modes` 和 `feature_statuses` 做状态判断。旧的 `features` 布尔值只是粗粒度的存在标记；portable capability probe 仅用于诊断，不会提升 unsupported capability。
 
 | Capability | Windows | macOS | Linux |
 | --- | --- | --- | --- |
 | `danger-full-access` | supported | supported | supported |
-| `read-only` | supported | supported | supported |
-| `workspace-write` | supported | supported | supported |
-| `workspace-contained` | strict compliance option | supported（experimental backend） | supported（experimental backend） |
+| `read-only` | supported | experimental | experimental |
+| `workspace-write` | supported | experimental | experimental |
+| `workspace-contained` | strict compliance option | experimental | experimental |
 | `network.unmanaged` | supported | supported | supported |
-| `network.disabled` | supported | supported | supported |
-| `network.proxy` | supported | supported（experimental backend） | supported（experimental backend） |
+| `network.disabled` | supported | experimental | experimental |
+| `network.proxy` | supported | experimental | experimental |
 
 ### macOS 和 Linux hardening evidence
 
@@ -74,13 +74,13 @@ Windows 是一等公民的 reference backend。下面的 macOS 和 Linux 项追�
 
 | Area | Windows reference | macOS portable | Linux portable | Evidence tracked |
 | --- | --- | --- | --- | --- |
-| Filesystem levels | `read-only` 和 `workspace-write` supported；`workspace-contained` 作为 strict compliance option 提供 | experimental backend 支持 `read-only`、`workspace-write` 和 `workspace-contained` | experimental backend 支持 `read-only`、`workspace-write` 和 `workspace-contained` | 针对已声明 capability 的共享 filesystem conformance，加上 adversarial external read/write、parent traversal、symlink 或 junction traversal、protected metadata 和 runtime-root cases。 |
-| Network modes | `network.unmanaged`、`network.disabled` 和 `network.proxy` supported | experimental backend 支持 `network.unmanaged`、`network.disabled` 和 `network.proxy` | experimental backend 支持 `network.unmanaged`、`network.disabled` 和 `network.proxy` | `network.unmanaged` 的 direct pass-through 行为；`network.disabled` 的 direct socket 和 HTTP egress denial；`network.proxy` 的 managed proxy routing 和 `CONNECT` tunneling、environment override resistance、direct TCP/UDP、无关 loopback、host-IPC 和 inherited-socket bypass denial、credential redaction、audit/event coverage，以及 public-safe fail-closed output。 |
+| Filesystem levels | `read-only` 和 `workspace-write` supported；`workspace-contained` 作为 strict compliance option 提供 | `read-only`、`workspace-write` 和 `workspace-contained` 为 experimental paths | `read-only`、`workspace-write` 和 `workspace-contained` 为 experimental paths | 针对已声明 capability 的共享 filesystem conformance，加上 adversarial external read/write、parent traversal、symlink 或 junction traversal、protected metadata 和 runtime-root cases。 |
+| Network modes | `network.unmanaged`、`network.disabled` 和 `network.proxy` supported | `network.unmanaged` supported；沙箱网络模式为 experimental | `network.unmanaged` supported；沙箱网络模式为 experimental | `network.unmanaged` 的 direct pass-through 行为；`network.disabled` 的 direct socket 和 HTTP egress denial；`network.proxy` 的 managed proxy routing 和 `CONNECT` tunneling、environment override resistance、direct TCP/UDP、无关 loopback、host-IPC 和 inherited-socket bypass denial、credential redaction、audit/event coverage，以及 public-safe fail-closed output。 |
 | Setup/readiness | Windows setup readiness supported | 无平台 setup；报告 unsupported Windows setup，但不阻塞 portable enforcement paths | 无平台 setup；报告 unsupported Windows setup，但不阻塞 portable enforcement paths | 平台专用 setup contract、结构化 `getSetupStatus`、setup failure audit/events，以及 setup unavailable 时的 fail-closed 行为。 |
 | Runtime roots and synthetic home | Supported | Experimental | Experimental | Runtime root creation、environment redirect、cleanup、marker spoofing、symlink replacement、partial setup failure 和 cross-execution contamination conformance。 |
 | Process cleanup | Supported | Experimental | Experimental | Timeout、cancellation、child process、shell trampoline、nested process tree 和 helper reuse conformance，且不能终止无关进程。 |
 | Audit/events | Supported | 当前 portable paths supported | 当前 portable paths supported | Execution、denial、setup failure 和 network decision events 必须和 JSONL audit records 对齐，并且不暴露 backend-private details。 |
-| Adversarial conformance | Reference readiness 必需 | 针对 supported portable claims 持续追踪 | 针对 supported portable claims 持续追踪 | RFC-0016 manifest cases 必须为已声明 capability 产出 public-safe passing results；unsupported gaps 必须保持 explicit fail closed。 |
+| Adversarial conformance | Reference readiness 必需 | 持续追踪 experimental portable paths | 持续追踪 experimental portable paths | 每个 capability 在提升状态前，RFC-0016 manifest cases 都必须产出 public-safe passing results；unsupported gaps 必须保持 explicit fail closed。 |
 
 协议和策略版本字符串为 `runseal.protocol/v2` 和 `runseal.policy/v1`。v2 实现仍在进行：admission 回执、backend 确认后的启动事件、pipe 实时输出、流式 stdin、活动查询、取消、订阅替换/重放/退订、有界保留、客户端暂停读取时取消、排队通知失效、writer 停滞清理、必需审计的 admission 拒绝、带序号的 live/审计终态一致性、终态保留范围快照和等待所属进程/runtime root 清理的 session disposal 已有针对性的 Windows pipe 验收证据。运行中审计写失败已有真实本地进程与只读文件句柄故障测试，结果明确报告缺少持久记录。Windows 本地与 sandboxed PTY 启动、终端 bytes、resize 和前台 interrupt 后 Shell/并行 Execution 继续运行已有 danger-full-access 和 workspace-write/unmanaged 针对性测试；CLI PTY 也已通过这些 profile 的真实终端 Unicode 输入、中断、resize、退出码/模式恢复和输入 EOF 清理测试；可配置 transport 限制、完整清理证明及平台/组合验收矩阵仍待完成。Unix 协议 writer 已使用非阻塞输出，但尚未在当前 Windows 主机上验证该路径。当前 checkout 还不是完成验收的 v2 发布候选。
 
@@ -334,7 +334,7 @@ Linux 或 macOS 上，构建 `runseal` 后运行 portable probe smoke：
 python3 scripts/portable-probe-smoke.py
 ```
 
-portable smoke 会检查 diagnostic capability probe、supported portable enforcement，以及 unsupported 沙箱策略的结构化 fail-closed 行为。
+portable smoke 会检查 diagnostic capability probe、报告为 experimental 的 portable enforcement 实际文件/网络行为，以及所需沙箱机制不可用时的结构化 fail-closed 行为。
 
 Windows reference-backend 的 readiness 要求 smoke check 和上面 Rust 检查都在 Windows 主机上通过。
 
