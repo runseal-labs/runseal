@@ -222,6 +222,7 @@ fn execute_prepared_with_backend_and_timer<B: SandboxBackend + Send + Sync + 'st
 ) -> Result<(Vec<Value>, Value), RunSealError> {
     let control = request.control.clone();
     let timeout = request.timeout;
+    let command_args = request.command.len();
     let mut backend_entered = false;
     let mut reservation = None;
     let timer = control.accept();
@@ -249,6 +250,39 @@ fn execute_prepared_with_backend_and_timer<B: SandboxBackend + Send + Sync + 'st
             )),
         ),
     };
+    // A request stopped after acceptance is a real failed Execution even if
+    // setup never reaches the backend. Admission and policy failures stay
+    // record-free and are handled by their structured pre-admission errors.
+    let accepted_termination = matches!(
+        control.cause(),
+        Some(
+            super::TerminationCause::Timeout
+                | super::TerminationCause::Cancelled
+                | super::TerminationCause::ClientDisconnected
+                | super::TerminationCause::Backpressure
+        )
+    );
+    if !journal.is_admitted()
+        && (accepted_termination
+            || outcome.as_ref().is_err_and(|error| {
+                matches!(
+                    error.code.as_str(),
+                    "EXECUTION_TIMEOUT"
+                        | "EXECUTION_CANCELLED"
+                        | "CLIENT_DISCONNECTED"
+                        | "CLIENT_BACKPRESSURE"
+                )
+            }))
+        && let Err(error) = journal.admit(command_args)
+    {
+        outcome = Err(error);
+    }
+    if journal.is_admitted()
+        && let Err(error) = journal.notify_requested_if_pending(&mut |event| observer.event(event))
+        && outcome.is_ok()
+    {
+        outcome = Err(error);
+    }
     if !backend_entered
         && journal.is_admitted()
         && control.cause() == Some(super::TerminationCause::Timeout)

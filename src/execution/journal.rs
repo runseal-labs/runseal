@@ -157,6 +157,16 @@ impl ExecutionJournal {
         self.admitted
     }
 
+    pub(crate) fn notify_requested_if_pending(
+        &mut self,
+        observer: &mut dyn FnMut(&Value) -> Result<(), RunSealError>,
+    ) -> Result<(), RunSealError> {
+        if let Some(requested) = self.prepared_requested.take() {
+            observer(&requested)?;
+        }
+        Ok(())
+    }
+
     fn envelope(&self, payload: &Value) -> Value {
         let mut event = self.binding.clone();
         if let (Some(object), Some(payload)) = (event.as_object_mut(), payload.as_object()) {
