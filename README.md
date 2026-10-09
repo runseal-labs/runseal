@@ -369,7 +369,7 @@ If a host dies without acknowledging cleanup, its execution binding stays closed
 .\target\debug\runseal.exe repair execution-gates --json
 ```
 
-The repair refuses unless every recorded reservation owner is gone, no process runs under the sandbox identity, and every recorded runtime root is absent or safely removable. It then drops the reservation, the cleanup-failure marker, and the native quarantine signal for the current machine binding. An uninspectable process token or a reservation that predates runtime-root recording is unverified evidence, so the default repair fails closed; `--accept-unverified-release` proceeds and marks exactly what stayed unverified in the JSON report. Normal admission, a `setup --status` read, and a restart never repair a binding.
+The repair refuses unless every recorded reservation owner is gone, no process runs under the sandbox identity, and every recorded runtime root is absent or safely removable. Run it from an elevated Administrator terminal because proving the machine-wide process boundary requires enumerating every Windows session. If that inspection is unavailable or incomplete, repair returns `BACKEND_UNAVAILABLE` and leaves the binding closed. A process owner that remains uninspectable after complete enumeration or a reservation that predates runtime-root recording is unverified evidence, so the default repair fails closed; `--accept-unverified-release` proceeds only for those unverified cases and marks them in the JSON report. Normal admission, a `setup --status` read, and a restart never repair a binding.
 
 ## Intended protocol
 

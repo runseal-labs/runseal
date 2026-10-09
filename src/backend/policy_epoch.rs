@@ -638,15 +638,25 @@ pub(super) fn repair_execution_gate_for_binding(
 
 #[cfg(windows)]
 fn inspect_sandbox_process_group() -> io::Result<(Vec<u32>, usize)> {
-    use crate::windows::processes::pids_with_token_group;
+    use crate::windows::processes::pids_with_sandbox_identity_group;
 
-    let group_sid = codex_windows_sandbox::resolve_sid(codex_windows_sandbox::SANDBOX_USERS_GROUP)
-        .map_err(|_| {
-            io::Error::other(BackendUnavailableError {
-                reason: public_windows_setup_unavailable_reason("process_binding_unavailable"),
-            })
-        })?;
-    pids_with_token_group(&group_sid)
+    let sandbox_user_sid = codex_windows_sandbox::resolve_sid(
+        codex_windows_sandbox::SANDBOX_USERNAME,
+    )
+    .map_err(|_| {
+        io::Error::other(BackendUnavailableError {
+            reason: public_windows_setup_unavailable_reason("process_binding_unavailable"),
+        })
+    })?;
+    pids_with_sandbox_identity_group(
+        codex_windows_sandbox::SANDBOX_USERS_GROUP,
+        &sandbox_user_sid,
+    )
+    .map_err(|_| {
+        io::Error::other(BackendUnavailableError {
+            reason: public_windows_setup_unavailable_reason("process_binding_unavailable"),
+        })
+    })
 }
 
 #[cfg(windows)]
@@ -1565,6 +1575,62 @@ mod execution_gate_repair_tests {
         let _ = fs::remove_file(marker_path);
         assert!(failed, "a live sandbox process must refuse the repair");
         assert!(unchanged, "a refused repair must preserve the binding");
+        Ok(())
+    }
+
+    #[test]
+    fn execution_gate_repair_stays_closed_when_process_inspection_is_unavailable() -> io::Result<()>
+    {
+        let tmp = TempDir::new()?;
+        let key = WindowsSandboxPolicyCohortKey {
+            binding_key: format!(
+                "repair-unavailable-process-probe-fixture:{}",
+                tmp.path().display()
+            ),
+            policy_hash: "policy-a".into(),
+        };
+        let fixture = WindowsSandboxCrossProcessGate::acquire(&key)?;
+        let state_path = fixture.state_path.clone();
+        let quarantine = fixture.quarantine.clone();
+        let (_, marker_path) = inject_dead_reservation(&key, &fixture, Some(Vec::new()))?;
+        drop(fixture);
+        let before = fs::read(&state_path)?;
+
+        let failed = repair_execution_gate_for_binding_with_process_probe(
+            &key.binding_key,
+            true,
+            std::time::Instant::now() + std::time::Duration::from_secs(5),
+            || {
+                Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "process inspection unavailable",
+                ))
+            },
+        )
+        .is_err_and(|error| error.kind() == io::ErrorKind::PermissionDenied);
+        let unchanged = fs::read(&state_path)? == before;
+        let marker_retained = marker_path.exists();
+        let quarantine_retained = quarantine.check().is_err();
+        quarantine.reset()?;
+        fs::remove_file(&state_path)?;
+        fs::remove_file(marker_path)?;
+
+        assert!(
+            failed,
+            "the explicit override must not bypass failed inspection"
+        );
+        assert!(
+            unchanged,
+            "unavailable inspection must preserve the binding"
+        );
+        assert!(
+            marker_retained,
+            "unavailable inspection must retain the failure marker"
+        );
+        assert!(
+            quarantine_retained,
+            "unavailable inspection must retain quarantine"
+        );
         Ok(())
     }
 

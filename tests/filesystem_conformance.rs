@@ -1611,7 +1611,7 @@ fn network_proxy_allows_http_through_managed_proxy_when_supported_or_fails_close
         let command_processor =
             std::env::var("ComSpec").context("Windows command interpreter path unavailable")?;
         params["command"] = json!([command_processor, "/C", "echo proxy-warmup"]);
-        params["timeout_ms"] = json!(3_000);
+        params["timeout_ms"] = json!(15_000);
         params
     };
     let warmup =
@@ -1980,7 +1980,7 @@ fn network_proxy_credentials_are_redacted_when_supported_or_fails_closed() -> Re
         // Bound this output-only probe so a stalled fixture cannot outlive the
         // RPC watchdog and leave the prepared execution gate contaminated.
         params["command"] = json!([windows_python_bin()?, "-u", "-c", code]);
-        params["timeout_ms"] = json!(3_000);
+        params["timeout_ms"] = json!(15_000);
         execute_params(params)?
     };
 

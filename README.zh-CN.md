@@ -226,7 +226,7 @@ bootstrap 会注册 scheduled setup broker。
 .\target\debug\runseal.exe repair execution-gates --json
 ```
 
-修复只有在同时满足以下条件时才继续：所有被记录的接纳 owner 均已消失；沙箱身份下没有进程在运行；每条被记录的 runtime root 均已不存在或可安全删除。随后它清除当前机器绑定的占用、清理失败标记和原生隔离信号。无法检查的进程 token 或早于 runtime root 记录的占用属于未验证证据，默认 fail closed；`--accept-unverified-release` 会继续并在 JSON 报告中标明未验证项。普通准入、`setup --status` 读取和重启都不构成修复。
+修复只有在同时满足以下条件时才继续：所有被记录的接纳 owner 均已消失；沙箱身份下没有进程在运行；每条被记录的 runtime root 均已不存在或可安全删除。需在提升权限的管理员终端运行，因为证明整机进程边界需要枚举所有 Windows 会话。若进程检查不可用或不完整，修复返回 `BACKEND_UNAVAILABLE` 并保持绑定关闭。完整枚举后仍有进程所有者无法检查，或占用记录早于 runtime root 记录，属于未验证证据；默认 fail closed，`--accept-unverified-release` 只对这些残余证明继续，并在 JSON 报告中标明。普通准入、`setup --status` 读取和重启都不构成修复。
 
 ## 预期协议
 

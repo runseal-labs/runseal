@@ -2047,13 +2047,16 @@ fn cli_control_rejects_invalid_modes_and_missing_endpoint_before_child_start() -
 }
 
 #[test]
-fn repair_execution_gates_help_describes_the_explicit_release_only() -> Result<()> {
+fn repair_execution_gates_help_describes_proof_requirements() -> Result<()> {
     let help = run_cli(&["repair", "execution-gates", "--help"])?;
     assert!(help.status.success());
     let text = String::from_utf8_lossy(&help.stdout);
-    assert!(text.contains("runseal repair execution-gates"));
-    assert!(text.contains("--accept-unverified-release"));
-    assert!(text.contains("normal admission"));
+    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(normalized.contains("runseal repair execution-gates"));
+    assert!(normalized.contains("--accept-unverified-release"));
+    assert!(normalized.contains("elevated Administrator token"));
+    assert!(normalized.contains("does not bypass unavailable process inspection"));
+    assert!(normalized.contains("normal admission"));
     Ok(())
 }
 

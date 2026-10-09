@@ -10,9 +10,13 @@ recorded runtime root is absent or safely removable. Only this explicit repair
 restores such a binding: normal admission, setup status reads, and restarts do
 not.
 
---accept-unverified-release proceeds when a token cannot be inspected or a
-reservation predates runtime-root recording. The JSON report marks exactly what
-remained unverified; without the flag the repair fails closed.
+Complete process inspection across Windows sessions requires an elevated
+Administrator token. Without it, repair remains closed.
+
+--accept-unverified-release proceeds only after complete session enumeration
+when a process owner remains uninspectable or a reservation predates runtime-root
+recording. It does not bypass unavailable process inspection. The JSON report
+marks exactly what remained unverified; without the flag the repair fails closed.
 ";
 
 const REPAIR_USAGE: &str =

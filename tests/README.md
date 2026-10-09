@@ -785,15 +785,22 @@ unchanged black-box RPC timeout tests cover the same result and audit fields.
 
 `runseal repair execution-gates` has unit coverage in `backend::policy_epoch::
 execution_gate_repair_tests` and CLI coverage in `tests/cli_contract.rs`. A
+prepared-host-only `live_process_census_enumerates_every_session_without_unknown_owners`
+test exercises the actual WTS and local-group APIs; it runs with
+`--include-ignored` and is not generic-host passing evidence. A
 recorded owner that is still live must refuse the repair without modifying any
 state. A reservation whose owner is provably gone, whose binding has no
 sandbox-identity process, and whose runtime roots were recorded and are absent
 must clear the reservation, the cleanup-failure marker, and the native quarantine
-signal, after which the binding admits again. A reservation without recorded
-runtime roots is unverified evidence, so the default repair must refuse it. The
-explicit `--accept-unverified-release` override does not prove cleanup; its
-report marks `unverified_runtime_roots` when used. The CLI help and
-unknown-argument handling are asserted separately.
+signal, after which the binding admits again. The live Windows census runs
+from an elevated Administrator token, validates the sandbox identity group,
+and checks process ownership across every session. If session or identity
+enumeration is unavailable, the repair stays closed; `--accept-unverified-release`
+cannot bypass that boundary. A reservation without recorded runtime roots or a
+process owner that remains uninspectable after complete enumeration is unverified
+evidence, so the default repair must refuse it. The explicit override only
+accepts those unverified cases and the report marks what stayed unverified. The
+CLI help and unknown-argument handling are asserted separately.
 
 `execution_capability_profiles_are_complete_and_consistent` in
 `tests/protocol_contract.rs` requires `getCapabilities` to report all 13

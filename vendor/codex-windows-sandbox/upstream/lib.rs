@@ -393,6 +393,8 @@ pub use resolved_permissions::WindowsSandboxIsolationMode;
 #[cfg(target_os = "windows")]
 pub use resolved_permissions::isolation_mode_for_permission_profile;
 #[cfg(target_os = "windows")]
+pub use setup::SANDBOX_USERNAME;
+#[cfg(target_os = "windows")]
 pub use setup::SETUP_VERSION;
 #[cfg(target_os = "windows")]
 pub use setup::SandboxProxySettings;

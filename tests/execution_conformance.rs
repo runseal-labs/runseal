@@ -4456,25 +4456,33 @@ fn evicted_history_is_reported_and_audit_queries_exclude_live_payloads() -> Resu
     let tmp = TempDir::new()?;
     let mut client = Client::spawn("service")?;
     client.send(1,"execute",json!({"command":[python()?,"-u","-c","import sys; out=sys.stdout.buffer; out.write(b'READY\\n'); out.flush(); sys.stdin.buffer.readline(); out.write(b'replay-secret-canary'*120000); out.flush(); sys.stdin.buffer.read()"],"cwd":tmp.path(),"policy":"danger-full-access","stdin":{"mode":"stream"}}))?;
-    let receipt = client.next(Duration::from_secs(2))?;
+    let receipt = client
+        .next(Duration::from_secs(2))
+        .context("waiting for execution receipt")?;
     let execution_id = receipt["result"]["execution_id"]
         .as_str()
         .context("execution id")?;
     receive_bytes(&client, b"READY\n")?;
     client.send(2, "unsubscribeEvents", json!({"execution_id":execution_id}))?;
     assert_eq!(
-        client.next(Duration::from_secs(2))?["result"]["unsubscribed"],
+        client
+            .next(Duration::from_secs(2))
+            .context("waiting for unsubscribe response")?["result"]["unsubscribed"],
         true
     );
     client.send(3,"writeExecutionInput",json!({"execution_id":execution_id,"stream":"stdin","encoding":"base64","data":"base64:Z28K"}))?;
     assert_eq!(
-        client.next(Duration::from_secs(2))?["result"]["accepted_bytes"],
+        client
+            .next(Duration::from_secs(2))
+            .context("waiting for stdin acceptance")?["result"]["accepted_bytes"],
         3
     );
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         client.send(4, "getExecution", json!({"execution_id":execution_id}))?;
-        let result = client.next(deadline.saturating_duration_since(Instant::now()))?;
+        let result = client
+            .next(deadline.saturating_duration_since(Instant::now()))
+            .context("waiting for execution replay range to advance")?;
         assert_eq!(result["id"], 4);
         if result["result"]["earliest_available_seq"]
             .as_u64()
@@ -4489,7 +4497,9 @@ fn evicted_history_is_reported_and_audit_queries_exclude_live_payloads() -> Resu
         "subscribeEvents",
         json!({"execution_id":execution_id,"after_seq":0}),
     )?;
-    let gap = client.next(Duration::from_secs(2))?;
+    let gap = client
+        .next(Duration::from_secs(2))
+        .context("waiting for evicted history response")?;
     assert_eq!(gap["error"]["data"]["code"], "EVENT_HISTORY_UNAVAILABLE");
     assert!(
         gap["error"]["data"]["earliest_available_seq"]
@@ -4502,11 +4512,15 @@ fn evicted_history_is_reported_and_audit_queries_exclude_live_payloads() -> Resu
         json!({"execution_id":execution_id,"after_seq":u64::MAX}),
     )?;
     assert_eq!(
-        client.next(Duration::from_secs(2))?["error"]["data"]["code"],
+        client
+            .next(Duration::from_secs(2))
+            .context("waiting for invalid sequence response")?["error"]["data"]["code"],
         "INVALID_REQUEST"
     );
     client.send(7, "getAuditEvents", json!({"execution_id":execution_id}))?;
-    let audit = client.next(Duration::from_secs(2))?;
+    let audit = client
+        .next(Duration::from_secs(2))
+        .context("waiting for audit query response")?;
     assert!(audit.to_string().len() <= 256 * 1024);
     assert_eq!(
         audit["result"]["truncated"], false,
@@ -4525,15 +4539,22 @@ fn evicted_history_is_reported_and_audit_queries_exclude_live_payloads() -> Resu
         json!({"execution_id":execution_id,"types":["execution.failed"]}),
     )?;
     assert_eq!(
-        client.next(Duration::from_secs(2))?["result"]["event_count"],
+        client
+            .next(Duration::from_secs(2))
+            .context("waiting for filtered subscription response")?["result"]["event_count"],
         0
     );
     client.send(9, "cancelExecution", json!({"execution_id":execution_id}))?;
     assert_eq!(
-        client.next(Duration::from_secs(2))?["result"]["status"],
+        client
+            .next(Duration::from_secs(2))
+            .context("waiting for cancellation response")?["result"]["status"],
         "canceling"
     );
-    let terminal = client.next(Duration::from_secs(10))?["params"].clone();
+    let terminal = client
+        .next(Duration::from_secs(10))
+        .context("waiting for terminal event")?["params"]
+        .clone();
     assert_eq!(terminal["type"], "execution.failed");
     assert!(
         terminal["result"]["earliest_available_seq"]
@@ -4541,7 +4562,10 @@ fn evicted_history_is_reported_and_audit_queries_exclude_live_payloads() -> Resu
             .is_some_and(|seq| seq > 1)
     );
     client.send(10, "getExecution", json!({"execution_id":execution_id}))?;
-    let current = client.next(Duration::from_secs(2))?["result"].clone();
+    let current = client
+        .next(Duration::from_secs(2))
+        .context("waiting for post-terminal execution query")?["result"]
+        .clone();
     assert_eq!(
         current, terminal["result"],
         "without intervening eviction, query and committed snapshot agree"
