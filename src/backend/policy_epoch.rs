@@ -161,6 +161,7 @@ impl WindowsSandboxCrossProcessGate {
         loop {
             match policy_release_worker_state(&worker, deadline, &release_committed) {
                 PolicyReleaseWorkerState::Committed => {
+                    super::record_test_cleanup_trace("policy_release_committed_before_deadline");
                     retained::retain(worker);
                     return Ok(());
                 }
@@ -513,11 +514,11 @@ impl WindowsSandboxCrossProcessGate {
                 return Err(io::Error::other(BackendCleanupError));
             }
             write_cross_process_gate_state(&self.state_path, &state)?;
-            super::record_test_cleanup_trace("policy_release_state_written");
             self.released = true;
             if let Some(release_committed) = release_committed {
                 release_committed.store(true, Ordering::Release);
             }
+            super::record_test_cleanup_trace("policy_release_state_written");
             Ok(())
         })();
         if result.is_err() {

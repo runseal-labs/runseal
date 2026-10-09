@@ -5562,6 +5562,7 @@ fn read_console_cleanup_trace(workspace: &std::path::Path) -> String {
         "policy_release_state_read",
         "policy_release_entry_removed",
         "policy_release_state_written",
+        "policy_release_committed_before_deadline",
     ];
     let mut stages = Vec::new();
     for line in contents.lines() {
