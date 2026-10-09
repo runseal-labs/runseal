@@ -599,7 +599,7 @@ impl Service {
                     let _ = thread.join();
                 }
                 if let Some(error) = pending.rejection.take() {
-                    if error.code == "EXECUTION_CLEANUP_FAILED" {
+                    if error.code == "EXECUTION_CLEANUP_FAILED" && !error.backend_gate_rejection {
                         self.admission_cleanup_failed = true;
                     }
                     responses.push(rpc::error(pending.id, error));

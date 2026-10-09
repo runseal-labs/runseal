@@ -9,6 +9,9 @@ pub(crate) struct RunSealError {
     pub(crate) reason: String,
     pub(crate) details: Option<Value>,
     pub(crate) terminal_event: Option<Value>,
+    // The shared backend gate already owns the fail-closed state; this rejection
+    // must not permanently quarantine an otherwise healthy service instance.
+    pub(crate) backend_gate_rejection: bool,
 }
 
 impl RunSealError {
@@ -21,6 +24,7 @@ impl RunSealError {
             reason,
             details: None,
             terminal_event: None,
+            backend_gate_rejection: false,
         }
     }
 
@@ -37,6 +41,7 @@ impl RunSealError {
             reason,
             details: Some(details),
             terminal_event: None,
+            backend_gate_rejection: false,
         }
     }
 }
