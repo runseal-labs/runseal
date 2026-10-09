@@ -126,6 +126,7 @@ impl WindowsSandboxCrossProcessGate {
         // The execution owner calls this only after native cleanup is confirmed.
         // Keep reservation publication bounded, but let it finish even when the
         // shared process-cleanup deadline was consumed by stopping the process tree.
+        super::record_test_cleanup_trace("policy_release_after_cleanup_started");
         self.finish_owned(std::time::Instant::now() + std::time::Duration::from_secs(1))
     }
 
@@ -147,6 +148,7 @@ impl WindowsSandboxCrossProcessGate {
         let worker = std::thread::Builder::new()
             .name("runseal-policy-release".into())
             .spawn(move || {
+                super::record_test_cleanup_trace("policy_release_worker_entered");
                 let result =
                     owner
                         .0
@@ -159,6 +161,7 @@ impl WindowsSandboxCrossProcessGate {
                 let _ = mark_cross_process_quarantined(&quarantined, &quarantine);
                 io::Error::other(BackendCleanupError)
             })?;
+        super::record_test_cleanup_trace("policy_release_worker_spawned");
         loop {
             match policy_release_worker_state(&worker, deadline, &release_committed) {
                 PolicyReleaseWorkerState::Committed => {
