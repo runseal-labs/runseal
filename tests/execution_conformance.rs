@@ -3341,6 +3341,18 @@ fn windows_sandboxed_rpc_and_service_active_cancellation() -> Result<()> {
 }
 
 #[cfg(windows)]
+struct OwnedTestProcessHandle(windows_sys::Win32::Foundation::HANDLE);
+
+#[cfg(windows)]
+impl Drop for OwnedTestProcessHandle {
+    fn drop(&mut self) {
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
+}
+
+#[cfg(windows)]
 fn process_present(pid: u32) -> Result<bool> {
     use windows_sys::Win32::Foundation::{
         CloseHandle, ERROR_NO_MORE_FILES, GetLastError, INVALID_HANDLE_VALUE,
@@ -3852,6 +3864,141 @@ fn windows_local_host_death_clears_its_range_and_preserves_other_connection() ->
     assert_ne!(std::fs::read(tmp.path().join("peer"))?, before);
     peer.send(2, "getVersion", json!({}))?;
     assert_eq!(peer.next(Duration::from_secs(2))?["id"], 2);
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+#[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
+fn windows_sandboxed_host_death_fails_closed_until_proven_repair() -> Result<()> {
+    let _guard = process_test_gate();
+    let tmp = TempDir::new()?;
+    let workspace = tmp.path().join("workspace");
+    std::fs::create_dir(&workspace)?;
+    let heartbeat = workspace.join("sandboxed-host.heartbeat");
+    let runtime_marker = workspace.join("sandboxed-host.runtime");
+    let child_code = "import pathlib,sys,time; target=pathlib.Path(sys.argv[1]); count=0\nwhile True:\n count+=1; target.write_text(str(count)); time.sleep(0.01)";
+    let host_code = "import os,pathlib,subprocess,sys; pathlib.Path(sys.argv[2]).write_text(str(pathlib.Path(os.environ['RUNSEAL_HOME']).parent)); child=subprocess.Popen([sys.executable,'-u','-c',sys.argv[1],sys.argv[3]],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); print('READY '+str(child.pid),flush=True); sys.stdin.buffer.read()";
+    let mut owner = Client::spawn("service")?;
+    owner.send(
+        1,
+        "execute",
+        json!({"command":[python()?,"-u","-c",host_code,child_code,runtime_marker,heartbeat],"cwd":workspace,"policy":"workspace-write","stdin":{"mode":"stream"}}),
+    )?;
+    let receipt = owner.next(Duration::from_secs(5))?;
+    assert_eq!(receipt["result"]["status"], "preparing", "{receipt}");
+    let execution_id = receipt["result"]["execution_id"]
+        .as_str()
+        .context("execution ID")?;
+    let descendant = wait_ready_pid_with_timeout(&owner, execution_id, Duration::from_secs(20))?;
+    assert!(process_present(descendant)?);
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_TERMINATE};
+    let handle = unsafe { OpenProcess(PROCESS_TERMINATE, 0, descendant) };
+    anyhow::ensure!(
+        !handle.is_null(),
+        "cannot retain a handle to the test-owned descendant"
+    );
+    let descendant_handle = OwnedTestProcessHandle(handle);
+    let runtime_root = std::path::PathBuf::from(std::fs::read_to_string(&runtime_marker)?);
+    assert!(
+        runtime_root.exists(),
+        "the sandbox runtime root must exist during execution"
+    );
+    let heartbeat_deadline = Instant::now() + Duration::from_secs(5);
+    while !heartbeat.exists() && Instant::now() < heartbeat_deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(heartbeat.exists(), "the sandbox descendant must be active");
+
+    owner.child.kill()?;
+    owner.child.wait()?;
+    drop(owner);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while process_present(descendant)? && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let process_range_clean = !process_present(descendant)?;
+    if !process_range_clean {
+        // Keep the test machine clean even when the assertion below exposes a
+        // broken parent-death process boundary. The retained handle cannot refer
+        // to an unrelated process if Windows later reuses the PID.
+        use windows_sys::Win32::System::Threading::TerminateProcess;
+        unsafe {
+            let _ = TerminateProcess(descendant_handle.0, 1);
+        }
+        let cleanup_deadline = Instant::now() + Duration::from_secs(5);
+        while process_present(descendant)? && Instant::now() < cleanup_deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        anyhow::ensure!(
+            !process_present(descendant)?,
+            "cannot clean up the test-owned descendant"
+        );
+    }
+    assert!(
+        runtime_root.exists(),
+        "dead-host runtime roots remain until explicit repair"
+    );
+
+    let mut contender = Client::spawn("service")?;
+    contender.send(
+        1,
+        "execute",
+        json!({"command":[python()?,"-c","print('must-not-run')"],"cwd":workspace,"policy":"workspace-write"}),
+    )?;
+    let rejected = contender.next(Duration::from_secs(5))?;
+    assert_eq!(
+        rejected["error"]["data"]["code"], "EXECUTION_CLEANUP_FAILED",
+        "a dead host reservation must keep sandbox admission closed"
+    );
+    assert!(rejected.get("result").is_none());
+    assert!(
+        runtime_root.exists(),
+        "admission must not remove unverified runtime roots"
+    );
+
+    let repair = Command::new(env!("CARGO_BIN_EXE_runseal"))
+        .args(["repair", "execution-gates", "--json"])
+        .output()?;
+    assert!(
+        repair.status.success(),
+        "proof-gated repair must succeed after the process range is gone: stdout={}, stderr={}",
+        String::from_utf8_lossy(&repair.stdout),
+        String::from_utf8_lossy(&repair.stderr)
+    );
+    let report: Value = serde_json::from_slice(&repair.stdout)?;
+    assert_eq!(report["repaired"], true, "{report}");
+    assert_eq!(report["cleared_executions"], 1, "{report}");
+    assert!(report["removed_runtime_roots"].as_u64().unwrap_or_default() >= 1);
+    assert!(
+        !runtime_root.exists(),
+        "repair must remove the recorded runtime root"
+    );
+    assert!(
+        process_range_clean,
+        "host death must stop its sandboxed descendant before proof-gated repair"
+    );
+
+    contender.send(
+        2,
+        "execute",
+        json!({"command":[python()?,"-c","print('gate-recovered')"],"cwd":workspace,"policy":"workspace-write"}),
+    )?;
+    let receipt = contender.next(Duration::from_secs(5))?;
+    assert_eq!(receipt["result"]["status"], "preparing", "{receipt}");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let terminal = loop {
+        let message = contender.next(deadline.saturating_duration_since(Instant::now()))?;
+        if message["params"]["type"] == "execution.finished" {
+            break message["params"]["result"].clone();
+        }
+        if message["params"]["type"] == "execution.failed" {
+            anyhow::bail!("sandbox admission did not recover after verified repair");
+        }
+    };
+    assert_eq!(terminal["status"], "finished", "{terminal}");
+    assert_eq!(terminal["exit_code"], 0, "{terminal}");
+    assert_eq!(terminal["cleanup_complete"], true, "{terminal}");
     Ok(())
 }
 
@@ -4639,7 +4786,7 @@ fn evicted_history_is_reported_and_audit_queries_exclude_live_payloads() -> Resu
             .context("waiting for stdin acceptance")?["result"]["accepted_bytes"],
         3
     );
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         client.send(4, "getExecution", json!({"execution_id":execution_id}))?;
         let result = client

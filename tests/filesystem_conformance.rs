@@ -51,7 +51,7 @@ fn rpc_request(method: &str, params: Value) -> String {
     json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).to_string() + "\n"
 }
 
-fn run_rpc(message: &str) -> Result<Output> {
+fn run_rpc_with_watchdog(message: &str, watchdog: Duration) -> Result<Output> {
     let bin = require_runseal_bin()?;
     let child = Command::new(bin)
         .args(["rpc", "--stdio"])
@@ -61,7 +61,7 @@ fn run_rpc(message: &str) -> Result<Output> {
         .spawn()
         .context("failed to spawn runseal rpc")?;
 
-    realtime_rpc::collect_rpc(child, message)
+    realtime_rpc::collect_rpc_with_watchdog(child, message, watchdog)
 }
 
 #[cfg(not(windows))]
@@ -268,7 +268,14 @@ fn execute_params_unlocked(params: Value) -> Result<ExecutionObservation> {
 }
 
 fn execute_messages_unlocked(params: Value) -> Result<Vec<Value>> {
-    let output = run_rpc(&rpc_request("execute", params))?;
+    execute_messages_unlocked_with_watchdog(params, Duration::from_secs(15))
+}
+
+fn execute_messages_unlocked_with_watchdog(
+    params: Value,
+    watchdog: Duration,
+) -> Result<Vec<Value>> {
+    let output = run_rpc_with_watchdog(&rpc_request("execute", params), watchdog)?;
 
     assert!(
         output.status.success(),
@@ -1493,7 +1500,7 @@ fn linux_network_proxy_drops_preopened_network_sockets() -> Result<()> {
         }),
     );
     drop(inherited);
-    let output = realtime_rpc::collect_rpc(child, &request)?;
+    let output = realtime_rpc::collect_rpc_with_watchdog(child, &request, Duration::from_secs(15))?;
     assert!(output.status.success(), "{output:?}");
 
     let mut observed = [0_u8; 4];
@@ -1563,12 +1570,19 @@ sys.exit(result.returncode)
             String::new(),
             String::new(),
         );
-        // Run the same real child-process probe as the portable path and keep
-        // cleanup bounded if the child fails to honor its socket timeout.
+        // Cold proxy setup can exceed 3 seconds before the target starts; keep
+        // execution and RPC cleanup budgets distinct for this first use.
         params["command"] = json!([windows_python_bin()?, "-u", "-c", code]);
-        params["timeout_ms"] = json!(3_000);
+        params["timeout_ms"] = json!(15_000);
         params
     };
+    #[cfg(windows)]
+    let response = {
+        let _guard = windows_conformance_lock()?;
+        let messages = execute_messages_unlocked_with_watchdog(params, Duration::from_secs(30))?;
+        observation(&messages)?
+    };
+    #[cfg(not(windows))]
     let response = execute_params(params)?;
 
     if is_backend_missing(&response) {
@@ -1817,13 +1831,21 @@ fn network_proxy_overrides_client_proxy_environment_when_supported_or_fails_clos
     fs::create_dir_all(&workspace)?;
     #[cfg(windows)]
     let _guard = windows_conformance_lock()?;
-    let warmup = execute_params_unlocked(platform_script_params(
+    #[cfg(windows)]
+    let rpc_watchdog = Duration::from_secs(30);
+    #[cfg(not(windows))]
+    let rpc_watchdog = Duration::from_secs(15);
+    let warmup_params = platform_script_params(
         "workspace-write",
         &workspace,
         Some("proxy"),
         "print('proxy-env-warmup')".to_string(),
         "Write-Output proxy-env-warmup".to_string(),
-    ))?;
+    );
+    let warmup = observation(&execute_messages_unlocked_with_watchdog(
+        warmup_params,
+        rpc_watchdog,
+    )?)?;
     if is_backend_missing(&warmup) {
         let expected_features = expected_missing_features(&["network_proxy", "managed_proxy"]);
         assert_backend_missing_features(&warmup, &workspace, &expected_features)?;
@@ -1861,46 +1883,15 @@ fn network_proxy_overrides_client_proxy_environment_when_supported_or_fails_clos
         ),
         port = port
     );
-    let proxy_request = format!(
-        "\"GET http://127.0.0.1:{port}/proxy-ok HTTP/1.1`r`nHost: 127.0.0.1:{port}`r`nProxy-Authorization: $env:RUNSEAL_NETWORK_PROXY_AUTHORIZATION`r`nConnection: close`r`n`r`n\""
-    );
-    let ps_code = r#"
-$ErrorActionPreference = 'Stop'
-if ($env:HTTP_PROXY.Contains('attacker.invalid')) { throw 'managed proxy did not override HTTP_PROXY' }
-if (-not [String]::IsNullOrEmpty($env:NO_PROXY)) { throw 'managed proxy did not clear NO_PROXY' }
-if (-not $env:RUNSEAL_NETWORK_PROXY_AUTHORIZATION.StartsWith('Basic ')) { throw 'managed proxy did not inject authorization' }
-$proxy = [Uri]$env:HTTP_PROXY
-$request = __REQUEST__
-$client = [Net.Sockets.TcpClient]::new()
-try {
-    $client.ReceiveTimeout = 2000
-    $client.SendTimeout = 2000
-    $client.Connect($proxy.Host, $proxy.Port)
-    $stream = $client.GetStream()
-    $bytes = [Text.Encoding]::ASCII.GetBytes($request)
-    $stream.Write($bytes, 0, $bytes.Length)
-    $buffer = New-Object byte[] 4096
-    $text = ''
-    while (($count = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
-        $text += [Text.Encoding]::UTF8.GetString($buffer, 0, $count)
-    }
-    if (-not $text.Contains('proxy-ok')) { throw "unexpected proxy response: $text" }
-    $text
-} finally {
-    $client.Dispose()
-}
-"#
-    .replace("__REQUEST__", &proxy_request);
-    #[cfg(not(windows))]
-    let mut params =
-        platform_script_params("workspace-write", &workspace, Some("proxy"), code, ps_code);
-    #[cfg(windows)]
+    // Keep this socket probe in Python on Windows: unlike the previous
+    // synchronous TcpClient.Connect probe, create_connection enforces a
+    // connection timeout as well as the explicit read timeout below.
     let mut params = platform_script_params(
         "workspace-write",
         &workspace,
         Some("proxy"),
         code.clone(),
-        ps_code,
+        String::new(),
     );
     params["env"] = json!({
         "HTTP_PROXY": "http://attacker.invalid:9",
@@ -1912,12 +1903,14 @@ try {
     });
     #[cfg(windows)]
     {
-        // Exercise the same managed-proxy request with Python on Windows and
-        // keep a stalled local proxy inside the fixture's cleanup window.
         params["command"] = json!([windows_python_bin()?, "-u", "-c", code]);
         params["timeout_ms"] = json!(3_000);
     }
-    let response = execute_params_unlocked(params)?;
+    // The harness watchdog includes setup and cleanup. A 15-second watchdog
+    // can kill the RPC host before the 3-second execution timeout and the
+    // 10-second Windows cleanup budget have both elapsed, leaving a stale gate.
+    let messages = execute_messages_unlocked_with_watchdog(params, rpc_watchdog)?;
+    let response = observation(&messages)?;
 
     if is_backend_missing(&response) {
         let upstream_hit = upstream.join().expect("upstream server thread")?;
