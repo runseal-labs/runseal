@@ -5536,12 +5536,16 @@ fn read_console_cleanup_trace(workspace: &std::path::Path) -> String {
         return "none".to_owned();
     };
     let allowed = [
+        "engine_started",
         "backend_worker_exit_timeout",
         "backend_worker_exit_timeout_after_success",
         "backend_worker_exit_timeout_after_incomplete_success",
         "backend_worker_exit_timeout_after_error",
         "backend_returned_error",
         "backend_reported_incomplete_cleanup",
+        "timer_cleanup_failed",
+        "reservation_cleanup_failed",
+        "observer_cleanup_failed",
     ];
     let mut stages = Vec::new();
     for line in contents.lines() {

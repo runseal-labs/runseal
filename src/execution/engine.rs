@@ -340,6 +340,9 @@ fn execute_prepared_with_backend_and_timer<B: SandboxBackend + Send + Sync + 'st
     let timer_cleanup = deadline
         .as_mut()
         .map_or(Ok(()), |deadline| deadline.finish(control.begin_cleanup()));
+    if timer_cleanup.is_err() {
+        record_cleanup_trace("timer_cleanup_failed");
+    }
     let outcome = finalize_frontend(outcome, &control, timer_cleanup);
     let cleanup_confirmed = outcome.as_ref().map_or_else(
         |error| {
@@ -360,6 +363,9 @@ fn execute_prepared_with_backend_and_timer<B: SandboxBackend + Send + Sync + 'st
                 )
             })
     });
+    if reservation_cleanup.is_err() {
+        record_cleanup_trace("reservation_cleanup_failed");
+    }
     let outcome = finalize_frontend(outcome, &control, reservation_cleanup);
     let cleanup_confirmed = outcome.as_ref().map_or_else(
         |error| {
@@ -371,6 +377,9 @@ fn execute_prepared_with_backend_and_timer<B: SandboxBackend + Send + Sync + 'st
         |result| result["cleanup_complete"] == true,
     );
     let cleanup = observer.cleanup(control.begin_cleanup(), cleanup_confirmed);
+    if cleanup.is_err() {
+        record_cleanup_trace("observer_cleanup_failed");
+    }
     let outcome = finalize_frontend(outcome, &control, cleanup);
     journal.finish(outcome, &control, &mut |event| observer.event(event))
 }
@@ -384,6 +393,7 @@ fn execute_inner<B: SandboxBackend + Send + Sync + 'static>(
     timer: Instant,
     reservation: &mut Option<crate::backend::ExecutionReservation>,
 ) -> Result<Value, RunSealError> {
+    record_cleanup_trace("engine_started");
     let ExecutionRequest {
         ids,
         control,
