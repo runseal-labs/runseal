@@ -1585,14 +1585,22 @@ fn network_proxy_allows_http_through_managed_proxy_when_supported_or_fails_close
     fs::create_dir_all(&workspace)?;
     #[cfg(windows)]
     let _guard = windows_conformance_lock()?;
-    let warmup = execute_params_unlocked(platform_script_params(
+    let warmup_params = platform_script_params(
         "workspace-write",
         &workspace,
         Some("proxy"),
         "print('proxy-warmup')".to_string(),
         "Write-Output proxy-warmup".to_string(),
-    ))
-    .context("managed proxy warmup execution")?;
+    );
+    #[cfg(windows)]
+    let warmup_params = {
+        let mut params = warmup_params;
+        params["command"] = json!(["cmd.exe", "/C", "echo proxy-warmup"]);
+        params["timeout_ms"] = json!(3_000);
+        params
+    };
+    let warmup =
+        execute_params_unlocked(warmup_params).context("managed proxy warmup execution")?;
     if is_backend_missing(&warmup) {
         let expected_features = expected_missing_features(&["network_proxy", "managed_proxy"]);
         assert_backend_missing_features(&warmup, &workspace, &expected_features)?;
