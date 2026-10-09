@@ -5277,8 +5277,9 @@ fn cli_stalled_console_output_for_policy(policy: &str) -> Result<()> {
         assert_eq!(terminals.len(), 1, "expected one terminal audit event");
         let terminal = &terminals[0];
         assert_eq!(
-            terminal["result"]["sandbox"]["enforced"], true,
-            "workspace-write must execute in the prepared sandbox"
+            terminal["result"]["sandbox"]["enforced"],
+            policy != "danger-full-access",
+            "sandbox enforcement must match the requested policy"
         );
         assert_eq!(
             done["exit"],

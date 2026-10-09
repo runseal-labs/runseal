@@ -23,7 +23,7 @@ impl SandboxBackend for LocalBackend {
     fn execution_capabilities(&self) -> super::capability::ExecutionCapabilityStatuses {
         #[cfg(windows)]
         {
-            super::capability::interactive_execution_capabilities()
+            super::capability::windows_execution_capabilities()
         }
         #[cfg(not(windows))]
         {

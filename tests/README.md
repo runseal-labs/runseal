@@ -614,8 +614,7 @@ peer finish before releasing fixture threads and assertions. Removing early
 scope retention or identity validation admits the target and fails this test.
 This proves controller completion/admission behavior with live native ownership;
 the accepted fault record is injected, so it does not establish end-to-end public
-transport or sandbox cleanup recovery. The actual backend-worker FLS/ReadFile
-test separately covers lifecycle result delivery and durable audit.
+transport or sandbox cleanup recovery.
 
 The accepted execution's directory validation and plan compilation now run in
 an owned preparation worker. Completion uses a separate channel; joining requires
@@ -632,46 +631,19 @@ the whole execution's cleanup clock. These tests cover the accepted lifecycle
 worker; actual blocked pre-admission storage/setup boundaries,
 blocked native setup/logon, and the full public sandbox matrix remain pending.
 
-Policy reservation release now runs in an owned Windows worker, including state
-read/write and the native mutex owner. Failed spawn or panic cannot make Drop
-re-enter state-file I/O. The caller adopts the reservation's original deadline,
-confirms native thread exit before success, and quarantines admission before
-retaining a pending worker. The release worker rechecks quarantine and expiry
-after obtaining the mutex and before publishing a state change. A native fixture
-holds either a real pipe read inside the held mutex before the state read, or
-an FLS exit callback after successful metadata release. Before releasing the
-fixture, the original deadline must return cleanup failure, preserve the native
-worker and any blocked pipe/mutex owner, and reject same/different-policy admission.
-A late return from the blocked read cannot remove the original reservation.
-Restoring Rust-only completion falsely accepts the FLS case; unconditional join
-waits for the safety release. Both fail these tests. The fixtures remove only
-their own metadata/signal after native exit; they do not repair the real binding.
-
-A separate lifecycle fixture runs a gated real local target, opens its native
-observation handle, and confirms exit 7 before the terminal. Its observer holds
-a fixture-owned policy release worker's FLS callback. The lifecycle must commit
-exactly one already-durable cleanup-failed terminal while that native worker
-remains pending, preserving exit 7 and requested reason `exited`. This proves
-the lifecycle/observer cleanup boundary with real native process and audit facts;
-the extra policy reservation and callback fault are injected, so it does not
-prove public sandbox admission or recovery. Regular-file storage/write stalls,
-blocked pre-admission storage, native setup/logon, and the full sandbox cleanup and host-death matrix remain pending.
-
-A separate native state-read fixture now blocks the production
-`read_cross_process_gate_state` / `fs::read_to_string` itself. The fixture gives
-its release guard a private named-pipe state path; the real server sends the
-complete current reservation JSON and stays connected without EOF. No callback
-blocks the read: its hook only duplicates the worker's native observation handle.
-Before server EOF, the original cleanup deadline must return cleanup failure
-with a pending retained worker, the actual connected server pipe, and the held
-native gate mutex. Both same- and different-policy admissions remain refused,
-and the fixture's original reservation file remains unchanged. The fixture
-closes only its own server, cancels any pending server connection, and confirms
-and reaps its own native threads before removing its metadata/signal. Restoring
-unconditional join waits for the safety server close and fails the regression.
-This proves blocking inside the production state-read call, using an injected
-private state path; it does not prove ordinary storage/write stalls or the public
-sandbox admission and recovery matrix.
+After native execution cleanup is confirmed, the Windows reservation is released
+on the active cleanup thread. Release waits for the named mutex within its bounded
+window, checks that the state path is a regular file before reading it, and removes
+only the matching reservation. A release failure retains the entry and signals
+quarantine so later same- or different-policy admission remains closed.
+`reservation_release_respects_held_native_mutex_deadline_and_preserves_quarantine`,
+`confirmed_reservation_release_finishes_after_execution_deadline`, and
+`nonregular_state_path_fails_closed_without_releasing_reservation` cover the
+deadline, successful release, and fail-closed paths. The prepared Windows
+`sandboxed_stalled_console_output_cleans_owned_range_and_preserves_peer` test
+exercises this release path after a real stalled Console execution. Additional
+storage/write fault injection and the full host-death recovery matrix remain
+outside this focused reservation coverage.
 
 The CLI native-reader deadline fixture now keeps a duplicated native thread
 observation handle through release. A parallel retained-worker reaper can join

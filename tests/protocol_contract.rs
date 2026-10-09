@@ -4567,6 +4567,23 @@ fn execution_capability_profiles_are_complete_and_consistent() -> Result<()> {
         );
     }
     assert_eq!(capabilities["mixed_policy_concurrency"], "unsupported");
+    #[cfg(windows)]
+    for name in [
+        "streaming_output",
+        "active_execution_query",
+        "execution_cancel",
+        "stdin_bytes",
+        "stdin_file",
+        "stdin_stream",
+        "transparent_exec",
+        "pty",
+        "pty_resize",
+        "pty_interrupt",
+        "control_channel",
+        "same_policy_concurrency",
+    ] {
+        assert_eq!(capabilities[name], "supported", "{name}");
+    }
 
     let profiles = payload["execution_profiles"]
         .as_array()

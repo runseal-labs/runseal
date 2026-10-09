@@ -105,13 +105,29 @@ pub fn baseline_execution_capabilities() -> ExecutionCapabilityStatuses {
     statuses
 }
 
-/// Baseline plus real terminal and control-channel support.
+/// Windows supports the shared execution and I/O contract plus native
+/// terminal and control-channel execution. The portable baseline remains
+/// experimental until each platform has its own conformance evidence.
 #[cfg(windows)]
-pub fn interactive_execution_capabilities() -> ExecutionCapabilityStatuses {
+pub fn windows_execution_capabilities() -> ExecutionCapabilityStatuses {
+    use CapabilityStatus::{Supported, Unsupported};
     use ExecutionCapability as E;
-    let mut statuses = baseline_execution_capabilities();
-    for capability in [E::Pty, E::PtyResize, E::PtyInterrupt, E::ControlChannel] {
-        statuses[capability.index()] = CapabilityStatus::Supported;
+    let mut statuses = [Unsupported; EXECUTION_CAPABILITY_NAMES.len()];
+    for capability in [
+        E::StreamingOutput,
+        E::ActiveExecutionQuery,
+        E::ExecutionCancel,
+        E::StdinBytes,
+        E::StdinFile,
+        E::StdinStream,
+        E::TransparentExec,
+        E::Pty,
+        E::PtyResize,
+        E::PtyInterrupt,
+        E::ControlChannel,
+        E::SamePolicyConcurrency,
+    ] {
+        statuses[capability.index()] = Supported;
     }
     statuses
 }
