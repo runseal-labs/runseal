@@ -5556,17 +5556,19 @@ fn read_console_cleanup_trace(workspace: &std::path::Path) -> String {
         "policy_release_deadline",
         "policy_release_operation_failed",
         "policy_release_worker_failed",
-        "policy_release_started",
+        "policy_release_owned_started",
+        "policy_release_drop_started",
         "policy_release_precheck_passed",
         "policy_release_mutex_acquired",
         "policy_release_state_read",
         "policy_release_entry_removed",
-        "policy_release_state_written",
+        "policy_release_owned_state_written",
+        "policy_release_drop_state_written",
         "policy_release_committed_before_deadline",
     ];
     let mut stages = Vec::new();
     for line in contents.lines() {
-        if allowed.contains(&line) && !stages.contains(&line) {
+        if allowed.contains(&line) {
             stages.push(line);
         }
     }

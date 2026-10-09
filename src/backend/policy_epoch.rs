@@ -476,7 +476,11 @@ impl WindowsSandboxCrossProcessGate {
         if self.released {
             return Ok(());
         }
-        super::record_test_cleanup_trace("policy_release_started");
+        super::record_test_cleanup_trace(if release_committed.is_some() {
+            "policy_release_owned_started"
+        } else {
+            "policy_release_drop_started"
+        });
         let deadline = self
             .cleanup_deadline
             .map_or(deadline, |previous| previous.min(deadline));
@@ -518,7 +522,11 @@ impl WindowsSandboxCrossProcessGate {
             if let Some(release_committed) = release_committed {
                 release_committed.store(true, Ordering::Release);
             }
-            super::record_test_cleanup_trace("policy_release_state_written");
+            super::record_test_cleanup_trace(if release_committed.is_some() {
+                "policy_release_owned_state_written"
+            } else {
+                "policy_release_drop_state_written"
+            });
             Ok(())
         })();
         if result.is_err() {
