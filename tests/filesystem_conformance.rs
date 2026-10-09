@@ -1610,8 +1610,24 @@ fn network_proxy_allows_http_through_managed_proxy_when_supported_or_fails_close
         assert_managed_proxy_unavailable_or_unprepared(&warmup, &workspace)?;
         return Ok(());
     }
-    assert_eq!(warmup["result"]["status"], "finished");
-    assert_eq!(warmup["result"]["exit_code"], 0);
+    let warmup_diagnostic = format!(
+        "type={:?}, status={:?}, rpc_error={:?}, public_error={:?}, terminal_error={:?}, termination={:?}, cleanup_complete={:?}",
+        warmup["params"]["type"].as_str(),
+        warmup["result"]["status"],
+        warmup["error"]["code"],
+        warmup["error"]["data"]["code"],
+        warmup["result"]["error"]["code"],
+        warmup["result"]["termination_reason"],
+        warmup["result"]["cleanup_complete"]
+    );
+    assert_eq!(
+        warmup["result"]["status"], "finished",
+        "managed proxy warmup failed: {warmup_diagnostic}"
+    );
+    assert_eq!(
+        warmup["result"]["exit_code"], 0,
+        "managed proxy warmup failed: {warmup_diagnostic}"
+    );
 
     let (port, upstream) = start_loopback_http_server()?;
     let code = format!(
