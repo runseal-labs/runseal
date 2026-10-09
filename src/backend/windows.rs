@@ -641,6 +641,17 @@ pub(super) fn execute_windows_sandbox_plan(
         Ok((capture, events))
     })();
     let cleanup = plan.cleanup_runtime_roots();
+    if let Err(error) = &cleanup {
+        let logs_base_dir = vendor_sandbox_home.join(".sandbox");
+        codex_windows_sandbox::log_note(
+            &format!(
+                "execution cleanup failed at stage: runtime_roots:{:?}",
+                error.kind()
+            )
+            .to_ascii_lowercase(),
+            Some(&logs_base_dir),
+        );
+    }
     if result.as_ref().err().is_some_and(super::cleanup_failed) || cleanup.is_err() {
         let _ = _execution_guard.mark_cleanup_failed();
     }

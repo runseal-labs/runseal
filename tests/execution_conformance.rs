@@ -5236,9 +5236,9 @@ fn cli_stalled_console_output_for_policy(policy: &str) -> Result<()> {
                     .filter(|pid| process_present(**pid).unwrap_or(false))
                     .count();
                 let terminals = read_console_terminal_summary(tmp.path());
-                let runner_stage = read_console_runner_cleanup_stage(tmp.path(), runner_log_offset);
+                let cleanup_stage = read_console_cleanup_stage(tmp.path(), runner_log_offset);
                 anyhow::bail!(
-                    "stalled Console CLI cleanup did not finish for {policy} (driver_exited={driver_exited}, command_running={command_running}, sandbox_processes_running={sandbox_processes_running}, terminal={terminals}, runner_stage={runner_stage})"
+                    "stalled Console CLI cleanup did not finish for {policy} (driver_exited={driver_exited}, command_running={command_running}, sandbox_processes_running={sandbox_processes_running}, terminal={terminals}, cleanup_stage={cleanup_stage})"
                 );
             }
             std::thread::sleep(Duration::from_millis(5));
@@ -5417,12 +5417,12 @@ fn console_runner_log_offset(workspace: &std::path::Path) -> u64 {
 }
 
 #[cfg(windows)]
-fn read_console_runner_cleanup_stage(workspace: &std::path::Path, offset: u64) -> String {
+fn read_console_cleanup_stage(workspace: &std::path::Path, offset: u64) -> String {
     let Ok(contents) = std::fs::read(console_runner_log_path(workspace)) else {
         return "unavailable".to_owned();
     };
     let fresh = contents.get(offset as usize..).unwrap_or(&contents);
-    let prefix = "runner cleanup failed at stage: ";
+    let prefix = "cleanup failed at stage: ";
     let mut stages = Vec::new();
     for line in fresh.rsplit(|byte| *byte == b'\n') {
         let Ok(line) = std::str::from_utf8(line) else {
@@ -5432,7 +5432,8 @@ fn read_console_runner_cleanup_stage(workspace: &std::path::Path, offset: u64) -
             continue;
         };
         let stage = stage.trim();
-        let stage = match stage {
+        let (stage_name, detail) = stage.split_once(':').unwrap_or((stage, ""));
+        let stage = match stage_name {
             "cleanup_announcement"
             | "control_workers"
             | "exit_report"
@@ -5442,12 +5443,23 @@ fn read_console_runner_cleanup_stage(workspace: &std::path::Path, offset: u64) -
             | "parent_input_writer"
             | "process_range"
             | "exit_status"
+            | "runtime_roots"
             | "conpty_close"
             | "controls_reader"
             | "stdin_writer"
             | "stdout_reader"
-            | "stderr_reader" => stage.to_owned(),
+            | "stderr_reader" => stage_name.to_owned(),
             _ => "unknown".to_owned(),
+        };
+        let safe_detail = !detail.is_empty()
+            && detail.len() <= 32
+            && detail
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte == b'_');
+        let stage = if stage == "unknown" || !safe_detail {
+            stage
+        } else {
+            format!("{stage}:{detail}")
         };
         if !stages.contains(&stage) {
             stages.push(stage);
