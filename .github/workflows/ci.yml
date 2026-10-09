@@ -90,6 +90,14 @@ jobs:
         if: runner.os == 'Windows'
         run: cargo test --test filesystem_conformance read_only_reads_workspace_and_writes_runtime_roots_when_supported_or_fails_closed -- --exact
 
+      - name: Verify prepared Windows runtime-root isolation first
+        if: runner.os == 'Windows'
+        run: cargo test --test filesystem_conformance runtime_environment_roots_are_per_execution_when_supported_or_fails_closed -- --exact
+
+      - name: Verify prepared Windows metadata protection first
+        if: runner.os == 'Windows'
+        run: cargo test --test filesystem_conformance workspace_write_protects_workspace_metadata_when_supported_or_fails_closed -- --exact
+
       - name: Verify prepared Windows control cleanup first
         if: runner.os == 'Windows'
         run: cargo test --test execution_conformance cli_control_stalled_caller_cleans_owned_range_and_preserves_peer -- --include-ignored --exact

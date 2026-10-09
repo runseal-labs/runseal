@@ -994,6 +994,13 @@ fn workspace_write_protects_workspace_metadata_when_supported_or_fails_closed() 
         fs::create_dir_all(&protected_root)?;
         let target = protected_root.join("blocked.txt");
         let code = format!("from pathlib import Path; Path({target:?}).write_text('blocked')");
+        #[cfg(windows)]
+        let response = execute_params(json!({
+            "command": [windows_python_bin()?, "-c", code],
+            "cwd": workspace,
+            "policy": "workspace-write"
+        }))?;
+        #[cfg(not(windows))]
         let response = execute_platform_script(
             "workspace-write",
             &workspace,
@@ -1123,6 +1130,7 @@ fn runtime_environment_roots_are_per_execution_when_supported_or_fails_closed() 
         env_keys = env_keys,
         marker = marker
     );
+    #[cfg(not(windows))]
     let ps_writer = format!(
         "$keys = @({}); \
          $roots = @(); \
@@ -1140,6 +1148,13 @@ fn runtime_environment_roots_are_per_execution_when_supported_or_fails_closed() 
             .join(","),
         ps_literal(marker)
     );
+    #[cfg(windows)]
+    let first = execute_params(json!({
+        "command": [windows_python_bin()?, "-c", writer_code],
+        "cwd": workspace,
+        "policy": "workspace-write"
+    }))?;
+    #[cfg(not(windows))]
     let first =
         execute_platform_script("workspace-write", &workspace, None, writer_code, ps_writer)?;
 
@@ -1172,6 +1187,7 @@ fn runtime_environment_roots_are_per_execution_when_supported_or_fails_closed() 
         env_keys = env_keys,
         marker = marker
     );
+    #[cfg(not(windows))]
     let ps_reader = format!(
         "$keys = @({}); \
          $roots = @(); \
@@ -1189,6 +1205,13 @@ fn runtime_environment_roots_are_per_execution_when_supported_or_fails_closed() 
             .join(","),
         ps_literal(marker)
     );
+    #[cfg(windows)]
+    let second = execute_params(json!({
+        "command": [windows_python_bin()?, "-c", reader_code],
+        "cwd": workspace,
+        "policy": "workspace-write"
+    }))?;
+    #[cfg(not(windows))]
     let second =
         execute_platform_script("workspace-write", &workspace, None, reader_code, ps_reader)?;
 
