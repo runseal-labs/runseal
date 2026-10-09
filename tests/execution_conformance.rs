@@ -5438,7 +5438,10 @@ fn read_console_cleanup_stage(
     let Ok(entries) = std::fs::read_dir(console_runner_log_dir(workspace)) else {
         return "unavailable".to_owned();
     };
-    let prefix = "cleanup failed at stage: ";
+    let prefixes = [
+        "cleanup failed at stage: ",
+        "backend returned error at stage: ",
+    ];
     let mut stages = Vec::new();
     let mut readable_logs = 0;
     let mut changed_logs = 0;
@@ -5463,7 +5466,8 @@ fn read_console_cleanup_stage(
             let Ok(line) = std::str::from_utf8(line) else {
                 continue;
             };
-            let Some((_, stage)) = line.split_once(prefix) else {
+            let Some((_, stage)) = prefixes.iter().find_map(|prefix| line.split_once(prefix))
+            else {
                 continue;
             };
             let stage = stage.trim();
@@ -5481,10 +5485,8 @@ fn read_console_cleanup_stage(
                 | "runtime_roots"
                 | "sandbox_capture"
                 | "sandbox_transport"
-                | "conpty_close"
-                | "controls_reader"
-                | "stdin_writer"
-                | "stdout_reader"
+                | "unclassified" => stage_name.to_owned(),
+                "conpty_close" | "controls_reader" | "stdin_writer" | "stdout_reader"
                 | "stderr_reader" => stage_name.to_owned(),
                 _ => "unknown".to_owned(),
             };
