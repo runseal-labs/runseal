@@ -402,6 +402,7 @@ impl WindowsSandboxCrossProcessGate {
             Ok(())
         })();
         if result.is_err() {
+            super::record_test_cleanup_trace("policy_release_quarantined");
             let _ = self.mark_quarantined();
         }
         result

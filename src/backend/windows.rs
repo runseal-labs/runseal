@@ -601,6 +601,7 @@ pub(super) fn execute_windows_sandbox_plan(
                 if let Some(failure) =
                     err.downcast_ref::<codex_windows_sandbox::SandboxCaptureInputError>()
                 {
+                    super::record_test_cleanup_trace("sandbox_capture_input_failed");
                     if let Some(sink) = &output {
                         sink.control.request(if failure.timed_out {
                             crate::execution::TerminationCause::Timeout
@@ -616,6 +617,7 @@ pub(super) fn execute_windows_sandbox_plan(
                 if let Some(failure) =
                     err.downcast_ref::<codex_windows_sandbox::SandboxCaptureCleanupError>()
                 {
+                    super::record_test_cleanup_trace("sandbox_capture_cleanup_failed");
                     return io::Error::other(super::error::BackendCleanupFacts {
                         exit_code: failure.exit_code,
                         timed_out: failure.timed_out,
@@ -625,13 +627,16 @@ pub(super) fn execute_windows_sandbox_plan(
                     .downcast_ref::<codex_windows_sandbox::SandboxCleanupError>()
                     .is_some()
                 {
+                    super::record_test_cleanup_trace("sandbox_runner_cleanup_failed");
                     return io::Error::other(BackendCleanupError);
                 }
                 if let Some(failure) = codex_windows_sandbox::extract_setup_failure(&err) {
+                    super::record_test_cleanup_trace("sandbox_setup_unavailable");
                     return io::Error::other(BackendUnavailableError {
                         reason: public_windows_setup_unavailable_reason(failure.code.as_str()),
                     });
                 }
+                super::record_test_cleanup_trace("sandbox_backend_unclassified_error");
                 io::Error::other(err.to_string())
             })?;
         if let Some(managed_proxy) = &managed_proxy {
@@ -641,6 +646,7 @@ pub(super) fn execute_windows_sandbox_plan(
     })();
     let cleanup = plan.cleanup_runtime_roots();
     if let Err(error) = &cleanup {
+        super::record_test_cleanup_trace("runtime_root_cleanup_failed");
         let logs_base_dir = vendor_sandbox_home.join(".sandbox");
         codex_windows_sandbox::log_note(
             &format!(

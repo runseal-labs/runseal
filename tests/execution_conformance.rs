@@ -5582,6 +5582,13 @@ fn read_console_cleanup_trace(workspace: &std::path::Path) -> String {
         "backend_worker_exit_timeout_after_error",
         "backend_returned_error",
         "backend_reported_incomplete_cleanup",
+        "execution_reservation_cleanup_unconfirmed",
+        "sandbox_capture_input_failed",
+        "sandbox_capture_cleanup_failed",
+        "sandbox_runner_cleanup_failed",
+        "sandbox_setup_unavailable",
+        "sandbox_backend_unclassified_error",
+        "runtime_root_cleanup_failed",
         "timer_cleanup_failed",
         "execution_cleanup_unconfirmed_before_reservation",
         "reservation_cleanup_failed",
@@ -5598,6 +5605,7 @@ fn read_console_cleanup_trace(workspace: &std::path::Path) -> String {
         "policy_release_state_read",
         "policy_release_entry_removed",
         "policy_release_state_written",
+        "policy_release_quarantined",
     ];
     let mut stages = Vec::new();
     for line in contents.lines() {

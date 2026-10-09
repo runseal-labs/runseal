@@ -80,7 +80,18 @@ jobs:
 
       - name: Run prepared Windows conformance
         if: runner.os == 'Windows'
-        run: cargo test --all-targets -- --include-ignored
+        shell: pwsh
+        run: |
+          $trace = Join-Path $env:RUNNER_TEMP 'runseal-windows-cleanup.trace'
+          Remove-Item -LiteralPath $trace -ErrorAction SilentlyContinue
+          $env:RUNSEAL_TEST_CLEANUP_TRACE = $trace
+          cargo test --all-targets -- --include-ignored
+          $testExit = $LASTEXITCODE
+          if (Test-Path -LiteralPath $trace) {
+            Write-Output 'Safe Windows cleanup stage trace:'
+            Get-Content -LiteralPath $trace
+          }
+          exit $testExit
 
       - name: Run third-party Windows examples
         if: runner.os == 'Windows'

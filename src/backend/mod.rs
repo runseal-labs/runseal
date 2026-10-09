@@ -137,6 +137,7 @@ impl ExecutionReservation {
         if let Some(guard) = self._guard.as_mut()
             && !execution_cleanup_confirmed
         {
+            record_test_cleanup_trace("execution_reservation_cleanup_unconfirmed");
             let _ = guard.mark_cleanup_failed();
             return Err(io::Error::other(error::BackendCleanupError));
         }
