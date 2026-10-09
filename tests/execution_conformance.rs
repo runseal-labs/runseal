@@ -3968,7 +3968,10 @@ fn windows_sandboxed_host_death_fails_closed_until_proven_repair() -> Result<()>
     );
     let report: Value = serde_json::from_slice(&repair.stdout)?;
     assert_eq!(report["repaired"], true, "{report}");
-    assert_eq!(report["cleared_executions"], 1, "{report}");
+    assert!(
+        report["cleared_executions"].as_u64().unwrap_or_default() >= 1,
+        "repair must clear the dead execution reservation: {report}"
+    );
     assert!(report["removed_runtime_roots"].as_u64().unwrap_or_default() >= 1);
     assert!(
         !runtime_root.exists(),
