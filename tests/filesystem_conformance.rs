@@ -336,6 +336,21 @@ fn assert_backend_unavailable(response: &Value, root: &Path) -> Result<()> {
     Ok(())
 }
 
+fn assert_managed_proxy_unavailable_or_unprepared(response: &Value, root: &Path) -> Result<()> {
+    assert_backend_unavailable(response, root)?;
+    if cfg!(windows) {
+        let requires_setup = response["error"]["data"]["setup_status"]["requires_setup"]
+            .as_bool()
+            .context("Windows setup status must report requires_setup")?;
+        if !requires_setup {
+            bail!(
+                "prepared Windows backend reported BACKEND_UNAVAILABLE for managed proxy execution"
+            );
+        }
+    }
+    Ok(())
+}
+
 fn assert_execution_failed_to_start(response: &Value, root: &Path) -> Result<()> {
     assert!(
         matches!(std::env::consts::OS, "linux" | "macos"),
@@ -1318,7 +1333,7 @@ fn network_proxy_blocks_direct_egress_when_supported_or_fails_closed() -> Result
         return Ok(());
     }
     if is_backend_unavailable(&response) {
-        assert_backend_unavailable(&response, &workspace)?;
+        assert_managed_proxy_unavailable_or_unprepared(&response, &workspace)?;
         return Ok(());
     }
 
@@ -1549,7 +1564,7 @@ exit $exitCode
         return Ok(());
     }
     if is_backend_unavailable(&response) {
-        assert_backend_unavailable(&response, &workspace)?;
+        assert_managed_proxy_unavailable_or_unprepared(&response, &workspace)?;
         return Ok(());
     }
 
@@ -1584,7 +1599,7 @@ fn network_proxy_allows_http_through_managed_proxy_when_supported_or_fails_close
         return Ok(());
     }
     if is_backend_unavailable(&warmup) {
-        assert_backend_unavailable(&warmup, &workspace)?;
+        assert_managed_proxy_unavailable_or_unprepared(&warmup, &workspace)?;
         return Ok(());
     }
     assert_eq!(warmup["result"]["status"], "finished");
@@ -1693,7 +1708,7 @@ $successText
     if is_backend_unavailable(&response) {
         let upstream_hit = upstream.join().expect("upstream server thread")?;
         assert!(!upstream_hit);
-        assert_backend_unavailable(&response, &workspace)?;
+        assert_managed_proxy_unavailable_or_unprepared(&response, &workspace)?;
         return Ok(());
     }
 
@@ -1811,7 +1826,7 @@ fn network_proxy_overrides_client_proxy_environment_when_supported_or_fails_clos
         return Ok(());
     }
     if is_backend_unavailable(&warmup) {
-        assert_backend_unavailable(&warmup, &workspace)?;
+        assert_managed_proxy_unavailable_or_unprepared(&warmup, &workspace)?;
         return Ok(());
     }
     assert_eq!(warmup["result"]["status"], "finished");
@@ -1894,7 +1909,7 @@ try {
     if is_backend_unavailable(&response) {
         let upstream_hit = upstream.join().expect("upstream server thread")?;
         assert!(!upstream_hit);
-        assert_backend_unavailable(&response, &workspace)?;
+        assert_managed_proxy_unavailable_or_unprepared(&response, &workspace)?;
         return Ok(());
     }
 
@@ -1938,7 +1953,7 @@ fn network_proxy_credentials_are_redacted_when_supported_or_fails_closed() -> Re
         return Ok(());
     }
     if is_backend_unavailable(&response) {
-        assert_backend_unavailable(&response, &workspace)?;
+        assert_managed_proxy_unavailable_or_unprepared(&response, &workspace)?;
         return Ok(());
     }
 
