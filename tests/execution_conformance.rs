@@ -5158,7 +5158,7 @@ fn cli_stalled_console_output_for_policy(policy: &str) -> Result<()> {
         .flat_map(|stream| [false, true].map(move |timeout| (stream, timeout)))
     {
         let tmp = TempDir::new()?;
-        let runner_log_offset = console_runner_log_offset(tmp.path());
+        let runner_log_offsets = console_runner_log_offsets(tmp.path());
         let mut peer_client = Client::spawn("service")?;
         peer_client.send(1,"execute",json!({"command":[python()?,"-u","-c","import os,pathlib,time; print('READY '+str(os.getpid()),flush=True); count=0\nwhile True:\n count+=1; pathlib.Path('console-peer.beat').write_text(str(count)); time.sleep(0.01)"],"cwd":tmp.path(),"policy":policy}))?;
         let receipt = peer_client.next(Duration::from_secs(2))?;
@@ -5236,7 +5236,7 @@ fn cli_stalled_console_output_for_policy(policy: &str) -> Result<()> {
                     .filter(|pid| process_present(**pid).unwrap_or(false))
                     .count();
                 let terminals = read_console_terminal_summary(tmp.path());
-                let cleanup_stage = read_console_cleanup_stage(tmp.path(), runner_log_offset);
+                let cleanup_stage = read_console_cleanup_stage(tmp.path(), &runner_log_offsets);
                 anyhow::bail!(
                     "stalled Console CLI cleanup did not finish for {policy} (driver_exited={driver_exited}, command_running={command_running}, sandbox_processes_running={sandbox_processes_running}, terminal={terminals}, cleanup_stage={cleanup_stage})"
                 );
@@ -5388,7 +5388,7 @@ fn read_console_terminal_summary(workspace: &std::path::Path) -> String {
 }
 
 #[cfg(windows)]
-fn console_runner_log_path(workspace: &std::path::Path) -> std::path::PathBuf {
+fn console_runner_log_dir(workspace: &std::path::Path) -> std::path::PathBuf {
     let sandbox_home = std::env::var_os("RUNSEAL_WINDOWS_SANDBOX_HOME")
         .map(|home| {
             let home = std::path::PathBuf::from(home);
@@ -5406,71 +5406,108 @@ fn console_runner_log_path(workspace: &std::path::Path) -> std::path::PathBuf {
             })
         })
         .unwrap_or_else(|| workspace.join(".runseal").join("sandbox"));
-    codex_windows_sandbox::current_log_file_path_for_codex_home(&sandbox_home)
+    sandbox_home.join(".sandbox")
 }
 
 #[cfg(windows)]
-fn console_runner_log_offset(workspace: &std::path::Path) -> u64 {
-    std::fs::metadata(console_runner_log_path(workspace))
-        .map(|metadata| metadata.len())
-        .unwrap_or(0)
+fn console_runner_log_offsets(
+    workspace: &std::path::Path,
+) -> std::collections::HashMap<std::path::PathBuf, u64> {
+    let Ok(entries) = std::fs::read_dir(console_runner_log_dir(workspace)) else {
+        return std::collections::HashMap::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name();
+            let name = name.to_str()?;
+            if !name.starts_with("sandbox.") || !name.ends_with(".log") {
+                return None;
+            }
+            let metadata = entry.metadata().ok()?;
+            metadata.is_file().then_some((entry.path(), metadata.len()))
+        })
+        .collect()
 }
 
 #[cfg(windows)]
-fn read_console_cleanup_stage(workspace: &std::path::Path, offset: u64) -> String {
-    let Ok(contents) = std::fs::read(console_runner_log_path(workspace)) else {
+fn read_console_cleanup_stage(
+    workspace: &std::path::Path,
+    offsets: &std::collections::HashMap<std::path::PathBuf, u64>,
+) -> String {
+    let Ok(entries) = std::fs::read_dir(console_runner_log_dir(workspace)) else {
         return "unavailable".to_owned();
     };
-    let fresh = contents.get(offset as usize..).unwrap_or(&contents);
     let prefix = "cleanup failed at stage: ";
     let mut stages = Vec::new();
-    for line in fresh.rsplit(|byte| *byte == b'\n') {
-        let Ok(line) = std::str::from_utf8(line) else {
+    let mut readable_logs = 0;
+    let mut changed_logs = 0;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
             continue;
         };
-        let Some((_, stage)) = line.split_once(prefix) else {
+        if !name.starts_with("sandbox.") || !name.ends_with(".log") {
+            continue;
+        }
+        let Ok(contents) = std::fs::read(entry.path()) else {
             continue;
         };
-        let stage = stage.trim();
-        let (stage_name, detail) = stage.split_once(':').unwrap_or((stage, ""));
-        let stage = match stage_name {
-            "cleanup_announcement"
-            | "control_workers"
-            | "exit_report"
-            | "runner_pipe_closed"
-            | "runner_read"
-            | "runner_report"
-            | "parent_input_writer"
-            | "process_range"
-            | "exit_status"
-            | "runtime_roots"
-            | "conpty_close"
-            | "controls_reader"
-            | "stdin_writer"
-            | "stdout_reader"
-            | "stderr_reader" => stage_name.to_owned(),
-            _ => "unknown".to_owned(),
-        };
-        let safe_detail = !detail.is_empty()
-            && detail.len() <= 32
-            && detail
-                .bytes()
-                .all(|byte| byte.is_ascii_lowercase() || byte == b'_');
-        let stage = if stage == "unknown" || !safe_detail {
-            stage
-        } else {
-            format!("{stage}:{detail}")
-        };
-        if !stages.contains(&stage) {
-            stages.push(stage);
+        readable_logs += 1;
+        let offset = offsets.get(&entry.path()).copied().unwrap_or(0) as usize;
+        let fresh = contents.get(offset..).unwrap_or(&contents);
+        if !fresh.is_empty() {
+            changed_logs += 1;
+        }
+        for line in fresh.rsplit(|byte| *byte == b'\n') {
+            let Ok(line) = std::str::from_utf8(line) else {
+                continue;
+            };
+            let Some((_, stage)) = line.split_once(prefix) else {
+                continue;
+            };
+            let stage = stage.trim();
+            let (stage_name, detail) = stage.split_once(':').unwrap_or((stage, ""));
+            let stage = match stage_name {
+                "cleanup_announcement"
+                | "control_workers"
+                | "exit_report"
+                | "runner_pipe_closed"
+                | "runner_read"
+                | "runner_report"
+                | "parent_input_writer"
+                | "process_range"
+                | "exit_status"
+                | "runtime_roots"
+                | "conpty_close"
+                | "controls_reader"
+                | "stdin_writer"
+                | "stdout_reader"
+                | "stderr_reader" => stage_name.to_owned(),
+                _ => "unknown".to_owned(),
+            };
+            let safe_detail = !detail.is_empty()
+                && detail.len() <= 32
+                && detail
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte == b'_');
+            let stage = if stage == "unknown" || !safe_detail {
+                stage
+            } else {
+                format!("{stage}:{detail}")
+            };
+            if !stages.contains(&stage) {
+                stages.push(stage);
+            }
         }
     }
-    if stages.is_empty() {
+    stages.reverse();
+    let stages = if stages.is_empty() {
         "none".to_owned()
     } else {
-        stages.reverse();
         stages.join(",")
-    }
+    };
+    format!("{stages}; changed_logs={changed_logs}; readable_logs={readable_logs}")
 }
 
 #[cfg(windows)]
