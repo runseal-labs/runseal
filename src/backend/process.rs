@@ -609,26 +609,6 @@ fn terminate_process_group(process_id: u32) -> io::Result<()> {
     }
 }
 
-#[cfg(unix)]
-#[cfg(test)]
-mod process_group_cleanup_tests {
-    use super::*;
-
-    #[test]
-    fn direct_kill_race_accepts_esrch_only_after_wait_proves_exit() {
-        let error = io::Error::from_raw_os_error(libc::ESRCH);
-        assert!(child_kill_reports_already_exited(&error));
-        assert!(child_kill_reports_already_exited(&io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "process already exited",
-        )));
-        assert!(!child_kill_reports_already_exited(&io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "permission denied",
-        )));
-    }
-}
-
 #[cfg(not(windows))]
 fn read_pipe_in_thread(
     mut pipe: impl Read + Send + 'static,
@@ -793,4 +773,23 @@ fn read_windows_pipe_in_thread(
         }
         Ok(captured)
     })
+}
+
+#[cfg(all(unix, test))]
+mod process_group_cleanup_tests {
+    use super::*;
+
+    #[test]
+    fn direct_kill_race_accepts_esrch_only_after_wait_proves_exit() {
+        let error = io::Error::from_raw_os_error(libc::ESRCH);
+        assert!(child_kill_reports_already_exited(&error));
+        assert!(child_kill_reports_already_exited(&io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "process already exited",
+        )));
+        assert!(!child_kill_reports_already_exited(&io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "permission denied",
+        )));
+    }
 }
