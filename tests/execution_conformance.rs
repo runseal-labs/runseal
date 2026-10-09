@@ -375,7 +375,15 @@ fn configured_summary_and_audit_retention_preserves_active_targets_and_durable_t
         assert!(!disk.contains("retention-secret-canary"));
         assert!(peer_alive);
         assert_eq!(active["result"]["status"], "running");
-        assert_eq!(peer_terminal["result"]["cleanup_complete"], true);
+        assert_eq!(
+            peer_terminal["result"]["cleanup_complete"],
+            true,
+            "peer cleanup failed: termination={:?}, requested={:?}, error={:?}, exit_code={:?}",
+            peer_terminal["result"]["termination_reason"],
+            peer_terminal["result"]["requested_termination_reason"],
+            peer_terminal["result"]["error"]["code"],
+            peer_terminal["result"]["exit_code"]
+        );
         assert!(!process_present(peer_pid)?);
         assert!(!audit.to_string().contains("retention-secret-canary"));
         let limits = &capabilities["result"]["limits"];
@@ -3210,10 +3218,40 @@ fn process_present(pid: u32) -> Result<bool> {
 }
 
 fn wait_ready_pid(client: &Client, id: &str) -> Result<u32> {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    wait_ready_pid_with_timeout(client, id, Duration::from_secs(10))
+}
+
+fn wait_ready_pid_with_timeout(client: &Client, id: &str, timeout: Duration) -> Result<u32> {
+    let deadline = Instant::now() + timeout;
     let mut output = Vec::new();
+    let mut observed = Vec::new();
     loop {
-        let message = client.next(deadline.saturating_duration_since(Instant::now()))?;
+        let message = client
+            .next(deadline.saturating_duration_since(Instant::now()))
+            .with_context(|| {
+                format!(
+                    "execution readiness watchdog (observed={})",
+                    observed.join(" -> ")
+                )
+            })?;
+        let event = &message["params"];
+        let summary = if let Some(event_type) = event["type"].as_str() {
+            format!(
+                "event(type={event_type},seq={:?},code={:?})",
+                event["event_seq"].as_u64(),
+                event["result"]["error"]["code"].as_str()
+            )
+        } else {
+            format!(
+                "response(status={:?},code={:?})",
+                message["result"]["status"].as_str(),
+                message["error"]["data"]["code"].as_str()
+            )
+        };
+        observed.push(summary);
+        if observed.len() > 16 {
+            observed.remove(0);
+        }
         let event = &message["params"];
         if event["execution_id"] != id {
             continue;
@@ -5166,7 +5204,7 @@ fn cli_stalled_console_output_for_policy(policy: &str) -> Result<()> {
             .as_str()
             .with_context(|| format!("peer receipt: {receipt}"))?
             .to_owned();
-        let peer_pid = wait_ready_pid(&peer_client, &peer)?;
+        let peer_pid = wait_ready_pid_with_timeout(&peer_client, &peer, Duration::from_secs(20))?;
         let child_code = format!(
             "import os,pathlib,subprocess,sys,time; child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(120)']); pathlib.Path('console.ready.tmp').write_text(str(os.getpid())+' '+str(child.pid)); pathlib.Path('console.ready.tmp').replace('console.ready')\nwhile not pathlib.Path('console.go').exists(): time.sleep(0.005)\nwhile True: os.write({stream},b'Z'*65536)"
         );

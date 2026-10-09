@@ -115,6 +115,26 @@ fn powershell_bin() -> &'static str {
 }
 
 #[cfg(windows)]
+fn windows_python_bin() -> Result<String> {
+    if let Some(path) = env::var_os("RUNSEAL_TEST_PYTHON") {
+        return Ok(path.to_string_lossy().into_owned());
+    }
+    let output = Command::new("where.exe")
+        .arg("python")
+        .output()
+        .context("failed to locate Python for the Windows proxy probe")?;
+    anyhow::ensure!(
+        output.status.success(),
+        "Python is required for the Windows proxy probe"
+    );
+    String::from_utf8(output.stdout)?
+        .lines()
+        .next()
+        .map(str::to_owned)
+        .context("Python is required for the Windows proxy probe")
+}
+
+#[cfg(windows)]
 fn platform_script_command(_python_code: String, powershell_script: String) -> Vec<String> {
     vec![
         powershell_bin().to_string(),
@@ -1664,64 +1684,29 @@ fn network_proxy_allows_http_through_managed_proxy_when_supported_or_fails_close
         ),
         port = port
     );
-    let proxy_request = format!(
-        "\"GET http://127.0.0.1:{port}/proxy-ok HTTP/1.1`r`nHost: 127.0.0.1:{port}`r`nConnection: close`r`n`r`n\""
-    );
-    let ps_code = r#"
-$ErrorActionPreference = 'Stop'
-$proxy = [Uri]$env:HTTP_PROXY
-$request = __REQUEST__
-$request = $request.Replace("Connection: close`r`n", "Proxy-Authorization: $env:RUNSEAL_NETWORK_PROXY_AUTHORIZATION`r`nConnection: close`r`n")
-$deadline = [DateTime]::UtcNow.AddSeconds(8)
-$last = $null
-$successText = $null
-while ([DateTime]::UtcNow -lt $deadline) {
-    $client = $null
-    try {
-        $client = [Net.Sockets.TcpClient]::new()
-        $client.ReceiveTimeout = 2000
-        $client.SendTimeout = 2000
-        $connect = $client.ConnectAsync($proxy.Host, $proxy.Port)
-        if (-not $connect.Wait(2000)) {
-            throw 'proxy connection timeout'
-        }
-        $connect.GetAwaiter().GetResult()
-        $stream = $client.GetStream()
-        $bytes = [Text.Encoding]::ASCII.GetBytes($request)
-        $stream.Write($bytes, 0, $bytes.Length)
-        $buffer = New-Object byte[] 4096
-        $text = ''
-        while (($count = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
-            $text += [Text.Encoding]::UTF8.GetString($buffer, 0, $count)
-        }
-        if ($text.Contains('proxy-ok')) {
-            $successText = $text
-            break
-        }
-        $last = "unexpected proxy response: $text"
-    } catch {
-        $last = $_.Exception.Message
-    } finally {
-        if ($null -ne $client) {
-            $client.Dispose()
-        }
-    }
-    Start-Sleep -Milliseconds 250
-}
-if ($null -eq $successText) {
-    throw "proxy request did not reach upstream: $last"
-}
-$successText
-"#
-    .replace("__REQUEST__", &proxy_request);
-    let messages = execute_messages_unlocked(platform_script_params(
+    #[cfg(not(windows))]
+    let proxy_params = platform_script_params(
         "workspace-write",
         &workspace,
         Some("proxy"),
         code,
-        ps_code,
-    ))
-    .context("managed proxy HTTP conformance execution")?;
+        String::new(),
+    );
+    #[cfg(windows)]
+    let proxy_params = {
+        let mut params = platform_script_params(
+            "workspace-write",
+            &workspace,
+            Some("proxy"),
+            String::new(),
+            String::new(),
+        );
+        params["command"] = json!([windows_python_bin()?, "-u", "-c", code]);
+        params["timeout_ms"] = json!(12_000);
+        params
+    };
+    let messages = execute_messages_unlocked(proxy_params)
+        .context("managed proxy HTTP conformance execution")?;
     let response = observation(&messages)?;
 
     if is_backend_missing(&response) {
