@@ -439,6 +439,7 @@ impl WindowsSandboxCrossProcessGate {
         if self.released {
             return Ok(());
         }
+        super::record_test_cleanup_trace("policy_release_started");
         let deadline = self
             .cleanup_deadline
             .map_or(deadline, |previous| previous.min(deadline));
@@ -448,13 +449,16 @@ impl WindowsSandboxCrossProcessGate {
                 return Err(io::Error::other(BackendCleanupError));
             }
             self.quarantine.check()?;
+            super::record_test_cleanup_trace("policy_release_precheck_passed");
             let _mutex = WindowsSandboxNamedMutexGuard::acquire_until(&self.mutex_name, deadline)?;
+            super::record_test_cleanup_trace("policy_release_mutex_acquired");
             before_state_read();
             self.quarantine.check()?;
             if self.quarantined.load(Ordering::Acquire) || std::time::Instant::now() >= deadline {
                 return Err(io::Error::other(BackendCleanupError));
             }
             let mut state = read_cross_process_gate_state(&self.state_path)?;
+            super::record_test_cleanup_trace("policy_release_state_read");
             let before = state.active.len();
             state.active.retain(|entry| {
                 !(entry.pid == std::process::id()
@@ -467,11 +471,13 @@ impl WindowsSandboxCrossProcessGate {
             {
                 return Err(io::Error::other(BackendCleanupError));
             }
+            super::record_test_cleanup_trace("policy_release_entry_removed");
             self.quarantine.check()?;
             if self.quarantined.load(Ordering::Acquire) {
                 return Err(io::Error::other(BackendCleanupError));
             }
             write_cross_process_gate_state(&self.state_path, &state)?;
+            super::record_test_cleanup_trace("policy_release_state_written");
             self.released = true;
             Ok(())
         })();
