@@ -100,19 +100,6 @@ fn mark_cross_process_quarantined(
     quarantine.signal()
 }
 
-#[cfg(all(windows, test))]
-struct ReleaseOwner(WindowsSandboxCrossProcessGate);
-
-#[cfg(all(windows, test))]
-impl Drop for ReleaseOwner {
-    fn drop(&mut self) {
-        // Failed spawn, panic, or an incomplete release cannot re-enter file I/O.
-        if !self.0.released {
-            let _ = self.0.mark_quarantined();
-        }
-    }
-}
-
 #[cfg(windows)]
 impl WindowsSandboxCrossProcessGate {
     fn finish_after_execution_cleanup(
@@ -124,99 +111,6 @@ impl WindowsSandboxCrossProcessGate {
         // worker may not be scheduled before its short deadline expires.
         super::record_test_cleanup_trace("policy_release_after_cleanup_started");
         self.release(std::time::Instant::now() + std::time::Duration::from_secs(1))
-    }
-
-    #[cfg(test)]
-    fn finish_owned_with<F: FnOnce() + Send + 'static>(
-        self,
-        deadline: std::time::Instant,
-        before_release: F,
-    ) -> io::Result<()> {
-        use crate::execution::retained;
-        let deadline = self
-            .cleanup_deadline
-            .map_or(deadline, |old| old.min(deadline));
-        let quarantined = self.quarantined.clone();
-        let quarantine = self.quarantine.clone();
-        let release_committed = std::sync::Arc::new(AtomicBool::new(false));
-        let worker_release_committed = release_committed.clone();
-        let mut owner = ReleaseOwner(self);
-        let (completed, completion) = std::sync::mpsc::channel();
-        let worker = std::thread::Builder::new()
-            .name("runseal-policy-release".into())
-            .spawn(move || {
-                let result =
-                    owner
-                        .0
-                        .release_with(deadline, before_release, Some(&worker_release_committed));
-                drop(owner);
-                let _ = completed.send(result);
-            })
-            .map_err(|_| {
-                super::record_test_cleanup_trace("policy_release_worker_spawn_failed");
-                let _ = mark_cross_process_quarantined(&quarantined, &quarantine);
-                io::Error::other(BackendCleanupError)
-            })?;
-        loop {
-            match policy_release_worker_state(&worker, deadline, &release_committed) {
-                PolicyReleaseWorkerState::Committed => {
-                    super::record_test_cleanup_trace("policy_release_committed_before_deadline");
-                    retained::retain(worker);
-                    return Ok(());
-                }
-                PolicyReleaseWorkerState::Finished => {
-                    let joined = worker.join();
-                    let result = completion.try_recv();
-                    return match (joined, result) {
-                        (Ok(()), Ok(Ok(()))) => Ok(()),
-                        (Ok(()), Ok(Err(error))) => {
-                            super::record_test_cleanup_trace("policy_release_operation_failed");
-                            Err(error)
-                        }
-                        _ => {
-                            super::record_test_cleanup_trace("policy_release_worker_failed");
-                            let _ = mark_cross_process_quarantined(&quarantined, &quarantine);
-                            Err(io::Error::other(BackendCleanupError))
-                        }
-                    };
-                }
-                PolicyReleaseWorkerState::TimedOut => {
-                    super::record_test_cleanup_trace("policy_release_deadline");
-                    let _ = mark_cross_process_quarantined(&quarantined, &quarantine);
-                    retained::retain(worker);
-                    return Err(io::Error::other(BackendCleanupError));
-                }
-                PolicyReleaseWorkerState::Pending => {
-                    std::thread::sleep(std::time::Duration::from_millis(5));
-                }
-            }
-        }
-    }
-}
-
-#[cfg(all(windows, test))]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum PolicyReleaseWorkerState {
-    Committed,
-    Finished,
-    TimedOut,
-    Pending,
-}
-
-#[cfg(all(windows, test))]
-fn policy_release_worker_state(
-    worker: &std::thread::JoinHandle<()>,
-    deadline: std::time::Instant,
-    release_committed: &AtomicBool,
-) -> PolicyReleaseWorkerState {
-    if release_committed.load(Ordering::Acquire) {
-        PolicyReleaseWorkerState::Committed
-    } else if crate::execution::retained::thread_finished(worker) {
-        PolicyReleaseWorkerState::Finished
-    } else if std::time::Instant::now() >= deadline {
-        PolicyReleaseWorkerState::TimedOut
-    } else {
-        PolicyReleaseWorkerState::Pending
     }
 }
 
@@ -463,23 +357,10 @@ impl Drop for WindowsSandboxCrossProcessGate {
 #[cfg(windows)]
 impl WindowsSandboxCrossProcessGate {
     fn release(&mut self, deadline: std::time::Instant) -> io::Result<()> {
-        self.release_with(deadline, || {}, None)
-    }
-
-    fn release_with<F: FnOnce()>(
-        &mut self,
-        deadline: std::time::Instant,
-        before_state_read: F,
-        release_committed: Option<&AtomicBool>,
-    ) -> io::Result<()> {
         if self.released {
             return Ok(());
         }
-        super::record_test_cleanup_trace(if release_committed.is_some() {
-            "policy_release_owned_started"
-        } else {
-            "policy_release_started"
-        });
+        super::record_test_cleanup_trace("policy_release_started");
         let deadline = self
             .cleanup_deadline
             .map_or(deadline, |previous| previous.min(deadline));
@@ -492,7 +373,6 @@ impl WindowsSandboxCrossProcessGate {
             super::record_test_cleanup_trace("policy_release_precheck_passed");
             let _mutex = WindowsSandboxNamedMutexGuard::acquire_until(&self.mutex_name, deadline)?;
             super::record_test_cleanup_trace("policy_release_mutex_acquired");
-            before_state_read();
             self.quarantine.check()?;
             if self.quarantined.load(Ordering::Acquire) || std::time::Instant::now() >= deadline {
                 return Err(io::Error::other(BackendCleanupError));
@@ -518,14 +398,7 @@ impl WindowsSandboxCrossProcessGate {
             }
             write_cross_process_gate_state(&self.state_path, &state)?;
             self.released = true;
-            if let Some(release_committed) = release_committed {
-                release_committed.store(true, Ordering::Release);
-            }
-            super::record_test_cleanup_trace(if release_committed.is_some() {
-                "policy_release_owned_state_written"
-            } else {
-                "policy_release_state_written"
-            });
+            super::record_test_cleanup_trace("policy_release_state_written");
             Ok(())
         })();
         if result.is_err() {
@@ -683,6 +556,14 @@ fn cross_process_gate_token() -> String {
 
 #[cfg(windows)]
 fn read_cross_process_gate_state(path: &Path) -> io::Result<WindowsSandboxCrossProcessGateState> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_file() => {}
+        Ok(_) => return Err(io::Error::other(BackendCleanupError)),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            return Ok(WindowsSandboxCrossProcessGateState::default());
+        }
+        Err(err) => return Err(err),
+    }
     match fs::read_to_string(path) {
         Ok(contents) => parse_cross_process_gate_state(&contents),
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
@@ -1017,60 +898,6 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn completed_policy_release_worker_wins_over_elapsed_deadline() -> io::Result<()> {
-        let worker = std::thread::spawn(|| {});
-        let wait_deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        while !crate::execution::retained::thread_finished(&worker) {
-            if std::time::Instant::now() >= wait_deadline {
-                return Err(io::Error::other("policy release worker did not finish"));
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-
-        assert_eq!(
-            policy_release_worker_state(
-                &worker,
-                std::time::Instant::now() - std::time::Duration::from_millis(1),
-                &AtomicBool::new(false),
-            ),
-            PolicyReleaseWorkerState::Finished
-        );
-        worker
-            .join()
-            .map_err(|_| io::Error::other("policy release worker panicked"))?;
-        Ok(())
-    }
-
-    #[test]
-    fn committed_policy_release_wins_over_elapsed_deadline() -> io::Result<()> {
-        let (started, ready) = std::sync::mpsc::channel();
-        let (release, wait) = std::sync::mpsc::channel();
-        let worker = std::thread::spawn(move || {
-            let _ = started.send(());
-            let _ = wait.recv();
-        });
-        ready
-            .recv_timeout(std::time::Duration::from_secs(2))
-            .map_err(io::Error::other)?;
-        let committed = AtomicBool::new(true);
-        assert_eq!(
-            policy_release_worker_state(
-                &worker,
-                std::time::Instant::now() - std::time::Duration::from_millis(1),
-                &committed,
-            ),
-            PolicyReleaseWorkerState::Committed
-        );
-        release
-            .send(())
-            .map_err(|_| io::Error::other("policy release worker unavailable"))?;
-        worker
-            .join()
-            .map_err(|_| io::Error::other("policy release worker panicked"))?;
-        Ok(())
-    }
-
-    #[test]
     fn reservation_release_respects_held_native_mutex_deadline_and_preserves_quarantine()
     -> io::Result<()> {
         use std::os::windows::io::AsRawHandle;
@@ -1172,6 +999,54 @@ mod tests {
             elapsed < Duration::from_secs(2),
             "available reservation metadata should release promptly"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn nonregular_state_path_fails_closed_without_releasing_reservation() -> io::Result<()> {
+        use std::os::windows::io::AsRawHandle;
+        use std::time::{Duration, Instant};
+
+        let tmp = TempDir::new()?;
+        let key = WindowsSandboxPolicyCohortKey {
+            binding_key: format!("nonregular-state-fixture:{}", tmp.path().display()),
+            policy_hash: "policy-a".into(),
+        };
+        let mut guard = WindowsSandboxCrossProcessGate::acquire(&key)?;
+        let original_path = guard.state_path.clone();
+        let signal_name = guard.quarantine.name.clone();
+        let original = fs::read(&original_path)?;
+        guard.state_path = tmp.path().to_owned();
+
+        let began = Instant::now();
+        let result = guard.finish_after_execution_cleanup(Instant::now() + Duration::from_secs(2));
+        let elapsed = began.elapsed();
+        guard.state_path = original_path.clone();
+        drop(guard);
+
+        let unchanged = fs::read(&original_path)? == original;
+        let retained = read_cross_process_gate_state(&original_path)?.active.len() == 1;
+        let denied = WindowsSandboxCrossProcessGate::acquire(&key)
+            .is_err_and(|error| cleanup_failed(&error));
+        let signal = {
+            let mut signals = retained_quarantine_signals()
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let index = signals
+                .iter()
+                .position(|signal| signal.name == signal_name)
+                .ok_or_else(|| io::Error::other("fixture quarantine signal missing"))?;
+            signals.swap_remove(index)
+        };
+        let reset = unsafe {
+            windows_sys::Win32::System::Threading::ResetEvent(signal.handle.as_raw_handle().cast())
+        };
+        fs::remove_file(original_path)?;
+
+        assert!(result.is_err_and(|error| cleanup_failed(&error)));
+        assert!(elapsed < Duration::from_secs(2));
+        assert!(unchanged && retained && denied);
+        assert_ne!(reset, 0);
         Ok(())
     }
 
@@ -1589,720 +1464,6 @@ mod tests {
         drop(guard);
         let next_policy_guard = WindowsSandboxCrossProcessGate::acquire(&policy_b)?;
         drop(next_policy_guard);
-        Ok(())
-    }
-}
-
-#[cfg(all(test, windows))]
-mod release_worker_tests {
-    use super::*;
-    use crate::execution::retained;
-    use std::io::Write;
-    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
-    use std::sync::{Arc, mpsc};
-    use std::time::{Duration, Instant};
-    use windows_sys::Win32::Foundation::{
-        DUPLICATE_SAME_ACCESS, DuplicateHandle, WAIT_OBJECT_0, WAIT_TIMEOUT,
-    };
-    use windows_sys::Win32::Storage::FileSystem::{FILE_TYPE_PIPE, GetFileType, ReadFile};
-    use windows_sys::Win32::System::Pipes::CreatePipe;
-    use windows_sys::Win32::System::Threading::{
-        FlsAlloc, FlsFree, FlsSetValue, GetCurrentProcess, GetCurrentThread, ResetEvent,
-    };
-
-    #[derive(Default)]
-    struct NativeGate {
-        entered: AtomicBool,
-        release: AtomicBool,
-        target_started: AtomicBool,
-        worker: Mutex<Option<(OwnedHandle, std::thread::ThreadId)>>,
-    }
-    unsafe extern "system" fn hold_exit(value: *const std::ffi::c_void) {
-        let gate = unsafe { Arc::from_raw(value.cast::<NativeGate>()) };
-        gate.entered.store(true, Ordering::Release);
-        while !gate.release.load(Ordering::Acquire) {
-            std::thread::sleep(Duration::from_millis(5));
-        }
-    }
-    struct Fixture {
-        gate: Arc<NativeGate>,
-        writer: Option<fs::File>,
-        slot: Option<u32>,
-        stop: Option<mpsc::Sender<()>>,
-        watchdog: Option<std::thread::JoinHandle<()>>,
-    }
-    impl Drop for Fixture {
-        fn drop(&mut self) {
-            if let Some(stop) = self.stop.take() {
-                let _ = stop.send(());
-            }
-            self.gate.release.store(true, Ordering::Release);
-            if let Some(mut writer) = self.writer.take() {
-                let _ = writer.write_all(b"R");
-            }
-            if let Some((handle, id)) = self
-                .gate
-                .worker
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .as_ref()
-            {
-                let ended =
-                    unsafe { WaitForSingleObject(handle.as_raw_handle(), 2000) } == WAIT_OBJECT_0;
-                if ended {
-                    retained::join_finished(*id);
-                }
-            }
-            if let Some(watchdog) = self.watchdog.take() {
-                let _ = watchdog.join();
-            }
-            if let Some(slot) = self.slot.take() {
-                unsafe {
-                    FlsFree(slot);
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn owned_policy_release_preserves_native_worker_and_fail_closed_admission_until_exit()
-    -> anyhow::Result<()> {
-        for exit_callback in [true, false] {
-            let tmp = tempfile::TempDir::new()?;
-            let key = WindowsSandboxPolicyCohortKey {
-                binding_key: format!("owned-release-fixture:{}", tmp.path().display()),
-                policy_hash: "policy-a".into(),
-            };
-            let mut guard = WindowsSandboxCrossProcessGate::acquire(&key)?;
-            let state_path = guard.state_path.clone();
-            let mutex_name = guard.mutex_name.clone();
-            let signal = guard.quarantine.clone();
-            let original = fs::read(&state_path)?;
-            let gate = Arc::new(NativeGate::default());
-            let slot = if exit_callback {
-                let slot = unsafe { FlsAlloc(Some(hold_exit)) };
-                anyhow::ensure!(slot != u32::MAX, "native exit slot");
-                Some(slot)
-            } else {
-                None
-            };
-            let (reader, writer) = if exit_callback {
-                (None, None)
-            } else {
-                let mut reader = std::ptr::null_mut();
-                let mut writer = std::ptr::null_mut();
-                anyhow::ensure!(
-                    unsafe { CreatePipe(&mut reader, &mut writer, std::ptr::null_mut(), 4096) }
-                        != 0,
-                    "native release pipe"
-                );
-                (
-                    Some(unsafe { fs::File::from_raw_handle(reader) }),
-                    Some(unsafe { fs::File::from_raw_handle(writer) }),
-                )
-            };
-            let raw_reader = reader.as_ref().map(AsRawHandle::as_raw_handle);
-            let safety_gate = gate.clone();
-            let safety_writer = writer.as_ref().map(fs::File::try_clone).transpose()?;
-            let (stop, stopped) = mpsc::channel();
-            let watchdog = std::thread::spawn(move || {
-                if matches!(
-                    stopped.recv_timeout(Duration::from_secs(3)),
-                    Err(mpsc::RecvTimeoutError::Timeout)
-                ) {
-                    safety_gate.release.store(true, Ordering::Release);
-                    if let Some(mut writer) = safety_writer {
-                        let _ = writer.write_all(b"R");
-                    }
-                }
-            });
-            let fixture = Fixture {
-                gate: gate.clone(),
-                writer,
-                slot,
-                stop: Some(stop),
-                watchdog: Some(watchdog),
-            };
-            let worker_gate = gate.clone();
-            let deadline = Instant::now() + Duration::from_millis(100);
-            // A later caller deadline must not renew this reservation's clock.
-            guard.cleanup_deadline = Some(deadline);
-            let result = guard.finish_owned_with(deadline + Duration::from_secs(10), move || {
-                let mut thread = std::ptr::null_mut();
-                let copied = unsafe {
-                    DuplicateHandle(
-                        GetCurrentProcess(),
-                        GetCurrentThread(),
-                        GetCurrentProcess(),
-                        &mut thread,
-                        0,
-                        0,
-                        DUPLICATE_SAME_ACCESS,
-                    )
-                };
-                if copied != 0 {
-                    *worker_gate
-                        .worker
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((
-                        unsafe { OwnedHandle::from_raw_handle(thread) },
-                        std::thread::current().id(),
-                    ));
-                }
-                if let Some(slot) = slot {
-                    let raw = Arc::into_raw(worker_gate.clone());
-                    if unsafe { FlsSetValue(slot, raw.cast()) } == 0 {
-                        unsafe {
-                            drop(Arc::from_raw(raw));
-                        }
-                    }
-                } else if let Some(reader) = reader {
-                    worker_gate.entered.store(true, Ordering::Release);
-                    let mut byte = 0u8;
-                    let mut read = 0;
-                    unsafe {
-                        ReadFile(
-                            reader.as_raw_handle(),
-                            &mut byte,
-                            1,
-                            &mut read,
-                            std::ptr::null_mut(),
-                        );
-                    }
-                }
-            });
-            let (pending, owned, id) = {
-                let observed = gate
-                    .worker
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                let (handle, id) = observed
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("native worker observation"))?;
-                (
-                    unsafe { WaitForSingleObject(handle.as_raw_handle(), 0) } == WAIT_TIMEOUT,
-                    retained::contains(*id),
-                    *id,
-                )
-            };
-            let pipe_owned = exit_callback
-                || raw_reader
-                    .is_some_and(|handle| unsafe { GetFileType(handle) } == FILE_TYPE_PIPE);
-            let before_release = !gate.release.load(Ordering::Acquire);
-            let entered = gate.entered.load(Ordering::Acquire);
-            let unchanged = fs::read(&state_path)? == original;
-            let mutex_still_owned = exit_callback
-                || WindowsSandboxNamedMutexGuard::acquire_until(
-                    &mutex_name,
-                    Instant::now() + Duration::from_millis(20),
-                )
-                .is_err();
-            let original_denied = WindowsSandboxCrossProcessGate::acquire(&key)
-                .is_err_and(|error| cleanup_failed(&error));
-            let changed_denied =
-                WindowsSandboxCrossProcessGate::acquire(&WindowsSandboxPolicyCohortKey {
-                    policy_hash: "policy-b".into(),
-                    ..key.clone()
-                })
-                .is_err_and(|error| cleanup_failed(&error));
-            drop(fixture);
-            let gone = {
-                let observed = gate
-                    .worker
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                observed.as_ref().is_some_and(|(handle,_)| unsafe { WaitForSingleObject(handle.as_raw_handle(),0) } == WAIT_OBJECT_0)
-            };
-            let late_unchanged = fs::read(&state_path)? == original;
-            // Remove only this fixture's metadata and native signal after worker exit.
-            let reset = unsafe { ResetEvent(signal.handle.as_raw_handle()) };
-            retained_quarantine_signals()
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .retain(|value| value.name != signal.name);
-            fs::remove_file(&state_path)?;
-            anyhow::ensure!(
-                result.is_err_and(|error| cleanup_failed(&error)),
-                "unverified worker must fail cleanup"
-            );
-            assert!(pending && owned && pipe_owned && entered && before_release);
-            assert!(mutex_still_owned && original_denied && changed_denied);
-            assert!(gone && !retained::contains(id));
-            assert_ne!(reset, 0);
-            if !exit_callback {
-                assert!(
-                    unchanged && late_unchanged,
-                    "expired state read cannot publish a late release"
-                );
-            }
-        }
-        Ok(())
-    }
-    struct ReleaseObserver {
-        reservation: Option<WindowsSandboxCrossProcessGate>,
-        hook: Option<Box<dyn FnOnce() + Send>>,
-        control: crate::execution::ExecutionControl,
-        gate: Arc<NativeGate>,
-        cwd: PathBuf,
-        target: Option<OwnedHandle>,
-        terminal_pending: bool,
-        target_exited: bool,
-        terminal_durable: bool,
-        events: Vec<Value>,
-    }
-    impl crate::execution::ExecutionObserver for ReleaseObserver {
-        fn event(&mut self, event: &Value) -> Result<(), crate::error::RunSealError> {
-            use windows_sys::Win32::System::Threading::{
-                GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-                PROCESS_SYNCHRONIZE,
-            };
-            let pid_path = self.cwd.join("target.pid");
-            if self.target.is_none() && pid_path.exists() {
-                let pid = fs::read_to_string(&pid_path)
-                    .ok()
-                    .and_then(|text| text.parse::<u32>().ok())
-                    .unwrap_or(0);
-                let handle = unsafe {
-                    OpenProcess(
-                        PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
-                        0,
-                        pid,
-                    )
-                };
-                if !handle.is_null() {
-                    self.target = Some(unsafe { OwnedHandle::from_raw_handle(handle) });
-                    self.gate.target_started.store(true, Ordering::Release);
-                    fs::write(self.cwd.join("release"), b"R").map_err(|_| {
-                        crate::error::RunSealError::new("INTERNAL_ERROR", "target release")
-                    })?;
-                }
-            }
-            if matches!(
-                event["type"].as_str(),
-                Some("execution.finished" | "execution.failed")
-            ) {
-                self.terminal_pending = self.gate.entered.load(Ordering::Acquire)
-                    && self.gate.worker.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref().is_some_and(|(handle,_)| unsafe { WaitForSingleObject(handle.as_raw_handle(),0) } == WAIT_TIMEOUT);
-                self.target_exited = self.target.as_ref().is_some_and(|handle| {
-                    let mut code = 0;
-                    (unsafe { WaitForSingleObject(handle.as_raw_handle(), 0) } == WAIT_OBJECT_0)
-                        && unsafe { GetExitCodeProcess(handle.as_raw_handle(), &mut code) } != 0
-                        && code == 7
-                });
-                self.terminal_durable = event["audit_path"]
-                    .as_str()
-                    .and_then(|path| fs::read_to_string(self.cwd.join(path)).ok())
-                    .and_then(|text| {
-                        text.lines()
-                            .last()
-                            .and_then(|line| serde_json::from_str::<Value>(line).ok())
-                    })
-                    .as_ref()
-                    == Some(event);
-            }
-            self.events.push(event.clone());
-            Ok(())
-        }
-        fn cleanup(
-            &mut self,
-            deadline: Instant,
-            confirmed: bool,
-        ) -> Result<(), crate::error::RunSealError> {
-            let Some(mut guard) = self.reservation.take() else {
-                return Ok(());
-            };
-            if !confirmed {
-                let _ = guard.mark_quarantined();
-                return Err(crate::error::RunSealError::new(
-                    "EXECUTION_CLEANUP_FAILED",
-                    "unconfirmed execution cleanup",
-                ));
-            }
-            let deadline = deadline.min(Instant::now() + Duration::from_millis(100));
-            self.control.adopt_cleanup_deadline(deadline);
-            guard.cleanup_deadline = Some(deadline);
-            let hook = self
-                .hook
-                .take()
-                .ok_or_else(|| crate::error::RunSealError::new("INTERNAL_ERROR", "release hook"))?;
-            guard
-                .finish_owned_with(deadline + Duration::from_secs(10), hook)
-                .map_err(|_| {
-                    crate::error::RunSealError::new(
-                        "EXECUTION_CLEANUP_FAILED",
-                        "execution policy cleanup could not be verified",
-                    )
-                })
-        }
-    }
-
-    #[test]
-    fn native_policy_release_failure_commits_after_real_exit_before_worker_exit()
-    -> anyhow::Result<()> {
-        let tmp = tempfile::TempDir::new()?;
-        let key = WindowsSandboxPolicyCohortKey {
-            binding_key: format!("release-terminal-fixture:{}", tmp.path().display()),
-            policy_hash: "policy-a".into(),
-        };
-        let guard = WindowsSandboxCrossProcessGate::acquire(&key)?;
-        let state_path = guard.state_path.clone();
-        let signal = guard.quarantine.clone();
-        let gate = Arc::new(NativeGate::default());
-        let slot = unsafe { FlsAlloc(Some(hold_exit)) };
-        anyhow::ensure!(slot != u32::MAX, "native exit slot");
-        let safety_gate = gate.clone();
-        let (stop, stopped) = mpsc::channel();
-        let watchdog = std::thread::spawn(move || {
-            let startup_deadline = Instant::now() + Duration::from_secs(15);
-            while !safety_gate.target_started.load(Ordering::Acquire) {
-                if Instant::now() >= startup_deadline {
-                    safety_gate.release.store(true, Ordering::Release);
-                    return;
-                }
-                match stopped.recv_timeout(Duration::from_millis(50)) {
-                    Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
-                    Err(mpsc::RecvTimeoutError::Timeout) => {}
-                }
-            }
-            if matches!(
-                stopped.recv_timeout(Duration::from_secs(3)),
-                Err(mpsc::RecvTimeoutError::Timeout)
-            ) {
-                safety_gate.release.store(true, Ordering::Release);
-            }
-        });
-        let fixture = Fixture {
-            gate: gate.clone(),
-            writer: None,
-            slot: Some(slot),
-            stop: Some(stop),
-            watchdog: Some(watchdog),
-        };
-        let worker_gate = gate.clone();
-        let hook = Box::new(move || {
-            let mut thread = std::ptr::null_mut();
-            if unsafe {
-                DuplicateHandle(
-                    GetCurrentProcess(),
-                    GetCurrentThread(),
-                    GetCurrentProcess(),
-                    &mut thread,
-                    0,
-                    0,
-                    DUPLICATE_SAME_ACCESS,
-                )
-            } != 0
-            {
-                *worker_gate
-                    .worker
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((
-                    unsafe { OwnedHandle::from_raw_handle(thread) },
-                    std::thread::current().id(),
-                ));
-            }
-            let raw = Arc::into_raw(worker_gate);
-            if unsafe { FlsSetValue(slot, raw.cast()) } == 0 {
-                unsafe {
-                    drop(Arc::from_raw(raw));
-                }
-            }
-        });
-        let control = crate::execution::ExecutionControl::default();
-        let request=crate::execution::ExecutionRequest {
-            ids:crate::events::new_execution_ids(),control:control.clone(),
-            command:vec!["python".into(),"-u".into(),"-c".into(),"import os,pathlib,sys,time; p=pathlib.Path('target.pid'); t=p.with_suffix('.tmp'); t.write_text(str(os.getpid())); t.replace(p); print('READY',flush=True); deadline=time.monotonic()+5\nwhile not pathlib.Path('release').exists() and time.monotonic()<deadline: time.sleep(.01)\nsys.exit(7)".into()],
-            cwd:tmp.path().to_owned(),policy:crate::policy::normalize_policy(&json!("danger-full-access"),tmp.path(),None).map_err(|error|anyhow::anyhow!(error.reason))?,
-            stdin:crate::backend::ExecutionStdin::Empty,control_input:None,io:crate::backend::ExecutionIo::Pipe,env:crate::backend::ExecutionEnv::default(),metadata:None,timeout:Some(Duration::from_secs(30)),
-        };
-        let mut observer = ReleaseObserver {
-            reservation: Some(guard),
-            hook: Some(hook),
-            control,
-            gate: gate.clone(),
-            cwd: tmp.path().to_owned(),
-            target: None,
-            terminal_pending: false,
-            target_exited: false,
-            terminal_durable: false,
-            events: Vec::new(),
-        };
-        let result = crate::execution::execute_command_with_observer(request, &mut observer);
-        let pending = observer.terminal_pending;
-        let exited = observer.target_exited;
-        let durable = observer.terminal_durable;
-        let terminal = observer
-            .events
-            .iter()
-            .find(|event| {
-                matches!(
-                    event["type"].as_str(),
-                    Some("execution.finished" | "execution.failed")
-                )
-            })
-            .cloned();
-        let denied = WindowsSandboxCrossProcessGate::acquire(&key)
-            .is_err_and(|error| cleanup_failed(&error));
-        let worker_id = gate
-            .worker
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_ref()
-            .map(|(_, id)| *id);
-        drop(fixture);
-        let reset = unsafe { ResetEvent(signal.handle.as_raw_handle()) };
-        retained_quarantine_signals()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .retain(|value| value.name != signal.name);
-        fs::remove_file(state_path)?;
-        assert!(pending && exited && durable && denied);
-        assert!(worker_id.is_some_and(|id| !retained::contains(id)));
-        assert_ne!(reset, 0);
-        assert!(result.is_err_and(|error| error.code == "EXECUTION_CLEANUP_FAILED"));
-        let terminal = terminal.ok_or_else(|| anyhow::anyhow!("terminal"))?;
-        assert_eq!(terminal["result"]["cleanup_complete"], false);
-        assert_eq!(terminal["result"]["exit_code"], 7);
-        assert_eq!(terminal["result"]["requested_termination_reason"], "exited");
-        assert_eq!(
-            observer
-                .events
-                .iter()
-                .filter(|event| matches!(
-                    event["type"].as_str(),
-                    Some("execution.finished" | "execution.failed")
-                ))
-                .count(),
-            1
-        );
-        Ok(())
-    }
-    struct StateReaderFixture {
-        gate: Arc<NativeGate>,
-        server: Arc<Mutex<Option<fs::File>>>,
-        server_worker: Option<std::thread::JoinHandle<()>>,
-        stop: Option<mpsc::Sender<()>>,
-        watchdog: Option<std::thread::JoinHandle<()>>,
-    }
-    impl Drop for StateReaderFixture {
-        fn drop(&mut self) {
-            if let Some(stop) = self.stop.take() {
-                let _ = stop.send(());
-            }
-            self.gate.release.store(true, Ordering::Release);
-            self.server
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .take();
-            if let Some(worker) = self.server_worker.take() {
-                unsafe {
-                    windows_sys::Win32::System::IO::CancelSynchronousIo(worker.as_raw_handle());
-                }
-                let ended =
-                    unsafe { WaitForSingleObject(worker.as_raw_handle(), 2000) } == WAIT_OBJECT_0;
-                if ended {
-                    let _ = worker.join();
-                } else {
-                    retained::retain(worker);
-                }
-            }
-            if let Some((handle, id)) = self
-                .gate
-                .worker
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .as_ref()
-                && unsafe { WaitForSingleObject(handle.as_raw_handle(), 2000) } == WAIT_OBJECT_0
-            {
-                retained::join_finished(*id);
-            }
-            if let Some(watchdog) = self.watchdog.take() {
-                let _ = watchdog.join();
-            }
-        }
-    }
-
-    #[test]
-    fn production_state_file_read_stall_retains_native_mutex_and_worker_before_server_eof()
-    -> anyhow::Result<()> {
-        use windows_sys::Win32::Foundation::{ERROR_PIPE_CONNECTED, INVALID_HANDLE_VALUE};
-        use windows_sys::Win32::System::Pipes::{
-            ConnectNamedPipe, CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE, PIPE_WAIT,
-        };
-        let tmp = tempfile::TempDir::new()?;
-        let key = WindowsSandboxPolicyCohortKey {
-            binding_key: format!("state-reader-fixture:{}", tmp.path().display()),
-            policy_hash: "policy-a".into(),
-        };
-        let mut guard = WindowsSandboxCrossProcessGate::acquire(&key)?;
-        let original_path = guard.state_path.clone();
-        let original = fs::read(&original_path)?;
-        let signal = guard.quarantine.clone();
-        let mutex_name = guard.mutex_name.clone();
-        let pipe_name = format!(
-            r"\\.\pipe\RunSealStateRead-{}",
-            crate::events::new_execution_ids().execution_id
-        );
-        let name = to_wide(OsStr::new(&pipe_name));
-        let handle = unsafe {
-            CreateNamedPipeW(
-                name.as_ptr(),
-                0x0000_0002,
-                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-                1,
-                4096,
-                4096,
-                0,
-                std::ptr::null_mut(),
-            )
-        };
-        anyhow::ensure!(handle != INVALID_HANDLE_VALUE, "state read native pipe");
-        let server_file = unsafe { fs::File::from_raw_handle(handle) };
-        let server = Arc::new(Mutex::new(None));
-        let server_state = server.clone();
-        let connected = Arc::new(AtomicBool::new(false));
-        let server_connected = connected.clone();
-        let bytes = original.clone();
-        let server_worker = std::thread::spawn(move || {
-            let mut file = server_file;
-            let connected = unsafe { ConnectNamedPipe(file.as_raw_handle(), std::ptr::null_mut()) }
-                != 0
-                || unsafe { GetLastError() } == ERROR_PIPE_CONNECTED;
-            if connected && file.write_all(&bytes).is_ok() {
-                *server_state
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(file);
-                server_connected.store(true, Ordering::Release);
-            }
-        });
-        let mut native_server_thread = std::ptr::null_mut();
-        let copied = unsafe {
-            DuplicateHandle(
-                GetCurrentProcess(),
-                server_worker.as_raw_handle(),
-                GetCurrentProcess(),
-                &mut native_server_thread,
-                0,
-                0,
-                DUPLICATE_SAME_ACCESS,
-            )
-        };
-        anyhow::ensure!(copied != 0, "server native observation");
-        let native_server_thread = unsafe { OwnedHandle::from_raw_handle(native_server_thread) };
-        let gate = Arc::new(NativeGate::default());
-        let safety_gate = gate.clone();
-        let safety_server = server.clone();
-        let (stop, stopped) = mpsc::channel();
-        let watchdog = std::thread::spawn(move || {
-            if matches!(
-                stopped.recv_timeout(Duration::from_secs(3)),
-                Err(mpsc::RecvTimeoutError::Timeout)
-            ) {
-                safety_gate.release.store(true, Ordering::Release);
-                safety_server
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .take();
-                unsafe {
-                    windows_sys::Win32::System::IO::CancelSynchronousIo(
-                        native_server_thread.as_raw_handle(),
-                    );
-                }
-            }
-        });
-        let fixture = StateReaderFixture {
-            gate: gate.clone(),
-            server: server.clone(),
-            server_worker: Some(server_worker),
-            stop: Some(stop),
-            watchdog: Some(watchdog),
-        };
-        guard.state_path = PathBuf::from(pipe_name);
-        let deadline = Instant::now() + Duration::from_millis(100);
-        guard.cleanup_deadline = Some(deadline);
-        let worker_gate = gate.clone();
-        let result = guard.finish_owned_with(deadline + Duration::from_secs(10), move || {
-            let mut thread = std::ptr::null_mut();
-            if unsafe {
-                DuplicateHandle(
-                    GetCurrentProcess(),
-                    GetCurrentThread(),
-                    GetCurrentProcess(),
-                    &mut thread,
-                    0,
-                    0,
-                    DUPLICATE_SAME_ACCESS,
-                )
-            } != 0
-            {
-                *worker_gate
-                    .worker
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((
-                    unsafe { OwnedHandle::from_raw_handle(thread) },
-                    std::thread::current().id(),
-                ));
-            }
-            worker_gate.entered.store(true, Ordering::Release);
-            // The hook observes ownership only. Production fs::read_to_string
-            // opens this named pipe and blocks waiting for the server's EOF.
-        });
-        let (pending, owned, id) = {
-            let worker = gate
-                .worker
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let (handle, id) = worker
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("native state reader observation"))?;
-            (
-                unsafe { WaitForSingleObject(handle.as_raw_handle(), 0) } == WAIT_TIMEOUT,
-                retained::contains(*id),
-                *id,
-            )
-        };
-        let real_connection = connected.load(Ordering::Acquire);
-        let server_owned = server
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_ref()
-            .is_some_and(|file| unsafe { GetFileType(file.as_raw_handle()) } == FILE_TYPE_PIPE);
-        let before_eof = !gate.release.load(Ordering::Acquire);
-        let mutex_owned = WindowsSandboxNamedMutexGuard::acquire_until(
-            &mutex_name,
-            Instant::now() + Duration::from_millis(20),
-        )
-        .is_err();
-        let original_denied = WindowsSandboxCrossProcessGate::acquire(&key)
-            .is_err_and(|error| cleanup_failed(&error));
-        let changed_denied =
-            WindowsSandboxCrossProcessGate::acquire(&WindowsSandboxPolicyCohortKey {
-                policy_hash: "policy-b".into(),
-                ..key
-            })
-            .is_err_and(|error| cleanup_failed(&error));
-        let unchanged = fs::read(&original_path)? == original;
-        drop(fixture);
-        let native_gone=gate.worker.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref().is_some_and(|(handle,_)|unsafe {WaitForSingleObject(handle.as_raw_handle(),0)}==WAIT_OBJECT_0);
-        let reset = unsafe { ResetEvent(signal.handle.as_raw_handle()) };
-        retained_quarantine_signals()
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .retain(|value| value.name != signal.name);
-        fs::remove_file(original_path)?;
-        assert!(result.is_err_and(|error| cleanup_failed(&error)));
-        assert!(
-            real_connection
-                && server_owned
-                && before_eof
-                && pending
-                && owned
-                && mutex_owned
-                && unchanged
-        );
-        assert!(original_denied && changed_denied);
-        assert!(native_gone && !retained::contains(id));
-        assert_ne!(reset, 0);
         Ok(())
     }
 }
