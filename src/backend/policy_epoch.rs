@@ -57,6 +57,7 @@ impl WindowsSandboxExecutionGate {
     pub(super) fn finish_owned(self, deadline: std::time::Instant) -> io::Result<()> {
         let result = self._cross_process.finish_owned(deadline);
         if result.is_err() {
+            super::record_test_cleanup_trace("policy_gate_release_failed");
             let mut state = windows_sandbox_execution_gate_lock()
                 .state
                 .lock()
@@ -148,11 +149,13 @@ impl WindowsSandboxCrossProcessGate {
                 let _ = completed.send(result);
             })
             .map_err(|_| {
+                super::record_test_cleanup_trace("policy_release_worker_spawn_failed");
                 let _ = mark_cross_process_quarantined(&quarantined, &quarantine);
                 io::Error::other(BackendCleanupError)
             })?;
         loop {
             if std::time::Instant::now() >= deadline {
+                super::record_test_cleanup_trace("policy_release_deadline");
                 let _ = mark_cross_process_quarantined(&quarantined, &quarantine);
                 if retained::thread_finished(&worker) {
                     let _ = worker.join();
@@ -165,8 +168,13 @@ impl WindowsSandboxCrossProcessGate {
                 let joined = worker.join();
                 let result = completion.try_recv();
                 return match (joined, result) {
-                    (Ok(()), Ok(result)) => result,
+                    (Ok(()), Ok(Ok(()))) => Ok(()),
+                    (Ok(()), Ok(Err(error))) => {
+                        super::record_test_cleanup_trace("policy_release_operation_failed");
+                        Err(error)
+                    }
                     _ => {
+                        super::record_test_cleanup_trace("policy_release_worker_failed");
                         let _ = mark_cross_process_quarantined(&quarantined, &quarantine);
                         Err(io::Error::other(BackendCleanupError))
                     }

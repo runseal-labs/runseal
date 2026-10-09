@@ -39,23 +39,6 @@ fn failure_exit(error: &RunSealError) -> i32 {
     }
 }
 
-fn record_exec_cleanup_trace(stage: &str) {
-    #[cfg(all(windows, debug_assertions))]
-    if let Some(path) = std::env::var_os("RUNSEAL_TEST_CLEANUP_TRACE") {
-        use std::io::Write;
-        if let Ok(mut file) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-        {
-            let _ = writeln!(file, "{stage}");
-        }
-    }
-
-    #[cfg(not(all(windows, debug_assertions)))]
-    let _ = stage;
-}
-
 fn finish_outputs(
     stdout: &mut output::Output,
     stderr: &mut output::Output,
@@ -382,16 +365,16 @@ impl crate::execution::ExecutionObserver for Frontend<'_> {
             .as_mut()
             .map_or(Ok(()), |control| control.finish(output_deadline));
         if input.is_err() {
-            record_exec_cleanup_trace("frontend_input_cleanup_failed");
+            crate::backend::record_test_cleanup_trace("frontend_input_cleanup_failed");
         }
         if signals.is_err() {
-            record_exec_cleanup_trace("frontend_signal_cleanup_failed");
+            crate::backend::record_test_cleanup_trace("frontend_signal_cleanup_failed");
         }
         if terminal.is_err() {
-            record_exec_cleanup_trace("frontend_terminal_cleanup_failed");
+            crate::backend::record_test_cleanup_trace("frontend_terminal_cleanup_failed");
         }
         if control.is_err() {
-            record_exec_cleanup_trace("frontend_control_cleanup_failed");
+            crate::backend::record_test_cleanup_trace("frontend_control_cleanup_failed");
         }
         input
             .and(signals)

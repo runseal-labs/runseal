@@ -55,6 +55,20 @@ use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::process::Output;
+
+pub(crate) fn record_test_cleanup_trace(stage: &str) {
+    #[cfg(all(windows, debug_assertions))]
+    if let Some(path) = std::env::var_os("RUNSEAL_TEST_CLEANUP_TRACE") {
+        use std::io::Write;
+        if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
+            let _ = writeln!(file, "{stage}");
+        }
+    }
+
+    #[cfg(not(all(windows, debug_assertions)))]
+    let _ = stage;
+}
+
 #[cfg(windows)]
 use {
     codex_protocol::models::PermissionProfile,

@@ -15,23 +15,6 @@ use crate::stdin::stdin_audit_json;
 use serde_json::{Value, json};
 use std::time::Instant;
 
-fn record_cleanup_trace(stage: &str) {
-    #[cfg(all(windows, debug_assertions))]
-    if let Some(path) = std::env::var_os("RUNSEAL_TEST_CLEANUP_TRACE") {
-        use std::io::Write;
-        if let Ok(mut file) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-        {
-            let _ = writeln!(file, "{stage}");
-        }
-    }
-
-    #[cfg(not(all(windows, debug_assertions)))]
-    let _ = stage;
-}
-
 pub(crate) trait ExecutionObserver {
     fn event(&mut self, event: &Value) -> Result<(), RunSealError>;
 
@@ -341,7 +324,7 @@ fn execute_prepared_with_backend_and_timer<B: SandboxBackend + Send + Sync + 'st
         .as_mut()
         .map_or(Ok(()), |deadline| deadline.finish(control.begin_cleanup()));
     if timer_cleanup.is_err() {
-        record_cleanup_trace("timer_cleanup_failed");
+        crate::backend::record_test_cleanup_trace("timer_cleanup_failed");
     }
     let outcome = finalize_frontend(outcome, &control, timer_cleanup);
     let cleanup_confirmed = outcome.as_ref().map_or_else(
@@ -354,7 +337,9 @@ fn execute_prepared_with_backend_and_timer<B: SandboxBackend + Send + Sync + 'st
         |result| result["cleanup_complete"] == true,
     );
     if !cleanup_confirmed {
-        record_cleanup_trace("execution_cleanup_unconfirmed_before_reservation");
+        crate::backend::record_test_cleanup_trace(
+            "execution_cleanup_unconfirmed_before_reservation",
+        );
     }
     let reservation_cleanup = reservation.as_mut().map_or(Ok(()), |reservation| {
         reservation
@@ -367,7 +352,7 @@ fn execute_prepared_with_backend_and_timer<B: SandboxBackend + Send + Sync + 'st
             })
     });
     if reservation_cleanup.is_err() {
-        record_cleanup_trace("reservation_cleanup_failed");
+        crate::backend::record_test_cleanup_trace("reservation_cleanup_failed");
     }
     let outcome = finalize_frontend(outcome, &control, reservation_cleanup);
     let cleanup_confirmed = outcome.as_ref().map_or_else(
@@ -381,7 +366,7 @@ fn execute_prepared_with_backend_and_timer<B: SandboxBackend + Send + Sync + 'st
     );
     let cleanup = observer.cleanup(control.begin_cleanup(), cleanup_confirmed);
     if cleanup.is_err() {
-        record_cleanup_trace("observer_cleanup_failed");
+        crate::backend::record_test_cleanup_trace("observer_cleanup_failed");
     }
     let outcome = finalize_frontend(outcome, &control, cleanup);
     journal.finish(outcome, &control, &mut |event| observer.event(event))
@@ -396,7 +381,7 @@ fn execute_inner<B: SandboxBackend + Send + Sync + 'static>(
     timer: Instant,
     reservation: &mut Option<crate::backend::ExecutionReservation>,
 ) -> Result<Value, RunSealError> {
-    record_cleanup_trace("engine_started");
+    crate::backend::record_test_cleanup_trace("engine_started");
     let ExecutionRequest {
         ids,
         control,
@@ -789,11 +774,11 @@ fn execute_inner<B: SandboxBackend + Send + Sync + 'static>(
             _ => Err(std::io::Error::other("execution backend worker failed")),
         }
     } else {
-        record_cleanup_trace("backend_worker_exit_timeout");
+        crate::backend::record_test_cleanup_trace("backend_worker_exit_timeout");
         super::retained::retain(worker);
         match backend_result {
             Some(Ok(mut output)) => {
-                record_cleanup_trace(if output.cleanup_complete {
+                crate::backend::record_test_cleanup_trace(if output.cleanup_complete {
                     "backend_worker_exit_timeout_after_success"
                 } else {
                     "backend_worker_exit_timeout_after_incomplete_success"
@@ -802,7 +787,9 @@ fn execute_inner<B: SandboxBackend + Send + Sync + 'static>(
                 Ok(output)
             }
             result => {
-                record_cleanup_trace("backend_worker_exit_timeout_after_error");
+                crate::backend::record_test_cleanup_trace(
+                    "backend_worker_exit_timeout_after_error",
+                );
                 Err(std::io::Error::other(crate::backend::BackendCleanupFacts {
                     exit_code: result
                         .as_ref()
@@ -846,7 +833,7 @@ fn execute_inner<B: SandboxBackend + Send + Sync + 'static>(
     }
     let backend_error = backend_result.as_ref().err();
     if backend_error.is_some() {
-        record_cleanup_trace("backend_returned_error");
+        crate::backend::record_test_cleanup_trace("backend_returned_error");
     }
     let backend_input_failed = backend_error.is_some_and(crate::backend::input_failed);
     let backend_cleanup_failed = backend_error.is_some_and(crate::backend::cleanup_failed);
@@ -868,7 +855,7 @@ fn execute_inner<B: SandboxBackend + Send + Sync + 'static>(
         || backend_cleanup_failed
         || (started_at.is_some() && backend_result.is_err() && !backend_input_failed);
     if cleanup_failed && backend_error.is_none() {
-        record_cleanup_trace("backend_reported_incomplete_cleanup");
+        crate::backend::record_test_cleanup_trace("backend_reported_incomplete_cleanup");
     }
     if cleanup_failed {
         if backend_result

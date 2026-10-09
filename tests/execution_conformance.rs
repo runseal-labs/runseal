@@ -5551,6 +5551,11 @@ fn read_console_cleanup_trace(workspace: &std::path::Path) -> String {
         "frontend_signal_cleanup_failed",
         "frontend_terminal_cleanup_failed",
         "frontend_control_cleanup_failed",
+        "policy_gate_release_failed",
+        "policy_release_worker_spawn_failed",
+        "policy_release_deadline",
+        "policy_release_operation_failed",
+        "policy_release_worker_failed",
     ];
     let mut stages = Vec::new();
     for line in contents.lines() {
