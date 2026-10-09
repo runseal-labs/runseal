@@ -1943,13 +1943,30 @@ fn network_proxy_credentials_are_redacted_when_supported_or_fails_closed() -> Re
     let tmp = TempDir::new()?;
     let workspace = tmp.path().join("workspace");
     fs::create_dir_all(&workspace)?;
+    let code = "print('proxy-redaction-ok')".to_string();
+    #[cfg(not(windows))]
     let response = execute_platform_script(
         "workspace-write",
         &workspace,
         Some("proxy"),
-        "print('proxy-redaction-ok')".to_string(),
-        "Write-Output proxy-redaction-ok".to_string(),
+        code,
+        String::new(),
     )?;
+    #[cfg(windows)]
+    let response = {
+        let mut params = platform_script_params(
+            "workspace-write",
+            &workspace,
+            Some("proxy"),
+            String::new(),
+            String::new(),
+        );
+        // Bound this output-only probe so a stalled fixture cannot outlive the
+        // RPC watchdog and leave the prepared execution gate contaminated.
+        params["command"] = json!([windows_python_bin()?, "-u", "-c", code]);
+        params["timeout_ms"] = json!(3_000);
+        execute_params(params)?
+    };
 
     if is_backend_missing(&response) {
         let expected_features = expected_missing_features(&["network_proxy", "managed_proxy"]);
