@@ -139,6 +139,7 @@ fn platform_script_command(_python_code: String, powershell_script: String) -> V
     vec![
         powershell_bin().to_string(),
         "-NoProfile".to_string(),
+        "-NonInteractive".to_string(),
         "-Command".to_string(),
         powershell_script,
     ]
@@ -278,15 +279,19 @@ fn execute_messages_unlocked(params: Value) -> Result<Vec<Value>> {
 }
 
 fn execute_messages_unlocked_with_watchdog(
-    mut params: Value,
+    params: Value,
     watchdog: Duration,
 ) -> Result<Vec<Value>> {
     #[cfg(windows)]
-    if params.get("timeout_ms").is_none()
-        && let Some(object) = params.as_object_mut()
-    {
-        object.insert("timeout_ms".to_string(), json!(30_000));
-    }
+    let params = {
+        let mut params = params;
+        if params.get("timeout_ms").is_none()
+            && let Some(object) = params.as_object_mut()
+        {
+            object.insert("timeout_ms".to_string(), json!(30_000));
+        }
+        params
+    };
     let output = run_rpc_with_watchdog(&rpc_request("execute", params), watchdog)?;
 
     assert!(
