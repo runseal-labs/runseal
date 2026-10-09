@@ -5192,6 +5192,13 @@ fn cli_stalled_console_output_for_policy(policy: &str) -> Result<()> {
         ];
         let mut environment = std::env::vars().collect::<std::collections::HashMap<_, _>>();
         environment.insert(
+            "RUNSEAL_TEST_CLEANUP_TRACE".into(),
+            tmp.path()
+                .join("cleanup.trace")
+                .to_string_lossy()
+                .into_owned(),
+        );
+        environment.insert(
             "RUNSEAL_BACKPRESSURE_MS".into(),
             if timeout { "15000" } else { "3000" }.into(),
         );
@@ -5237,8 +5244,9 @@ fn cli_stalled_console_output_for_policy(policy: &str) -> Result<()> {
                     .count();
                 let terminals = read_console_terminal_summary(tmp.path());
                 let cleanup_stage = read_console_cleanup_stage(tmp.path(), &runner_log_offsets);
+                let lifecycle_trace = read_console_cleanup_trace(tmp.path());
                 anyhow::bail!(
-                    "stalled Console CLI cleanup did not finish for {policy} (driver_exited={driver_exited}, command_running={command_running}, sandbox_processes_running={sandbox_processes_running}, terminal={terminals}, cleanup_stage={cleanup_stage})"
+                    "stalled Console CLI cleanup did not finish for {policy} (driver_exited={driver_exited}, command_running={command_running}, sandbox_processes_running={sandbox_processes_running}, terminal={terminals}, cleanup_stage={cleanup_stage}, lifecycle_trace={lifecycle_trace})"
                 );
             }
             std::thread::sleep(Duration::from_millis(5));
@@ -5520,6 +5528,32 @@ fn read_console_cleanup_stage(
         stages.join(",")
     };
     format!("{stages}; changed_logs={changed_logs}; readable_logs={readable_logs}")
+}
+
+#[cfg(windows)]
+fn read_console_cleanup_trace(workspace: &std::path::Path) -> String {
+    let Ok(contents) = std::fs::read_to_string(workspace.join("cleanup.trace")) else {
+        return "none".to_owned();
+    };
+    let allowed = [
+        "backend_worker_exit_timeout",
+        "backend_worker_exit_timeout_after_success",
+        "backend_worker_exit_timeout_after_incomplete_success",
+        "backend_worker_exit_timeout_after_error",
+        "backend_returned_error",
+        "backend_reported_incomplete_cleanup",
+    ];
+    let mut stages = Vec::new();
+    for line in contents.lines() {
+        if allowed.contains(&line) && !stages.contains(&line) {
+            stages.push(line);
+        }
+    }
+    if stages.is_empty() {
+        "none".to_owned()
+    } else {
+        stages.join(",")
+    }
 }
 
 #[cfg(windows)]

@@ -15,6 +15,23 @@ use crate::stdin::stdin_audit_json;
 use serde_json::{Value, json};
 use std::time::Instant;
 
+fn record_cleanup_trace(stage: &str) {
+    #[cfg(all(windows, debug_assertions))]
+    if let Some(path) = std::env::var_os("RUNSEAL_TEST_CLEANUP_TRACE") {
+        use std::io::Write;
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
+            let _ = writeln!(file, "{stage}");
+        }
+    }
+
+    #[cfg(not(all(windows, debug_assertions)))]
+    let _ = stage;
+}
+
 pub(crate) trait ExecutionObserver {
     fn event(&mut self, event: &Value) -> Result<(), RunSealError>;
 
@@ -759,22 +776,31 @@ fn execute_inner<B: SandboxBackend + Send + Sync + 'static>(
             _ => Err(std::io::Error::other("execution backend worker failed")),
         }
     } else {
+        record_cleanup_trace("backend_worker_exit_timeout");
         super::retained::retain(worker);
         match backend_result {
             Some(Ok(mut output)) => {
+                record_cleanup_trace(if output.cleanup_complete {
+                    "backend_worker_exit_timeout_after_success"
+                } else {
+                    "backend_worker_exit_timeout_after_incomplete_success"
+                });
                 output.cleanup_complete = false;
                 Ok(output)
             }
-            result => Err(std::io::Error::other(crate::backend::BackendCleanupFacts {
-                exit_code: result
-                    .as_ref()
-                    .and_then(|result| result.as_ref().err())
-                    .and_then(crate::backend::failure_exit_code),
-                timed_out: result
-                    .as_ref()
-                    .and_then(|result| result.as_ref().err())
-                    .is_some_and(crate::backend::failure_timed_out),
-            })),
+            result => {
+                record_cleanup_trace("backend_worker_exit_timeout_after_error");
+                Err(std::io::Error::other(crate::backend::BackendCleanupFacts {
+                    exit_code: result
+                        .as_ref()
+                        .and_then(|result| result.as_ref().err())
+                        .and_then(crate::backend::failure_exit_code),
+                    timed_out: result
+                        .as_ref()
+                        .and_then(|result| result.as_ref().err())
+                        .is_some_and(crate::backend::failure_timed_out),
+                }))
+            }
         }
     };
     if started_at.is_none()
@@ -806,6 +832,9 @@ fn execute_inner<B: SandboxBackend + Send + Sync + 'static>(
         ));
     }
     let backend_error = backend_result.as_ref().err();
+    if backend_error.is_some() {
+        record_cleanup_trace("backend_returned_error");
+    }
     let backend_input_failed = backend_error.is_some_and(crate::backend::input_failed);
     let backend_cleanup_failed = backend_error.is_some_and(crate::backend::cleanup_failed);
     let cleanup_complete = backend_result
@@ -825,6 +854,9 @@ fn execute_inner<B: SandboxBackend + Send + Sync + 'static>(
         .is_ok_and(|output| !output.cleanup_complete)
         || backend_cleanup_failed
         || (started_at.is_some() && backend_result.is_err() && !backend_input_failed);
+    if cleanup_failed && backend_error.is_none() {
+        record_cleanup_trace("backend_reported_incomplete_cleanup");
+    }
     if cleanup_failed {
         if backend_result
             .as_ref()
