@@ -353,6 +353,9 @@ fn execute_prepared_with_backend_and_timer<B: SandboxBackend + Send + Sync + 'st
         },
         |result| result["cleanup_complete"] == true,
     );
+    if !cleanup_confirmed {
+        record_cleanup_trace("execution_cleanup_unconfirmed_before_reservation");
+    }
     let reservation_cleanup = reservation.as_mut().map_or(Ok(()), |reservation| {
         reservation
             .finish(control.begin_cleanup(), cleanup_confirmed)
