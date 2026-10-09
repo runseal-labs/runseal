@@ -3130,6 +3130,168 @@ fn rpc_and_service_query_and_cancel_while_execution_is_running() -> Result<()> {
 #[cfg(windows)]
 #[test]
 #[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
+fn windows_sandboxed_plain_rpc_service_parity_for_same_policy_and_limits() -> Result<()> {
+    let _guard = process_test_gate();
+    let tmp = TempDir::new()?;
+    let output_limit = std::ffi::OsString::from("4096");
+    let expected_stdout = b"out\0bytes".to_vec();
+    let expected_stderr = b"err\0bytes".to_vec();
+    let expected_side_effect = (0..=31u8).collect::<Vec<_>>();
+    let command = vec![
+        python()?,
+        "-u".to_owned(),
+        "-c".to_owned(),
+        "import pathlib,sys; pathlib.Path('parity.bin').write_bytes(bytes(range(32))); sys.stdout.buffer.write(b'out\\x00bytes'); sys.stdout.buffer.flush(); sys.stderr.buffer.write(b'err\\x00bytes'); sys.stderr.buffer.flush(); sys.exit(7)".to_owned(),
+    ];
+
+    let cli_policy = Command::new(env!("CARGO_BIN_EXE_runseal"))
+        .env("RUNSEAL_MAX_OUTPUT_BYTES", output_limit.as_os_str())
+        .args(["explain-policy", "--policy", "workspace-write", "--cwd"])
+        .arg(tmp.path())
+        .output()?;
+    assert!(
+        cli_policy.status.success(),
+        "explain-policy failed: {}",
+        String::from_utf8_lossy(&cli_policy.stderr)
+    );
+    let cli_policy: Value = serde_json::from_slice(&cli_policy.stdout)?;
+    assert_eq!(cli_policy["resources"]["max_output_bytes"], 4096);
+
+    let cli = Command::new(env!("CARGO_BIN_EXE_runseal"))
+        .env("RUNSEAL_MAX_OUTPUT_BYTES", output_limit.as_os_str())
+        .args(["exec", "--policy", "workspace-write", "--cwd"])
+        .arg(tmp.path())
+        .arg("--")
+        .args(&command)
+        .output()?;
+    assert_eq!(cli.status.code(), Some(7));
+    assert_eq!(cli.stdout, expected_stdout);
+    assert_eq!(cli.stderr, expected_stderr);
+    assert_eq!(
+        std::fs::read(tmp.path().join("parity.bin"))?,
+        expected_side_effect
+    );
+
+    let mut cli_audit_events = Vec::new();
+    for entry in std::fs::read_dir(tmp.path().join(".runseal/audit"))? {
+        let audit = std::fs::read_to_string(entry?.path())?;
+        for line in audit.lines() {
+            cli_audit_events.push(serde_json::from_str::<Value>(line)?);
+        }
+    }
+    let cli_terminal = cli_audit_events
+        .into_iter()
+        .find(|event| {
+            matches!(
+                event["type"].as_str(),
+                Some("execution.finished" | "execution.failed")
+            )
+        })
+        .context("plain CLI terminal audit event")?;
+    let cli_result = cli_terminal["result"].clone();
+    assert_eq!(cli_result["status"], "finished");
+    assert_eq!(cli_result["exit_code"], 7);
+    assert_eq!(cli_result["cleanup_complete"], true);
+    assert_eq!(cli_result["sandbox"]["enforced"], true);
+    assert_eq!(cli_result["stdout_bytes"], expected_stdout.len());
+    assert_eq!(cli_result["stderr_bytes"], expected_stderr.len());
+    assert_eq!(cli_result["policy_hash"], cli_policy["policy_hash"]);
+
+    let mut results = vec![("plain", cli_result)];
+    for mode in ["rpc", "service"] {
+        let mut client = Client::spawn_with_env_values(
+            mode,
+            &[("RUNSEAL_MAX_OUTPUT_BYTES", output_limit.as_os_str())],
+        )?;
+        client.send(
+            1,
+            "explainPolicy",
+            json!({"policy":"workspace-write","cwd":tmp.path()}),
+        )?;
+        let explained = client.next(Duration::from_secs(2))?;
+        assert_eq!(explained["result"]["resources"]["max_output_bytes"], 4096);
+        assert_eq!(
+            explained["result"]["policy_hash"], cli_policy["policy_hash"],
+            "{mode} must normalize the same effective policy"
+        );
+
+        client.send(
+            2,
+            "execute",
+            json!({"command":command.clone(),"cwd":tmp.path(),"policy":"workspace-write"}),
+        )?;
+        let receipt = client.next(Duration::from_secs(2))?;
+        assert_eq!(
+            receipt["result"]["status"], "preparing",
+            "{mode}: {receipt}"
+        );
+        let execution_id = receipt["result"]["execution_id"]
+            .as_str()
+            .context("execution ID")?
+            .to_owned();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let terminal = loop {
+            let message = client.next(deadline.saturating_duration_since(Instant::now()))?;
+            let event = &message["params"];
+            if event["execution_id"] != execution_id {
+                continue;
+            }
+            let stream = match event["type"].as_str() {
+                Some("execution.stdout") => Some(&mut stdout),
+                Some("execution.stderr") => Some(&mut stderr),
+                _ => None,
+            };
+            if let Some(bytes) = stream {
+                assert_eq!(
+                    event["stream_offset"],
+                    bytes.len() as u64,
+                    "{mode}: {event}"
+                );
+                let encoded = event["data"]
+                    .as_str()
+                    .and_then(|data| data.strip_prefix("base64:"))
+                    .context("encoded output")?;
+                bytes.extend(STANDARD.decode(encoded)?);
+            }
+            if matches!(
+                event["type"].as_str(),
+                Some("execution.finished" | "execution.failed")
+            ) {
+                break event["result"].clone();
+            }
+        };
+        assert_eq!(stdout, expected_stdout, "{mode}");
+        assert_eq!(stderr, expected_stderr, "{mode}");
+        assert_eq!(
+            std::fs::read(tmp.path().join("parity.bin"))?,
+            expected_side_effect,
+            "{mode}"
+        );
+        assert_eq!(terminal["status"], "finished", "{mode}: {terminal}");
+        assert_eq!(terminal["exit_code"], 7, "{mode}: {terminal}");
+        assert_eq!(terminal["cleanup_complete"], true, "{mode}: {terminal}");
+        assert_eq!(terminal["sandbox"]["enforced"], true, "{mode}: {terminal}");
+        assert_eq!(terminal["stdout_bytes"], expected_stdout.len(), "{mode}");
+        assert_eq!(terminal["stderr_bytes"], expected_stderr.len(), "{mode}");
+        assert_eq!(
+            terminal["policy_hash"], cli_policy["policy_hash"],
+            "{mode} effective policy must match plain CLI"
+        );
+        results.push((mode, terminal));
+    }
+
+    for (mode, result) in &results {
+        assert_eq!(result["policy_id"], "workspace-write", "{mode}");
+        assert_eq!(result["network"], results[0].1["network"]);
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+#[test]
+#[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
 fn windows_node_client_round_trips_inside_sandbox() -> Result<()> {
     let _guard = process_test_gate();
     let node = if let Ok(path) = std::env::var("RUNSEAL_TEST_NODE") {
