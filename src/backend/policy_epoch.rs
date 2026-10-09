@@ -45,7 +45,7 @@ struct WindowsSandboxExecutionGateState {
 
 #[cfg(windows)]
 impl WindowsSandboxExecutionGate {
-    pub(super) fn finish_owned(self, deadline: std::time::Instant) -> io::Result<()> {
+    pub(super) fn finish_owned(mut self, deadline: std::time::Instant) -> io::Result<()> {
         let result = self._cross_process.finish_after_execution_cleanup(deadline);
         if result.is_err() {
             super::record_test_cleanup_trace("policy_gate_release_failed");
@@ -100,10 +100,10 @@ fn mark_cross_process_quarantined(
     quarantine.signal()
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, test))]
 struct ReleaseOwner(WindowsSandboxCrossProcessGate);
 
-#[cfg(windows)]
+#[cfg(all(windows, test))]
 impl Drop for ReleaseOwner {
     fn drop(&mut self) {
         // Failed spawn, panic, or an incomplete release cannot re-enter file I/O.
@@ -115,21 +115,18 @@ impl Drop for ReleaseOwner {
 
 #[cfg(windows)]
 impl WindowsSandboxCrossProcessGate {
-    fn finish_owned(self, deadline: std::time::Instant) -> io::Result<()> {
-        self.finish_owned_with(deadline, || {})
-    }
-
     fn finish_after_execution_cleanup(
-        self,
+        &mut self,
         _execution_deadline: std::time::Instant,
     ) -> io::Result<()> {
         // The execution owner calls this only after native cleanup is confirmed.
-        // Keep reservation publication bounded, but let it finish even when the
-        // shared process-cleanup deadline was consumed by stopping the process tree.
+        // Keep reservation publication on the active cleanup thread: a second
+        // worker may not be scheduled before its short deadline expires.
         super::record_test_cleanup_trace("policy_release_after_cleanup_started");
-        self.finish_owned(std::time::Instant::now() + std::time::Duration::from_secs(1))
+        self.release(std::time::Instant::now() + std::time::Duration::from_secs(1))
     }
 
+    #[cfg(test)]
     fn finish_owned_with<F: FnOnce() + Send + 'static>(
         self,
         deadline: std::time::Instant,
@@ -148,7 +145,6 @@ impl WindowsSandboxCrossProcessGate {
         let worker = std::thread::Builder::new()
             .name("runseal-policy-release".into())
             .spawn(move || {
-                super::record_test_cleanup_trace("policy_release_worker_entered");
                 let result =
                     owner
                         .0
@@ -161,7 +157,6 @@ impl WindowsSandboxCrossProcessGate {
                 let _ = mark_cross_process_quarantined(&quarantined, &quarantine);
                 io::Error::other(BackendCleanupError)
             })?;
-        super::record_test_cleanup_trace("policy_release_worker_spawned");
         loop {
             match policy_release_worker_state(&worker, deadline, &release_committed) {
                 PolicyReleaseWorkerState::Committed => {
@@ -199,7 +194,7 @@ impl WindowsSandboxCrossProcessGate {
     }
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PolicyReleaseWorkerState {
     Committed,
@@ -208,7 +203,7 @@ enum PolicyReleaseWorkerState {
     Pending,
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, test))]
 fn policy_release_worker_state(
     worker: &std::thread::JoinHandle<()>,
     deadline: std::time::Instant,
@@ -483,7 +478,7 @@ impl WindowsSandboxCrossProcessGate {
         super::record_test_cleanup_trace(if release_committed.is_some() {
             "policy_release_owned_started"
         } else {
-            "policy_release_drop_started"
+            "policy_release_started"
         });
         let deadline = self
             .cleanup_deadline
@@ -529,7 +524,7 @@ impl WindowsSandboxCrossProcessGate {
             super::record_test_cleanup_trace(if release_committed.is_some() {
                 "policy_release_owned_state_written"
             } else {
-                "policy_release_drop_state_written"
+                "policy_release_state_written"
             });
             Ok(())
         })();
@@ -1100,10 +1095,15 @@ mod tests {
         ready
             .recv_timeout(Duration::from_secs(2))
             .map_err(io::Error::other)?;
-        let deadline = Instant::now() + Duration::from_millis(30);
+        let execution_deadline = Instant::now() - Duration::from_millis(1);
         let began = Instant::now();
-        let failed = guard.release(deadline).is_err();
+        let failed = guard
+            .finish_after_execution_cleanup(execution_deadline)
+            .is_err();
         let elapsed = began.elapsed();
+        let deadline = guard
+            .cleanup_deadline
+            .ok_or_else(|| io::Error::other("reservation release deadline missing"))?;
         let repeated = guard
             .release(Instant::now() + Duration::from_secs(2))
             .is_err();
@@ -1142,8 +1142,8 @@ mod tests {
         fs::remove_file(path)?;
         assert!(failed && repeated && frozen);
         assert!(
-            elapsed < Duration::from_millis(500),
-            "release cannot wait the former fixed second"
+            elapsed < Duration::from_millis(1500),
+            "release must stay within its fresh bounded window"
         );
         assert_eq!(retained_before_unlock, 1);
         assert_eq!(retained_after_drop, 1);
@@ -1160,7 +1160,7 @@ mod tests {
             binding_key: format!("confirmed-release-fixture:{}", tmp.path().display()),
             policy_hash: "policy-a".into(),
         };
-        let guard = WindowsSandboxCrossProcessGate::acquire(&key)?;
+        let mut guard = WindowsSandboxCrossProcessGate::acquire(&key)?;
         let path = guard.state_path.clone();
         let began = Instant::now();
         guard.finish_after_execution_cleanup(Instant::now() - Duration::from_millis(1))?;
