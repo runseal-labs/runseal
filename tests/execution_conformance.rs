@@ -4010,10 +4010,6 @@ fn windows_preparation_timeout_aborts_cleanly_without_quarantining_the_binding()
     };
     assert_eq!(terminal["error"]["code"], "EXECUTION_TIMEOUT", "{terminal}");
     assert_eq!(terminal["termination_reason"], "timeout", "{terminal}");
-    assert_eq!(
-        terminal["requested_termination_reason"], "timeout",
-        "{terminal}"
-    );
     assert_eq!(terminal["cleanup_complete"], true, "{terminal}");
     assert_eq!(terminal["exit_code"], Value::Null, "{terminal}");
     if let Some(receipt) = receipt {

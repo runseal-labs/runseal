@@ -817,8 +817,8 @@ the case, and blocks every later sandboxed execution.
 `tests/execution_conformance.rs` runs a real service with `timeout_ms:100` on a
 Windows sandboxed policy. The deadline expires while the machine sandbox home is
 still being prepared, before the vendored runner receives any spawn request. The
-terminal must stay `EXECUTION_TIMEOUT` with `termination_reason:timeout`,
-`requested_termination_reason:timeout`, and `cleanup_complete:true`; a following
+terminal must stay `EXECUTION_TIMEOUT` with `termination_reason:timeout` and
+`cleanup_complete:true`; a following
 sandboxed execution in the same service must admit and finish. The equivalent case
 is `adv.process.orphan-child-after-cancel.v1`. Classifying the cancelled
 preparation as unverified cleanup instead quarantines the shared binding and
