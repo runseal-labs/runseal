@@ -1037,10 +1037,19 @@ fn read_only_reads_workspace_and_writes_runtime_roots_when_supported_or_fails_cl
     fs::create_dir_all(&workspace)?;
     let input = workspace.join("input.txt");
     fs::write(&input, "workspace-read-ok")?;
-    let code = "import os, pathlib\n\
-         print(pathlib.Path('input.txt').read_text(), end='')\n\
-         [(pathlib.Path(os.environ[key]) / 'read-only-runtime-write.txt').write_text(key, encoding='utf-8') for key in ['HOME', 'TMPDIR', 'RUNSEAL_HOME', 'RUNSEAL_TMP']]"
-        .to_string();
+    #[cfg(windows)]
+    let runtime_keys = ["USERPROFILE", "TEMP", "RUNSEAL_HOME", "RUNSEAL_TMP"];
+    #[cfg(not(windows))]
+    let runtime_keys = ["HOME", "TMPDIR", "RUNSEAL_HOME", "RUNSEAL_TMP"];
+    let code = format!(
+        concat!(
+            "import os, pathlib\n",
+            "print(pathlib.Path('input.txt').read_text(), end='')\n",
+            "[(pathlib.Path(os.environ[key]) / 'read-only-runtime-write.txt').write_text(key, encoding='utf-8') for key in {:?}]"
+        ),
+        runtime_keys
+    );
+    #[cfg(not(windows))]
     let ps_script = format!(
         "$ErrorActionPreference = 'Stop'; Get-Content -Raw -LiteralPath {}; \
          foreach ($root in @($env:USERPROFILE, $env:TEMP, $env:RUNSEAL_HOME, $env:RUNSEAL_TMP)) {{ \
@@ -1048,6 +1057,13 @@ fn read_only_reads_workspace_and_writes_runtime_roots_when_supported_or_fails_cl
          }}",
         ps_path(&input)
     );
+    #[cfg(windows)]
+    let response = execute_params(json!({
+        "command": [windows_python_bin()?, "-c", code],
+        "cwd": workspace,
+        "policy": "read-only"
+    }))?;
+    #[cfg(not(windows))]
     let response = execute_platform_script("read-only", &workspace, None, code, ps_script)?;
 
     if is_backend_missing(&response) {

@@ -86,6 +86,10 @@ jobs:
         if: runner.os == 'Windows'
         run: cargo test --test filesystem_conformance read_only_denies_workspace_write_when_supported_or_fails_closed -- --exact
 
+      - name: Verify prepared Windows read-only runtime writes first
+        if: runner.os == 'Windows'
+        run: cargo test --test filesystem_conformance read_only_reads_workspace_and_writes_runtime_roots_when_supported_or_fails_closed -- --exact
+
       - name: Verify prepared Windows control cleanup first
         if: runner.os == 'Windows'
         run: cargo test --test execution_conformance cli_control_stalled_caller_cleans_owned_range_and_preserves_peer -- --include-ignored --exact
