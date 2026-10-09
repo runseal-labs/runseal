@@ -127,6 +127,13 @@ Run the suite on Windows before claiming reference-backend readiness. Other
 platforms can run the same tests to verify platform selection and fail-closed
 behavior until their backends are promoted.
 
+The Windows managed-proxy environment override probe uses Python's
+`socket.create_connection(timeout=2)` instead of PowerShell's synchronous
+`TcpClient.Connect`, which has no per-call connection timeout. The RPC harness
+watchdog is 30 seconds so it cannot kill the host before the probe's bounded
+execution and Windows cleanup budgets finish; the probe's connect/read timeouts
+and execution timeout remain explicit.
+
 On Linux or macOS, also run the portable probe smoke after building `runseal`:
 
 ```bash
@@ -390,9 +397,14 @@ host's reservation, and both policies must refuse admission without changing it.
 Restoring the former dead-host pruning rule fails this regression. A separate
 fixture checks a live native PID with a mismatched creation timestamp, including
 an identical reservation token, so neither admission nor release treats it as the
-original host. These fixtures use independent test bindings and remove only their
-own records and processes. They do not establish automatic host-death recovery,
-explicit repair, actual OS PID recycling, or the full shared-state fault matrix.
+original host. A prepared Windows regression also kills the service host during a
+live `workspace-write` execution, verifies the descendant stops, confirms a later
+admission returns `EXECUTION_CLEANUP_FAILED` without deleting the recorded runtime
+root, then runs proof-gated `repair execution-gates` and verifies admission recovers.
+It does not use `--accept-unverified-release`. These fixtures use independent test
+bindings and remove only their own records and processes. They do not establish
+automatic host-death recovery, actual OS PID recycling, or the full shared-state
+fault matrix.
 
 A marker-write failure fixture uses an absent test-owned parent directory and an
 independent binding. The failed guard must retain its reservation and refuse both

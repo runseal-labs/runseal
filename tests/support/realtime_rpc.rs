@@ -5,7 +5,11 @@ use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Output};
 use std::time::Duration;
 
-pub fn collect_rpc(mut child: Child, message: &str) -> Result<Output> {
+pub fn collect_rpc_with_watchdog(
+    mut child: Child,
+    message: &str,
+    watchdog: Duration,
+) -> Result<Output> {
     struct OwnedRpc(std::process::Child);
     impl Drop for OwnedRpc {
         fn drop(&mut self) {
@@ -64,7 +68,7 @@ pub fn collect_rpc(mut child: Child, message: &str) -> Result<Output> {
     // until every admitted execution publishes its own terminal; EOF would cancel it.
     while responses < expected || !active.is_empty() {
         let line = lines
-            .recv_timeout(Duration::from_secs(15))
+            .recv_timeout(watchdog)
             .with_context(|| {
                 format!(
                     "RPC response/terminal watchdog (responses={responses}/{expected}, active_executions={}, observed={})",

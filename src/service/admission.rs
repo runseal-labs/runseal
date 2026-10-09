@@ -130,7 +130,11 @@ fn reservation_error(
         code,
         cwd,
     );
-    RunSealError::with_details(code, "execution admission rejected", details)
+    let mut rejected = RunSealError::with_details(code, "execution admission rejected", details);
+    // reserve_execution failed before this admission launched; the shared gate
+    // remains responsible for blocking retries until explicit proof-gated repair.
+    rejected.backend_gate_rejection = !cleanup_complete;
+    rejected
 }
 
 #[cfg(windows)]

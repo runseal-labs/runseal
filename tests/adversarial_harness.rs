@@ -89,7 +89,7 @@ fn run_rpc(message: &str) -> Result<std::process::Output> {
         .stderr(Stdio::piped())
         .spawn()
         .context("failed to run runseal rpc")?;
-    realtime_rpc::collect_rpc(child, message)
+    realtime_rpc::collect_rpc_with_watchdog(child, message, Duration::from_secs(15))
 }
 
 #[test]

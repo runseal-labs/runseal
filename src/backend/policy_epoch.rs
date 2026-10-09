@@ -298,9 +298,9 @@ impl WindowsSandboxCrossProcessGate {
             return Err(io::Error::other(BackendCleanupError));
         }
         let mut state = read_cross_process_gate_state(&state_path)?;
-        // A dead host cannot acknowledge cleanup of the sandbox process range,
-        // runtime roots, or shared constraints. Keep its reservation until an
-        // explicit repair can prove those resources have been released.
+        // A dead or uninspectable host cannot acknowledge cleanup of the sandbox
+        // process range, runtime roots, or shared constraints. Keep its reservation
+        // until an explicit repair can prove those resources have been released.
         if state
             .active
             .iter()
@@ -357,6 +357,14 @@ impl Drop for WindowsSandboxCrossProcessGate {
 #[cfg(windows)]
 impl WindowsSandboxCrossProcessGate {
     fn release(&mut self, deadline: std::time::Instant) -> io::Result<()> {
+        self.release_with(deadline, || {})
+    }
+
+    fn release_with(
+        &mut self,
+        deadline: std::time::Instant,
+        after_entry_removed: impl FnOnce(),
+    ) -> io::Result<()> {
         if self.released {
             return Ok(());
         }
@@ -372,9 +380,11 @@ impl WindowsSandboxCrossProcessGate {
             self.quarantine.check()?;
             super::record_test_cleanup_trace("policy_release_precheck_passed");
             let _mutex = WindowsSandboxNamedMutexGuard::acquire_until(&self.mutex_name, deadline)?;
+            // The deadline bounds mutex acquisition. Once this owner holds the
+            // lock, persist its confirmed removal even if the clock advances.
             super::record_test_cleanup_trace("policy_release_mutex_acquired");
             self.quarantine.check()?;
-            if self.quarantined.load(Ordering::Acquire) || std::time::Instant::now() >= deadline {
+            if self.quarantined.load(Ordering::Acquire) {
                 return Err(io::Error::other(BackendCleanupError));
             }
             let mut state = read_cross_process_gate_state(&self.state_path)?;
@@ -386,12 +396,11 @@ impl WindowsSandboxCrossProcessGate {
                     && entry.token == self.token
                     && entry.policy_hash == self.policy_hash)
             });
-            if before.checked_sub(state.active.len()) != Some(1)
-                || std::time::Instant::now() >= deadline
-            {
+            if before.checked_sub(state.active.len()) != Some(1) {
                 return Err(io::Error::other(BackendCleanupError));
             }
             super::record_test_cleanup_trace("policy_release_entry_removed");
+            after_entry_removed();
             self.quarantine.check()?;
             if self.quarantined.load(Ordering::Acquire) {
                 return Err(io::Error::other(BackendCleanupError));
@@ -1014,6 +1023,35 @@ mod tests {
     }
 
     #[test]
+    fn reservation_release_commits_after_lock_deadline_once_its_entry_is_removed() -> io::Result<()>
+    {
+        use std::time::{Duration, Instant};
+
+        let tmp = TempDir::new()?;
+        let key = WindowsSandboxPolicyCohortKey {
+            binding_key: format!("release-commit-fixture:{}", tmp.path().display()),
+            policy_hash: "policy-a".into(),
+        };
+        let mut guard = WindowsSandboxCrossProcessGate::acquire(&key)?;
+        let path = guard.state_path.clone();
+        let deadline = Instant::now() + Duration::from_millis(100);
+
+        guard.release_with(deadline, || std::thread::sleep(Duration::from_millis(150)))?;
+
+        assert!(guard.released, "durable reservation removal is success");
+        assert!(
+            guard.quarantine.check().is_ok(),
+            "deadline expiry alone must not quarantine"
+        );
+        assert!(
+            read_cross_process_gate_state(&path)?.active.is_empty(),
+            "the removed reservation must be persisted even if the deadline expires"
+        );
+        fs::remove_file(path)?;
+        Ok(())
+    }
+
+    #[test]
     fn nonregular_state_path_fails_closed_without_releasing_reservation() -> io::Result<()> {
         use std::os::windows::io::AsRawHandle;
         use std::time::{Duration, Instant};
@@ -1223,6 +1261,8 @@ mod tests {
         }
         let tmp = TempDir::new()?;
         let heartbeat = tmp.path().join("heartbeat");
+        let runtime_root = tmp.path().join("orphan-runtime-root");
+        fs::create_dir(&runtime_root)?;
         let binding_key = format!("orphan-fixture:{}", tmp.path().display());
         let key = WindowsSandboxPolicyCohortKey {
             binding_key,
@@ -1275,7 +1315,7 @@ mod tests {
                 process_creation_time: peer_creation_time,
                 token: "owned-peer-reservation".into(),
                 policy_hash: key.policy_hash.clone(),
-                runtime_roots: None,
+                runtime_roots: Some(vec![runtime_root.to_string_lossy().into_owned()]),
             });
             write_cross_process_gate_state(&state_path, &state)?;
         }
@@ -1287,7 +1327,7 @@ mod tests {
                 process_creation_time: peer_creation_time,
                 token: "owned-peer-reservation".into(),
                 policy_hash: key.policy_hash.clone(),
-                runtime_roots: None,
+                runtime_roots: Some(vec![runtime_root.to_string_lossy().into_owned()]),
             }
         )?);
         let before = fs::read(&heartbeat)?;
@@ -1328,6 +1368,10 @@ mod tests {
         assert!(
             unchanged,
             "refused admission must not erase the unverified reservation"
+        );
+        assert!(
+            runtime_root.exists(),
+            "admission must not remove a dead host's recorded runtime roots"
         );
         assert!(
             child_live && child_progress,

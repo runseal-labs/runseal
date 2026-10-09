@@ -66,6 +66,10 @@ jobs:
         if: runner.os == 'Windows'
         run: cargo test --lib backend::policy_epoch::tests::confirmed_reservation_release_finishes_after_execution_deadline -- --exact
 
+      - name: Verify committed Windows reservation release
+        if: runner.os == 'Windows'
+        run: cargo test --lib backend::policy_epoch::tests::reservation_release_commits_after_lock_deadline_once_its_entry_is_removed -- --exact
+
       - name: Verify stalled Windows Console cleanup first
         if: runner.os == 'Windows'
         run: cargo test --test execution_conformance sandboxed_stalled_console_output_cleans_owned_range_and_preserves_peer -- --include-ignored --exact
@@ -74,9 +78,33 @@ jobs:
         if: runner.os == 'Windows'
         run: cargo test --test filesystem_conformance network_proxy_allows_http_through_managed_proxy_when_supported_or_fails_closed -- --exact
 
+      - name: Verify prepared Windows proxy environment override first
+        if: runner.os == 'Windows'
+        run: cargo test --test filesystem_conformance network_proxy_overrides_client_proxy_environment_when_supported_or_fails_closed -- --exact
+
+      - name: Verify prepared Windows read-only denial first
+        if: runner.os == 'Windows'
+        run: cargo test --test filesystem_conformance read_only_denies_workspace_write_when_supported_or_fails_closed -- --exact
+
+      - name: Verify prepared Windows read-only runtime writes first
+        if: runner.os == 'Windows'
+        run: cargo test --test filesystem_conformance read_only_reads_workspace_and_writes_runtime_roots_when_supported_or_fails_closed -- --exact
+
+      - name: Verify prepared Windows runtime-root isolation first
+        if: runner.os == 'Windows'
+        run: cargo test --test filesystem_conformance runtime_environment_roots_are_per_execution_when_supported_or_fails_closed -- --exact
+
+      - name: Verify prepared Windows metadata protection first
+        if: runner.os == 'Windows'
+        run: cargo test --test filesystem_conformance workspace_write_protects_workspace_metadata_when_supported_or_fails_closed -- --exact
+
       - name: Verify prepared Windows control cleanup first
         if: runner.os == 'Windows'
         run: cargo test --test execution_conformance cli_control_stalled_caller_cleans_owned_range_and_preserves_peer -- --include-ignored --exact
+
+      - name: Verify prepared Windows host-death repair first
+        if: runner.os == 'Windows'
+        run: cargo test --test execution_conformance windows_sandboxed_host_death_fails_closed_until_proven_repair -- --include-ignored --exact
 
       - name: Run prepared Windows conformance
         if: runner.os == 'Windows'
