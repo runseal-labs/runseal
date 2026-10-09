@@ -652,6 +652,21 @@ pub(super) fn execute_windows_sandbox_plan(
             Some(&logs_base_dir),
         );
     }
+    if cleanup.is_ok()
+        && let Err(error) = &result
+        && super::cleanup_failed(error)
+    {
+        let stage = if super::failure_exit_code(error).is_some() {
+            "sandbox_capture"
+        } else {
+            "sandbox_transport"
+        };
+        let logs_base_dir = vendor_sandbox_home.join(".sandbox");
+        codex_windows_sandbox::log_note(
+            &format!("execution cleanup failed at stage: {stage}"),
+            Some(&logs_base_dir),
+        );
+    }
     if result.as_ref().err().is_some_and(super::cleanup_failed) || cleanup.is_err() {
         let _ = _execution_guard.mark_cleanup_failed();
     }

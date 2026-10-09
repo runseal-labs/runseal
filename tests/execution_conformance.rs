@@ -5479,6 +5479,8 @@ fn read_console_cleanup_stage(
                 | "process_range"
                 | "exit_status"
                 | "runtime_roots"
+                | "sandbox_capture"
+                | "sandbox_transport"
                 | "conpty_close"
                 | "controls_reader"
                 | "stdin_writer"
