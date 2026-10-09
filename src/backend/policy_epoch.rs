@@ -45,15 +45,6 @@ struct WindowsSandboxExecutionGateState {
 
 #[cfg(windows)]
 impl WindowsSandboxExecutionGate {
-    pub(super) fn quarantine(&self) -> io::Result<()> {
-        let result = self._cross_process.mark_quarantined();
-        let mut state = windows_sandbox_execution_gate_lock()
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        state.contaminated = true;
-        result
-    }
     pub(super) fn finish_owned(self, deadline: std::time::Instant) -> io::Result<()> {
         let result = self._cross_process.finish_owned(deadline);
         if result.is_err() {

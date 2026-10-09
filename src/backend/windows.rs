@@ -345,7 +345,6 @@ pub(super) fn execute_windows_sandbox_plan(
         crate::limits::deployment().cleanup_timeout_ms as u64,
     )
     .map_err(io::Error::other)?;
-    let _execution_guard = windows_sandbox_execution_gate(plan)?;
     let vendor_sandbox_home = prepare_windows_sandbox_setup(cwd)?;
 
     let _runtime_root = required_plan_path(plan.runtime_root.as_deref(), "runtime_root")?;
@@ -678,10 +677,6 @@ pub(super) fn execute_windows_sandbox_plan(
             Some(&logs_base_dir),
         );
     }
-    if result.as_ref().err().is_some_and(super::cleanup_failed) || cleanup.is_err() {
-        let _ = _execution_guard.mark_cleanup_failed();
-    }
-
     let (capture, events) = match (result, cleanup) {
         (Ok(capture), Ok(_)) => capture,
         (Err(err), Ok(_)) => return Err(err),

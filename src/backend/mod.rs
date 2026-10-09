@@ -137,7 +137,7 @@ impl ExecutionReservation {
         if let Some(guard) = self._guard.as_mut()
             && !execution_cleanup_confirmed
         {
-            let _ = guard.quarantine();
+            let _ = guard.mark_cleanup_failed();
             return Err(io::Error::other(error::BackendCleanupError));
         }
         #[cfg(windows)]
