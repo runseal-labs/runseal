@@ -616,8 +616,17 @@ mod windows_impl {
                     },
                 ) {
                     Ok(Some(msg)) => msg,
-                    Ok(None) => break Err(anyhow::anyhow!("runner pipe closed before exit")),
-                    Err(err) => break Err(err),
+                    Ok(None) => {
+                        log_note(
+                            "runner cleanup failed at stage: runner_pipe_closed",
+                            logs_base_dir,
+                        );
+                        break Err(anyhow::anyhow!("runner pipe closed before exit"));
+                    }
+                    Err(err) => {
+                        log_note("runner cleanup failed at stage: runner_read", logs_base_dir);
+                        break Err(err);
+                    }
                 };
                 match msg.message {
                     Message::CleanupStarted { payload } => {
@@ -704,6 +713,10 @@ mod windows_impl {
                         if payload.code == "spawn_failed" {
                             break Err(anyhow::anyhow!(crate::SandboxSpawnFailed(payload.message)));
                         }
+                        log_note(
+                            "runner cleanup failed at stage: runner_report",
+                            logs_base_dir,
+                        );
                         break Err(anyhow::anyhow!("runner error: {}", payload.message));
                     }
                     _ => {

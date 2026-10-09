@@ -5423,6 +5423,7 @@ fn read_console_runner_cleanup_stage(workspace: &std::path::Path, offset: u64) -
     };
     let fresh = contents.get(offset as usize..).unwrap_or(&contents);
     let prefix = "runner cleanup failed at stage: ";
+    let mut stages = Vec::new();
     for line in fresh.rsplit(|byte| *byte == b'\n') {
         let Ok(line) = std::str::from_utf8(line) else {
             continue;
@@ -5431,9 +5432,12 @@ fn read_console_runner_cleanup_stage(workspace: &std::path::Path, offset: u64) -
             continue;
         };
         let stage = stage.trim();
-        return match stage {
+        let stage = match stage {
             "cleanup_announcement"
             | "control_workers"
+            | "exit_report"
+            | "runner_pipe_closed"
+            | "runner_read"
             | "runner_report"
             | "parent_input_writer"
             | "process_range"
@@ -5445,8 +5449,16 @@ fn read_console_runner_cleanup_stage(workspace: &std::path::Path, offset: u64) -
             | "stderr_reader" => stage.to_owned(),
             _ => "unknown".to_owned(),
         };
+        if !stages.contains(&stage) {
+            stages.push(stage);
+        }
     }
-    "none".to_owned()
+    if stages.is_empty() {
+        "none".to_owned()
+    } else {
+        stages.reverse();
+        stages.join(",")
+    }
 }
 
 #[cfg(windows)]

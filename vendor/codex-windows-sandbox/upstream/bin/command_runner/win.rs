@@ -1498,7 +1498,7 @@ pub fn main() -> Result<()> {
         anyhow::bail!("execution I/O cleanup could not be verified");
     }
 
-    if let Err(err) = send_exit(
+    if send_exit(
         &pipe_write,
         ExitPayload {
             exit_code,
@@ -1509,8 +1509,10 @@ pub fn main() -> Result<()> {
                 .then_some(CleanupFailureStage::CleanupAnnouncement),
         },
         cleanup_deadline,
-    ) {
-        log_note(&format!("runner exit write failed: {err}"), log_dir);
+    )
+    .is_err()
+    {
+        log_note("runner cleanup failed at stage: exit_report", log_dir);
     }
 
     std::process::exit(exit_code);
