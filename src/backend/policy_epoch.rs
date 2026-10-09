@@ -46,7 +46,7 @@ struct WindowsSandboxExecutionGateState {
 #[cfg(windows)]
 impl WindowsSandboxExecutionGate {
     pub(super) fn finish_owned(self, deadline: std::time::Instant) -> io::Result<()> {
-        let result = self._cross_process.finish_owned(deadline);
+        let result = self._cross_process.finish_after_execution_cleanup(deadline);
         if result.is_err() {
             super::record_test_cleanup_trace("policy_gate_release_failed");
             let mut state = windows_sandbox_execution_gate_lock()
@@ -117,6 +117,16 @@ impl Drop for ReleaseOwner {
 impl WindowsSandboxCrossProcessGate {
     fn finish_owned(self, deadline: std::time::Instant) -> io::Result<()> {
         self.finish_owned_with(deadline, || {})
+    }
+
+    fn finish_after_execution_cleanup(
+        self,
+        _execution_deadline: std::time::Instant,
+    ) -> io::Result<()> {
+        // The execution owner calls this only after native cleanup is confirmed.
+        // Keep reservation publication bounded, but let it finish even when the
+        // shared process-cleanup deadline was consumed by stopping the process tree.
+        self.finish_owned(std::time::Instant::now() + std::time::Duration::from_secs(1))
     }
 
     fn finish_owned_with<F: FnOnce() + Send + 'static>(
@@ -1136,6 +1146,29 @@ mod tests {
         assert_eq!(retained_after_drop, 1);
         assert!(signaled_before_unlock && refused);
         assert_ne!(reset, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn confirmed_reservation_release_finishes_after_execution_deadline() -> io::Result<()> {
+        use std::time::{Duration, Instant};
+        let tmp = TempDir::new()?;
+        let key = WindowsSandboxPolicyCohortKey {
+            binding_key: format!("confirmed-release-fixture:{}", tmp.path().display()),
+            policy_hash: "policy-a".into(),
+        };
+        let guard = WindowsSandboxCrossProcessGate::acquire(&key)?;
+        let path = guard.state_path.clone();
+        let began = Instant::now();
+        guard.finish_after_execution_cleanup(Instant::now() - Duration::from_millis(1))?;
+        let elapsed = began.elapsed();
+        let released = read_cross_process_gate_state(&path)?.active.is_empty();
+        fs::remove_file(path)?;
+        assert!(released, "confirmed cleanup must release its reservation");
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "available reservation metadata should release promptly"
+        );
         Ok(())
     }
 
