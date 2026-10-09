@@ -5269,6 +5269,10 @@ fn cli_stalled_console_output_for_policy(policy: &str) -> Result<()> {
         assert_eq!(terminals.len(), 1, "expected one terminal audit event");
         let terminal = &terminals[0];
         assert_eq!(
+            terminal["result"]["sandbox"]["enforced"], true,
+            "workspace-write must execute in the prepared sandbox"
+        );
+        assert_eq!(
             done["exit"],
             if timeout { 124 } else { 125 },
             "unexpected CLI exit code for {policy}"
@@ -5362,7 +5366,7 @@ fn read_console_terminal_summary(workspace: &std::path::Path) -> String {
                 Some("execution.finished" | "execution.failed")
             ) {
                 results.push(format!(
-                    "{}:{}:{}:exit={}:timed_out={}",
+                    "{}:{}:{}:sandbox_enforced={}:requested={}:exit={}:timed_out={}",
                     event["result"]["termination_reason"]
                         .as_str()
                         .unwrap_or("unknown"),
@@ -5374,6 +5378,10 @@ fn read_console_terminal_summary(workspace: &std::path::Path) -> String {
                         } else {
                             "false"
                         }),
+                    event["result"]["sandbox"]["enforced"],
+                    event["result"]["requested_termination_reason"]
+                        .as_str()
+                        .unwrap_or("none"),
                     event["result"]["exit_code"],
                     event["result"]["timed_out"]
                 ));
