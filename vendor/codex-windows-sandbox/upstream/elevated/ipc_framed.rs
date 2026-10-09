@@ -26,7 +26,7 @@ use std::path::PathBuf;
 const MAX_FRAME_LEN: usize = 8 * 1024 * 1024;
 
 /// Protocol version shared by the parent process and elevated command runner.
-pub const IPC_PROTOCOL_VERSION: u8 = 11;
+pub const IPC_PROTOCOL_VERSION: u8 = 12;
 
 /// Validated deployment wait budget; distinct from the command execution timeout.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -158,11 +158,45 @@ pub struct ResizePayload {
 }
 
 /// Exit status sent from runner to parent.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CleanupFailureStage {
+    CleanupAnnouncement,
+    RunnerReport,
+    ProcessRange,
+    ExitStatus,
+    ControlWorkers,
+    ConptyClose,
+    ControlsReader,
+    StdinWriter,
+    StdoutReader,
+    StderrReader,
+}
+
+impl CleanupFailureStage {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CleanupAnnouncement => "cleanup_announcement",
+            Self::RunnerReport => "runner_report",
+            Self::ProcessRange => "process_range",
+            Self::ExitStatus => "exit_status",
+            Self::ControlWorkers => "control_workers",
+            Self::ConptyClose => "conpty_close",
+            Self::ControlsReader => "controls_reader",
+            Self::StdinWriter => "stdin_writer",
+            Self::StdoutReader => "stdout_reader",
+            Self::StderrReader => "stderr_reader",
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ExitPayload {
     pub exit_code: i32,
     pub timed_out: bool,
     pub cleanup_complete: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cleanup_stage: Option<CleanupFailureStage>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -473,6 +507,7 @@ mod tests {
                         exit_code: 7,
                         timed_out: false,
                         cleanup_complete: true,
+                        cleanup_stage: None,
                     },
                 },
             },

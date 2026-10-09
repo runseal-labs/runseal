@@ -14,6 +14,7 @@ mod cwd_junction;
 use anyhow::Context;
 use anyhow::Result;
 use codex_windows_sandbox::AppContainerSecurityCapabilities;
+use codex_windows_sandbox::CleanupFailureStage;
 use codex_windows_sandbox::ErrorPayload;
 use codex_windows_sandbox::ExitPayload;
 use codex_windows_sandbox::FramedMessage;
@@ -346,6 +347,7 @@ fn send_unverified_range_cleanup(
                 exit_code,
                 timed_out,
                 cleanup_complete: false,
+                cleanup_stage: Some(CleanupFailureStage::ProcessRange),
             },
             deadline,
         ),
@@ -1449,6 +1451,7 @@ pub fn main() -> Result<()> {
                     exit_code,
                     timed_out,
                     cleanup_complete: false,
+                    cleanup_stage: Some(CleanupFailureStage::ControlWorkers),
                 },
                 cleanup_deadline,
             );
@@ -1474,12 +1477,21 @@ pub fn main() -> Result<()> {
     })();
     if let Err(stage) = io_cleanup {
         log_note(&format!("runner cleanup failed at stage: {stage}"), log_dir);
+        let cleanup_stage = match stage {
+            "conpty_close" => CleanupFailureStage::ConptyClose,
+            "controls_reader" => CleanupFailureStage::ControlsReader,
+            "stdin_writer" => CleanupFailureStage::StdinWriter,
+            "stdout_reader" => CleanupFailureStage::StdoutReader,
+            "stderr_reader" => CleanupFailureStage::StderrReader,
+            _ => CleanupFailureStage::ExitStatus,
+        };
         let _ = send_exit(
             &pipe_write,
             ExitPayload {
                 exit_code,
                 timed_out,
                 cleanup_complete: false,
+                cleanup_stage: Some(cleanup_stage),
             },
             cleanup_deadline,
         );
@@ -1492,6 +1504,9 @@ pub fn main() -> Result<()> {
             exit_code,
             timed_out,
             cleanup_complete: cleanup_announcement.is_ok(),
+            cleanup_stage: cleanup_announcement
+                .is_err()
+                .then_some(CleanupFailureStage::CleanupAnnouncement),
         },
         cleanup_deadline,
     ) {
@@ -2282,6 +2297,7 @@ mod cleanup_tests {
                             exit_code: 7,
                             timed_out: false,
                             cleanup_complete: false,
+                            cleanup_stage: None,
                         },
                         deadline,
                     )

@@ -54,6 +54,7 @@ mod windows_impl {
     use crate::env::inherit_path_env;
     use crate::env::normalize_null_device_env;
     use crate::identity::require_logon_sandbox_creds;
+    use crate::ipc_framed::CleanupFailureStage;
     use crate::ipc_framed::EmptyPayload;
     use crate::ipc_framed::FramedMessage;
     use crate::ipc_framed::IPC_PROTOCOL_VERSION;
@@ -66,6 +67,7 @@ mod windows_impl {
     use crate::ipc_framed::write_frame;
     use crate::ipc_framed::{FramePoll, PipeFrameReader};
     use crate::logging::log_failure;
+    use crate::logging::log_note;
     use crate::logging::log_start;
     use crate::logging::log_success;
     use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
@@ -256,6 +258,7 @@ mod windows_impl {
         result: Result<(i32, bool)>,
         input_writer: &mut InputWriter,
         deadline: std::time::Instant,
+        log_dir: Option<&Path>,
     ) -> Result<(i32, bool)> {
         let spawn_failed = result
             .as_ref()
@@ -263,6 +266,12 @@ mod windows_impl {
             .is_some_and(|error| error.downcast_ref::<crate::SandboxSpawnFailed>().is_some());
         let failure = capture_cleanup_failure(&result);
         let input_result = input_writer.finish(deadline);
+        if input_result.is_err() {
+            log_note(
+                "runner cleanup failed at stage: parent_input_writer",
+                log_dir,
+            );
+        }
         // A definitive runner start failure means no execution range existed, so
         // a local input-worker teardown must not replace it with cleanup failure.
         if !spawn_failed {
@@ -668,11 +677,28 @@ mod windows_impl {
                     Message::Exit { mut payload } => {
                         if cleanup_facts.is_none() {
                             payload.cleanup_complete = false;
+                            payload
+                                .cleanup_stage
+                                .get_or_insert(CleanupFailureStage::RunnerReport);
+                        }
+                        if !payload.cleanup_complete {
+                            let stage = payload
+                                .cleanup_stage
+                                .unwrap_or(CleanupFailureStage::RunnerReport)
+                                .as_str();
+                            log_note(
+                                &format!("runner cleanup failed at stage: {stage}"),
+                                logs_base_dir,
+                            );
                         }
                         break runner_exit_result(payload);
                     }
                     Message::Error { payload } => {
                         if payload.code == "cleanup_failed" {
+                            log_note(
+                                "runner cleanup failed at stage: runner_report",
+                                logs_base_dir,
+                            );
                             break Err(anyhow::anyhow!(crate::SandboxCleanupError));
                         }
                         if payload.code == "spawn_failed" {
@@ -705,6 +731,7 @@ mod windows_impl {
                     .unwrap_or_else(|| {
                         std::time::Instant::now() + cleanup_wait(cancellation.as_ref())
                     }),
+                logs_base_dir,
             )?;
 
             if exit_code == 0 {
@@ -1020,6 +1047,7 @@ mod windows_impl {
                             exit_code: actual,
                             timed_out: false,
                             cleanup_complete: true,
+                            cleanup_stage: None,
                         },
                     },
                 },
@@ -1036,8 +1064,9 @@ mod windows_impl {
             let Message::Exit { payload } = message.message else {
                 anyhow::bail!("exit expected");
             };
-            let error = finish_capture_result(runner_exit_result(payload), &mut owner, deadline)
-                .expect_err("source failure must remain visible");
+            let error =
+                finish_capture_result(runner_exit_result(payload), &mut owner, deadline, None)
+                    .expect_err("source failure must remain visible");
             let facts = error
                 .downcast_ref::<crate::SandboxCaptureInputError>()
                 .ok_or_else(|| anyhow::anyhow!("input exit facts missing: {error}"))?;
@@ -1096,6 +1125,7 @@ mod windows_impl {
                                 exit_code: actual,
                                 timed_out,
                                 cleanup_complete: false,
+                                cleanup_stage: None,
                             },
                         },
                     },
@@ -1130,7 +1160,7 @@ mod windows_impl {
                     std::thread::sleep(Duration::from_millis(5));
                 }
                 let error =
-                    finish_capture_result(runner_exit_result(payload), &mut owner, deadline)
+                    finish_capture_result(runner_exit_result(payload), &mut owner, deadline, None)
                         .expect_err(
                             "failed range cleanup cannot become successful after a local join",
                         );
@@ -1176,6 +1206,7 @@ mod windows_impl {
                             exit_code: native,
                             timed_out: false,
                             cleanup_complete: false,
+                            cleanup_stage: None,
                         },
                     },
                 },
@@ -1196,6 +1227,7 @@ mod windows_impl {
                 runner_exit_result(payload),
                 &mut owner,
                 std::time::Instant::now(),
+                None,
             );
             let retained = owner.worker.is_some();
             release.send(())?;
@@ -1226,6 +1258,7 @@ mod windows_impl {
                 Err(anyhow::anyhow!("runner closed without confirmation")),
                 &mut owner,
                 std::time::Instant::now(),
+                None,
             )
             .expect_err("EOF cannot prove range cleanup");
             let facts = unknown

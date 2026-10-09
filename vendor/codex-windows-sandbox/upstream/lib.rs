@@ -321,6 +321,8 @@ pub use ipc_framed::CleanupBudget;
 #[cfg(target_os = "windows")]
 pub use ipc_framed::CleanupDeadlinePayload;
 #[cfg(target_os = "windows")]
+pub use ipc_framed::CleanupFailureStage;
+#[cfg(target_os = "windows")]
 pub use ipc_framed::CleanupStartedPayload;
 #[cfg(target_os = "windows")]
 pub use ipc_framed::ErrorPayload;

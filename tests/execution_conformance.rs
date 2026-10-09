@@ -5434,6 +5434,8 @@ fn read_console_runner_cleanup_stage(workspace: &std::path::Path, offset: u64) -
         return match stage {
             "cleanup_announcement"
             | "control_workers"
+            | "runner_report"
+            | "parent_input_writer"
             | "process_range"
             | "exit_status"
             | "conpty_close"

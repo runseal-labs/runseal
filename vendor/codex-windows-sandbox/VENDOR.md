@@ -95,11 +95,11 @@ in `tests/vendor_boundary.rs`.
 | File | RunSeal patch |
 |---|---|
 | `upstream/Cargo.toml` | Use the trimmed local vendor dependencies and enable the runner interfaces required by RunSeal. |
-| `upstream/bin/command_runner/win.rs` | Apply single-identity setup and process ownership; carry bounded input/output and cleanup state across the runner boundary, and log only static cleanup-stage labels when verification fails. |
+| `upstream/bin/command_runner/win.rs` | Apply single-identity setup and process ownership; carry bounded input/output and cleanup state across the runner boundary, and report typed cleanup-stage labels to the host without exposing paths or PIDs. |
 | `upstream/bin/setup_main/win.rs` | Keep setup binary imports and unsafe-code linting consistent with the vendored build. |
 | `upstream/conpty/mod.rs` | Preserve explicit process identity, terminal dimensions, interrupt handling, and argv quoting for terminal launches. |
 | `upstream/control.rs` | Add the bounded duplex child control endpoint, half-close behavior, and retained writer ownership. |
-| `upstream/elevated/ipc_framed.rs` | Validate the v11 runner frame and carry the frozen cleanup budget and deadline. |
+| `upstream/elevated/ipc_framed.rs` | Validate the v12 runner frame and carry the frozen cleanup budget, deadline, and typed internal cleanup-stage diagnostics. |
 | `upstream/elevated/runner_client.rs` | Allow bounded first-profile initialization, retain process ownership, and confirm termination before releasing startup state. |
 | `upstream/elevated_impl.rs` | Bridge live stdin/output, cancellation, terminal results, and cleanup evidence between host and runner. |
 | `upstream/host_coordinator.rs` | Add the named host coordination event with a restricted access descriptor. |
@@ -153,7 +153,7 @@ after native exit. The focused fixture runs the actual socket half-close, then
 holds its native FLS exit callback. This proves close ownership and deadline
 handling, not the complete helper or sandbox cleanup matrix.
 
-Internal runner IPC v11 carries a mandatory cleanup budget validated at frame
+Internal runner IPC v12 carries a mandatory cleanup budget validated at frame
 decode. RunSeal passes the frozen host setting through its capture token, including
 capture without an output sink; querying that budget does not start cleanup.
 The runner selects it before process creation and preserves the earliest absolute
