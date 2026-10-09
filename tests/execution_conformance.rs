@@ -7530,7 +7530,17 @@ fn cli_control_stalled_caller_cleans_owned_range_and_preserves_peer() -> Result<
                 code.into(),
             ],
             tmp.path(),
-            &std::env::vars().collect(),
+            &{
+                let mut environment = std::env::vars().collect::<std::collections::HashMap<_, _>>();
+                environment.insert(
+                    "RUNSEAL_TEST_CLEANUP_TRACE".to_owned(),
+                    tmp.path()
+                        .join("cleanup.trace")
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+                environment
+            },
             false,
         )?;
         let mut unread_control = cli.control.take().context("caller control")?;
@@ -7594,7 +7604,8 @@ fn cli_control_stalled_caller_cleans_owned_range_and_preserves_peer() -> Result<
         }
         let terminal = terminal.ok_or_else(|| {
             anyhow::anyhow!(
-                "durable backpressure terminal missing; safe audit summaries: {audit_summaries:?}"
+                "durable backpressure terminal missing for {policy}; cleanup stages: {}; safe audit summaries: {audit_summaries:?}",
+                read_console_cleanup_trace(tmp.path())
             )
         })?;
         assert_eq!(

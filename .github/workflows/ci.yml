@@ -74,6 +74,10 @@ jobs:
         if: runner.os == 'Windows'
         run: cargo test --test filesystem_conformance network_proxy_allows_http_through_managed_proxy_when_supported_or_fails_closed -- --exact
 
+      - name: Verify prepared Windows control cleanup first
+        if: runner.os == 'Windows'
+        run: cargo test --test execution_conformance cli_control_stalled_caller_cleans_owned_range_and_preserves_peer -- --include-ignored --exact
+
       - name: Run prepared Windows conformance
         if: runner.os == 'Windows'
         run: cargo test --all-targets -- --include-ignored
