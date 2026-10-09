@@ -1388,6 +1388,12 @@ pub fn main() -> Result<()> {
     }
     let cleanup_announcement =
         send_cleanup_started(&pipe_write, pi.hProcess, timed_out, cleanup_deadline);
+    if cleanup_announcement.is_err() {
+        log_note(
+            "runner cleanup failed at stage: cleanup_announcement",
+            log_dir,
+        );
+    }
     // The top-level exit is insufficient: descendants must leave the entire range.
     if unsafe {
         codex_windows_sandbox::terminate_process_range_and_wait(
@@ -1434,6 +1440,7 @@ pub fn main() -> Result<()> {
                 Ok(())
             });
         if cleanup_result.is_err() {
+            log_note("runner cleanup failed at stage: control_workers", log_dir);
             let _ = send_exit(
                 &pipe_write,
                 ExitPayload {
@@ -1452,18 +1459,19 @@ pub fn main() -> Result<()> {
         let _ = guard.take();
     }
     let close_worker = WorkerOwner::new(std::thread::spawn(move || drop(conpty_owner.take())));
-    let io_cleanup = (|| -> Result<()> {
-        join_worker(close_worker, cleanup_deadline, false)?;
+    let io_cleanup = (|| -> std::result::Result<(), &'static str> {
+        join_worker(close_worker, cleanup_deadline, false).map_err(|_| "conpty_close")?;
         output_done.store(true, Ordering::Release);
-        join_worker(controls_thread, cleanup_deadline, true)?;
-        join_worker(input_thread, cleanup_deadline, true)?;
-        join_control_worker(out_thread, cleanup_deadline)?;
+        join_worker(controls_thread, cleanup_deadline, true).map_err(|_| "controls_reader")?;
+        join_worker(input_thread, cleanup_deadline, true).map_err(|_| "stdin_writer")?;
+        join_control_worker(out_thread, cleanup_deadline).map_err(|_| "stdout_reader")?;
         if let Some(thread) = err_thread {
-            join_control_worker(thread, cleanup_deadline)?;
+            join_control_worker(thread, cleanup_deadline).map_err(|_| "stderr_reader")?;
         }
-        Ok(())
+        Ok::<(), &'static str>(())
     })();
-    if io_cleanup.is_err() {
+    if let Err(stage) = io_cleanup {
+        log_note(&format!("runner cleanup failed at stage: {stage}"), log_dir);
         let _ = send_exit(
             &pipe_write,
             ExitPayload {

@@ -95,7 +95,7 @@ in `tests/vendor_boundary.rs`.
 | File | RunSeal patch |
 |---|---|
 | `upstream/Cargo.toml` | Use the trimmed local vendor dependencies and enable the runner interfaces required by RunSeal. |
-| `upstream/bin/command_runner/win.rs` | Apply single-identity setup and process ownership; carry bounded input/output and cleanup state across the runner boundary. |
+| `upstream/bin/command_runner/win.rs` | Apply single-identity setup and process ownership; carry bounded input/output and cleanup state across the runner boundary, and log only static cleanup-stage labels when verification fails. |
 | `upstream/bin/setup_main/win.rs` | Keep setup binary imports and unsafe-code linting consistent with the vendored build. |
 | `upstream/conpty/mod.rs` | Preserve explicit process identity, terminal dimensions, interrupt handling, and argv quoting for terminal launches. |
 | `upstream/control.rs` | Add the bounded duplex child control endpoint, half-close behavior, and retained writer ownership. |

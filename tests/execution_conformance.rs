@@ -5158,6 +5158,7 @@ fn cli_stalled_console_output_for_policy(policy: &str) -> Result<()> {
         .flat_map(|stream| [false, true].map(move |timeout| (stream, timeout)))
     {
         let tmp = TempDir::new()?;
+        let runner_log_offset = console_runner_log_offset(tmp.path());
         let mut peer_client = Client::spawn("service")?;
         peer_client.send(1,"execute",json!({"command":[python()?,"-u","-c","import os,pathlib,time; print('READY '+str(os.getpid()),flush=True); count=0\nwhile True:\n count+=1; pathlib.Path('console-peer.beat').write_text(str(count)); time.sleep(0.01)"],"cwd":tmp.path(),"policy":policy}))?;
         let receipt = peer_client.next(Duration::from_secs(2))?;
@@ -5235,8 +5236,9 @@ fn cli_stalled_console_output_for_policy(policy: &str) -> Result<()> {
                     .filter(|pid| process_present(**pid).unwrap_or(false))
                     .count();
                 let terminals = read_console_terminal_summary(tmp.path());
+                let runner_stage = read_console_runner_cleanup_stage(tmp.path(), runner_log_offset);
                 anyhow::bail!(
-                    "stalled Console CLI cleanup did not finish for {policy} (driver_exited={driver_exited}, command_running={command_running}, sandbox_processes_running={sandbox_processes_running}, terminal={terminals})"
+                    "stalled Console CLI cleanup did not finish for {policy} (driver_exited={driver_exited}, command_running={command_running}, sandbox_processes_running={sandbox_processes_running}, terminal={terminals}, runner_stage={runner_stage})"
                 );
             }
             std::thread::sleep(Duration::from_millis(5));
@@ -5383,6 +5385,57 @@ fn read_console_terminal_summary(workspace: &std::path::Path) -> String {
     } else {
         results.join(",")
     }
+}
+
+#[cfg(windows)]
+fn console_runner_log_path(workspace: &std::path::Path) -> std::path::PathBuf {
+    let sandbox_home = std::env::var_os("RUNSEAL_WINDOWS_SANDBOX_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("LOCALAPPDATA").map(|root| {
+                std::path::PathBuf::from(root)
+                    .join("RunSeal")
+                    .join("windows-sandbox")
+            })
+        })
+        .unwrap_or_else(|| workspace.join(".runseal").join("sandbox"));
+    codex_windows_sandbox::current_log_file_path_for_codex_home(&sandbox_home)
+}
+
+#[cfg(windows)]
+fn console_runner_log_offset(workspace: &std::path::Path) -> u64 {
+    std::fs::metadata(console_runner_log_path(workspace))
+        .map(|metadata| metadata.len())
+        .unwrap_or(0)
+}
+
+#[cfg(windows)]
+fn read_console_runner_cleanup_stage(workspace: &std::path::Path, offset: u64) -> String {
+    let Ok(contents) = std::fs::read(console_runner_log_path(workspace)) else {
+        return "unavailable".to_owned();
+    };
+    let fresh = contents.get(offset as usize..).unwrap_or(&contents);
+    let prefix = "runner cleanup failed at stage: ";
+    for line in fresh.rsplit(|byte| *byte == b'\n') {
+        let Ok(line) = std::str::from_utf8(line) else {
+            continue;
+        };
+        let Some((_, stage)) = line.split_once(prefix) else {
+            continue;
+        };
+        let stage = stage.trim();
+        return match stage {
+            "cleanup_announcement"
+            | "control_workers"
+            | "conpty_close"
+            | "controls_reader"
+            | "stdin_writer"
+            | "stdout_reader"
+            | "stderr_reader" => stage.to_owned(),
+            _ => "unknown".to_owned(),
+        };
+    }
+    "none".to_owned()
 }
 
 #[cfg(windows)]

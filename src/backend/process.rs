@@ -573,18 +573,25 @@ fn wait_child_with_timeout(
         if timed_out || cancelled {
             let group_result = terminate_process_group(child.id());
             let child_result = child.kill();
-            let wait_result = child.wait();
+            let status = child.wait()?;
             group_result?;
+            // The group signal may reap the leader before the direct kill. A
+            // failed redundant kill is benign only after wait() confirms exit.
             if let Err(err) = child_result
-                && err.kind() != io::ErrorKind::InvalidInput
+                && !child_kill_reports_already_exited(&err)
             {
                 return Err(err);
             }
-            return wait_result.map(|status| (status, timed_out));
+            return Ok((status, timed_out));
         }
 
         thread::sleep(Duration::from_millis(10));
     }
+}
+
+#[cfg(unix)]
+fn child_kill_reports_already_exited(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::InvalidInput || error.raw_os_error() == Some(libc::ESRCH)
 }
 
 #[cfg(unix)]
@@ -599,6 +606,26 @@ fn terminate_process_group(process_id: u32) -> io::Result<()> {
         Ok(())
     } else {
         Err(error)
+    }
+}
+
+#[cfg(unix)]
+#[cfg(test)]
+mod process_group_cleanup_tests {
+    use super::*;
+
+    #[test]
+    fn direct_kill_race_accepts_esrch_only_after_wait_proves_exit() {
+        let error = io::Error::from_raw_os_error(libc::ESRCH);
+        assert!(child_kill_reports_already_exited(&error));
+        assert!(child_kill_reports_already_exited(&io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "process already exited",
+        )));
+        assert!(!child_kill_reports_already_exited(&io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "permission denied",
+        )));
     }
 }
 
