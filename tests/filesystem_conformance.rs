@@ -1842,10 +1842,21 @@ fn network_proxy_overrides_client_proxy_environment_when_supported_or_fails_clos
         "print('proxy-env-warmup')".to_string(),
         "Write-Output proxy-env-warmup".to_string(),
     );
-    let warmup = observation(&execute_messages_unlocked_with_watchdog(
-        warmup_params,
-        rpc_watchdog,
-    )?)?;
+    #[cfg(windows)]
+    let warmup_params = {
+        let mut params = warmup_params;
+        params["command"] = json!([
+            windows_python_bin()?,
+            "-u",
+            "-c",
+            "print('proxy-env-warmup')"
+        ]);
+        params["timeout_ms"] = json!(15_000);
+        params
+    };
+    let warmup_messages = execute_messages_unlocked_with_watchdog(warmup_params, rpc_watchdog)
+        .context("managed proxy environment warmup")?;
+    let warmup = observation(&warmup_messages)?;
     if is_backend_missing(&warmup) {
         let expected_features = expected_missing_features(&["network_proxy", "managed_proxy"]);
         assert_backend_missing_features(&warmup, &workspace, &expected_features)?;
@@ -1886,11 +1897,15 @@ fn network_proxy_overrides_client_proxy_environment_when_supported_or_fails_clos
     // Keep this socket probe in Python on Windows: unlike the previous
     // synchronous TcpClient.Connect probe, create_connection enforces a
     // connection timeout as well as the explicit read timeout below.
+    #[cfg(windows)]
+    let platform_code = code.clone();
+    #[cfg(not(windows))]
+    let platform_code = code;
     let mut params = platform_script_params(
         "workspace-write",
         &workspace,
         Some("proxy"),
-        code.clone(),
+        platform_code,
         String::new(),
     );
     params["env"] = json!({
@@ -1909,7 +1924,8 @@ fn network_proxy_overrides_client_proxy_environment_when_supported_or_fails_clos
     // The harness watchdog includes setup and cleanup. A 15-second watchdog
     // can kill the RPC host before the 3-second execution timeout and the
     // 10-second Windows cleanup budget have both elapsed, leaving a stale gate.
-    let messages = execute_messages_unlocked_with_watchdog(params, rpc_watchdog)?;
+    let messages = execute_messages_unlocked_with_watchdog(params, rpc_watchdog)
+        .context("managed proxy HTTP environment override probe")?;
     let response = observation(&messages)?;
 
     if is_backend_missing(&response) {
