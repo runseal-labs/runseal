@@ -64,7 +64,12 @@ pub fn collect_rpc(mut child: Child, message: &str) -> Result<Output> {
     while responses < expected || !active.is_empty() {
         let line = lines
             .recv_timeout(Duration::from_secs(15))
-            .context("RPC response/terminal watchdog")??;
+            .with_context(|| {
+                format!(
+                    "RPC response/terminal watchdog (responses={responses}/{expected}, active_executions={})",
+                    active.len()
+                )
+            })??;
         let value: Value = serde_json::from_slice(&line)?;
         if value.get("id").is_some() {
             responses += 1;

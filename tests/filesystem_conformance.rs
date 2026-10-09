@@ -1576,7 +1576,8 @@ fn network_proxy_allows_http_through_managed_proxy_when_supported_or_fails_close
         Some("proxy"),
         "print('proxy-warmup')".to_string(),
         "Write-Output proxy-warmup".to_string(),
-    ))?;
+    ))
+    .context("managed proxy warmup execution")?;
     if is_backend_missing(&warmup) {
         let expected_features = expected_missing_features(&["network_proxy", "managed_proxy"]);
         assert_backend_missing_features(&warmup, &workspace, &expected_features)?;
@@ -1639,7 +1640,11 @@ while ([DateTime]::UtcNow -lt $deadline) {
         $client = [Net.Sockets.TcpClient]::new()
         $client.ReceiveTimeout = 2000
         $client.SendTimeout = 2000
-        $client.Connect($proxy.Host, $proxy.Port)
+        $connect = $client.ConnectAsync($proxy.Host, $proxy.Port)
+        if (-not $connect.Wait(2000)) {
+            throw 'proxy connection timeout'
+        }
+        $connect.GetAwaiter().GetResult()
         $stream = $client.GetStream()
         $bytes = [Text.Encoding]::ASCII.GetBytes($request)
         $stream.Write($bytes, 0, $bytes.Length)
@@ -1674,7 +1679,8 @@ $successText
         Some("proxy"),
         code,
         ps_code,
-    ))?;
+    ))
+    .context("managed proxy HTTP conformance execution")?;
     let response = observation(&messages)?;
 
     if is_backend_missing(&response) {
