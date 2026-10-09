@@ -1595,7 +1595,9 @@ fn network_proxy_allows_http_through_managed_proxy_when_supported_or_fails_close
     #[cfg(windows)]
     let warmup_params = {
         let mut params = warmup_params;
-        params["command"] = json!(["cmd.exe", "/C", "echo proxy-warmup"]);
+        let command_processor =
+            std::env::var("ComSpec").context("Windows command interpreter path unavailable")?;
+        params["command"] = json!([command_processor, "/C", "echo proxy-warmup"]);
         params["timeout_ms"] = json!(3_000);
         params
     };
