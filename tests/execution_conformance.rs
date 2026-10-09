@@ -5390,7 +5390,14 @@ fn read_console_terminal_summary(workspace: &std::path::Path) -> String {
 #[cfg(windows)]
 fn console_runner_log_path(workspace: &std::path::Path) -> std::path::PathBuf {
     let sandbox_home = std::env::var_os("RUNSEAL_WINDOWS_SANDBOX_HOME")
-        .map(std::path::PathBuf::from)
+        .map(|home| {
+            let home = std::path::PathBuf::from(home);
+            if home.is_absolute() {
+                home
+            } else {
+                workspace.join(home)
+            }
+        })
         .or_else(|| {
             std::env::var_os("LOCALAPPDATA").map(|root| {
                 std::path::PathBuf::from(root)
@@ -5427,6 +5434,8 @@ fn read_console_runner_cleanup_stage(workspace: &std::path::Path, offset: u64) -
         return match stage {
             "cleanup_announcement"
             | "control_workers"
+            | "process_range"
+            | "exit_status"
             | "conpty_close"
             | "controls_reader"
             | "stdin_writer"

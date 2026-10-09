@@ -1403,6 +1403,7 @@ pub fn main() -> Result<()> {
     }
     .is_err()
     {
+        log_note("runner cleanup failed at stage: process_range", log_dir);
         let _ =
             send_unverified_range_cleanup(&pipe_write, pi.hProcess, timed_out, cleanup_deadline);
         anyhow::bail!("execution range cleanup could not be verified");
@@ -1410,6 +1411,7 @@ pub fn main() -> Result<()> {
     let exit_code = match completed_exit_code(pi.hProcess, cleanup_deadline) {
         Ok(code) => code,
         Err(error) => {
+            log_note("runner cleanup failed at stage: exit_status", log_dir);
             let _ = send_cleanup_error(
                 &pipe_write,
                 "execution exit status could not be verified",
