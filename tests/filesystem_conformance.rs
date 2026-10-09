@@ -1546,37 +1546,30 @@ sys.stderr.write(result.stderr)
 sys.exit(result.returncode)
 "#
     .to_string();
-    let ps_code = r#"
-$ErrorActionPreference = 'Stop'
-$child = @'
-$ErrorActionPreference = 'Stop'
-foreach ($key in @(
-    'HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy',
-    'NO_PROXY', 'no_proxy', 'RUNSEAL_NETWORK_PROXY_AUTHORIZATION'
-)) {
-    Remove-Item "Env:$key" -ErrorAction SilentlyContinue
-}
-$client = [Net.Sockets.TcpClient]::new()
-try {
-    $async = $client.BeginConnect('1.1.1.1', 53, $null, $null)
-    if ($async.AsyncWaitHandle.WaitOne(500)) {
-        $client.EndConnect($async)
-        'child-direct-network-ok'
-        exit 0
-    }
-    throw 'child direct network timeout'
-} finally {
-    $client.Dispose()
-}
-'@
-$output = & powershell.exe -NoProfile -Command $child 2>&1
-$exitCode = $LASTEXITCODE
-if ($output) { $output }
-exit $exitCode
-"#
-    .to_string();
-    let response =
-        execute_platform_script("workspace-write", &workspace, Some("proxy"), code, ps_code)?;
+    #[cfg(not(windows))]
+    let params = platform_script_params(
+        "workspace-write",
+        &workspace,
+        Some("proxy"),
+        code,
+        String::new(),
+    );
+    #[cfg(windows)]
+    let params = {
+        let mut params = platform_script_params(
+            "workspace-write",
+            &workspace,
+            Some("proxy"),
+            String::new(),
+            String::new(),
+        );
+        // Run the same real child-process probe as the portable path and keep
+        // cleanup bounded if the child fails to honor its socket timeout.
+        params["command"] = json!([windows_python_bin()?, "-u", "-c", code]);
+        params["timeout_ms"] = json!(3_000);
+        params
+    };
+    let response = execute_params(params)?;
 
     if is_backend_missing(&response) {
         let expected_features = expected_missing_features(&["network_proxy", "managed_proxy"]);
