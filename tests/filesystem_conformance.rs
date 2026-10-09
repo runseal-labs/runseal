@@ -1891,8 +1891,17 @@ try {
 }
 "#
     .replace("__REQUEST__", &proxy_request);
+    #[cfg(not(windows))]
     let mut params =
         platform_script_params("workspace-write", &workspace, Some("proxy"), code, ps_code);
+    #[cfg(windows)]
+    let mut params = platform_script_params(
+        "workspace-write",
+        &workspace,
+        Some("proxy"),
+        code.clone(),
+        ps_code,
+    );
     params["env"] = json!({
         "HTTP_PROXY": "http://attacker.invalid:9",
         "HTTPS_PROXY": "http://attacker.invalid:9",
@@ -1901,6 +1910,13 @@ try {
         "NO_PROXY": "*",
         "no_proxy": "*"
     });
+    #[cfg(windows)]
+    {
+        // Exercise the same managed-proxy request with Python on Windows and
+        // keep a stalled local proxy inside the fixture's cleanup window.
+        params["command"] = json!([windows_python_bin()?, "-u", "-c", code]);
+        params["timeout_ms"] = json!(3_000);
+    }
     let response = execute_params_unlocked(params)?;
 
     if is_backend_missing(&response) {
