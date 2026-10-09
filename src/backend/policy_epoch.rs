@@ -154,34 +154,56 @@ impl WindowsSandboxCrossProcessGate {
                 io::Error::other(BackendCleanupError)
             })?;
         loop {
-            if std::time::Instant::now() >= deadline {
-                super::record_test_cleanup_trace("policy_release_deadline");
-                let _ = mark_cross_process_quarantined(&quarantined, &quarantine);
-                if retained::thread_finished(&worker) {
-                    let _ = worker.join();
-                } else {
-                    retained::retain(worker);
+            match policy_release_worker_state(&worker, deadline) {
+                PolicyReleaseWorkerState::Finished => {
+                    let joined = worker.join();
+                    let result = completion.try_recv();
+                    return match (joined, result) {
+                        (Ok(()), Ok(Ok(()))) => Ok(()),
+                        (Ok(()), Ok(Err(error))) => {
+                            super::record_test_cleanup_trace("policy_release_operation_failed");
+                            Err(error)
+                        }
+                        _ => {
+                            super::record_test_cleanup_trace("policy_release_worker_failed");
+                            let _ = mark_cross_process_quarantined(&quarantined, &quarantine);
+                            Err(io::Error::other(BackendCleanupError))
+                        }
+                    };
                 }
-                return Err(io::Error::other(BackendCleanupError));
+                PolicyReleaseWorkerState::TimedOut => {
+                    super::record_test_cleanup_trace("policy_release_deadline");
+                    let _ = mark_cross_process_quarantined(&quarantined, &quarantine);
+                    retained::retain(worker);
+                    return Err(io::Error::other(BackendCleanupError));
+                }
+                PolicyReleaseWorkerState::Pending => {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
             }
-            if retained::thread_finished(&worker) {
-                let joined = worker.join();
-                let result = completion.try_recv();
-                return match (joined, result) {
-                    (Ok(()), Ok(Ok(()))) => Ok(()),
-                    (Ok(()), Ok(Err(error))) => {
-                        super::record_test_cleanup_trace("policy_release_operation_failed");
-                        Err(error)
-                    }
-                    _ => {
-                        super::record_test_cleanup_trace("policy_release_worker_failed");
-                        let _ = mark_cross_process_quarantined(&quarantined, &quarantine);
-                        Err(io::Error::other(BackendCleanupError))
-                    }
-                };
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
         }
+    }
+}
+
+#[cfg(windows)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PolicyReleaseWorkerState {
+    Finished,
+    TimedOut,
+    Pending,
+}
+
+#[cfg(windows)]
+fn policy_release_worker_state(
+    worker: &std::thread::JoinHandle<()>,
+    deadline: std::time::Instant,
+) -> PolicyReleaseWorkerState {
+    if crate::execution::retained::thread_finished(worker) {
+        PolicyReleaseWorkerState::Finished
+    } else if std::time::Instant::now() >= deadline {
+        PolicyReleaseWorkerState::TimedOut
+    } else {
+        PolicyReleaseWorkerState::Pending
     }
 }
 
@@ -968,6 +990,30 @@ fn to_wide(value: &OsStr) -> Vec<u16> {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn completed_policy_release_worker_wins_over_elapsed_deadline() -> io::Result<()> {
+        let worker = std::thread::spawn(|| {});
+        let wait_deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !crate::execution::retained::thread_finished(&worker) {
+            if std::time::Instant::now() >= wait_deadline {
+                return Err(io::Error::other("policy release worker did not finish"));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        assert_eq!(
+            policy_release_worker_state(
+                &worker,
+                std::time::Instant::now() - std::time::Duration::from_millis(1)
+            ),
+            PolicyReleaseWorkerState::Finished
+        );
+        worker
+            .join()
+            .map_err(|_| io::Error::other("policy release worker panicked"))?;
+        Ok(())
+    }
 
     #[test]
     fn reservation_release_respects_held_native_mutex_deadline_and_preserves_quarantine()
