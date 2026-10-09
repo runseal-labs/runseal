@@ -31,6 +31,7 @@ use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject};
 
 const MAX_HEADER_BYTES: usize = 64 * 1024;
 const NO_PROXY: &str = "";
+#[cfg(windows)]
 const MANAGED_PROXY_PORT: u16 = 43129;
 #[cfg(target_os = "linux")]
 const LINUX_SANDBOX_PROXY_PORT: u16 = 43129;
