@@ -59,6 +59,7 @@ pub fn collect_rpc(mut child: Child, message: &str) -> Result<Output> {
     let mut responses = 0;
     let mut active = std::collections::BTreeSet::new();
     let mut transcript = Vec::new();
+    let mut observed_events = Vec::new();
     // The receipt remains a receipt in this raw transcript. Hold the connection open
     // until every admitted execution publishes its own terminal; EOF would cancel it.
     while responses < expected || !active.is_empty() {
@@ -66,8 +67,9 @@ pub fn collect_rpc(mut child: Child, message: &str) -> Result<Output> {
             .recv_timeout(Duration::from_secs(15))
             .with_context(|| {
                 format!(
-                    "RPC response/terminal watchdog (responses={responses}/{expected}, active_executions={})",
-                    active.len()
+                    "RPC response/terminal watchdog (responses={responses}/{expected}, active_executions={}, observed={})",
+                    active.len(),
+                    observed_events.join(" -> ")
                 )
             })??;
         let value: Value = serde_json::from_slice(&line)?;
@@ -91,6 +93,20 @@ pub fn collect_rpc(mut child: Child, message: &str) -> Result<Output> {
                     .as_str()
                     .context("terminal execution ID")?,
             );
+        }
+        let summary = if value.get("id").is_some() {
+            let status = value["result"]["status"].as_str();
+            let code = value["error"]["data"]["code"].as_str();
+            format!("response(status={status:?},code={code:?})")
+        } else {
+            let event_type = value["params"]["type"].as_str().unwrap_or("notification");
+            let sequence = value["params"]["event_seq"].as_u64();
+            let code = value["params"]["result"]["error"]["code"].as_str();
+            format!("event(type={event_type},seq={sequence:?},code={code:?})")
+        };
+        observed_events.push(summary);
+        if observed_events.len() > 16 {
+            observed_events.remove(0);
         }
         transcript.extend_from_slice(&line);
     }
