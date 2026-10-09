@@ -139,12 +139,17 @@ impl WindowsSandboxCrossProcessGate {
             .map_or(deadline, |old| old.min(deadline));
         let quarantined = self.quarantined.clone();
         let quarantine = self.quarantine.clone();
+        let release_committed = std::sync::Arc::new(AtomicBool::new(false));
+        let worker_release_committed = release_committed.clone();
         let mut owner = ReleaseOwner(self);
         let (completed, completion) = std::sync::mpsc::channel();
         let worker = std::thread::Builder::new()
             .name("runseal-policy-release".into())
             .spawn(move || {
-                let result = owner.0.release_with(deadline, before_release);
+                let result =
+                    owner
+                        .0
+                        .release_with(deadline, before_release, Some(&worker_release_committed));
                 drop(owner);
                 let _ = completed.send(result);
             })
@@ -154,7 +159,11 @@ impl WindowsSandboxCrossProcessGate {
                 io::Error::other(BackendCleanupError)
             })?;
         loop {
-            match policy_release_worker_state(&worker, deadline) {
+            match policy_release_worker_state(&worker, deadline, &release_committed) {
+                PolicyReleaseWorkerState::Committed => {
+                    retained::retain(worker);
+                    return Ok(());
+                }
                 PolicyReleaseWorkerState::Finished => {
                     let joined = worker.join();
                     let result = completion.try_recv();
@@ -188,6 +197,7 @@ impl WindowsSandboxCrossProcessGate {
 #[cfg(windows)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PolicyReleaseWorkerState {
+    Committed,
     Finished,
     TimedOut,
     Pending,
@@ -197,8 +207,11 @@ enum PolicyReleaseWorkerState {
 fn policy_release_worker_state(
     worker: &std::thread::JoinHandle<()>,
     deadline: std::time::Instant,
+    release_committed: &AtomicBool,
 ) -> PolicyReleaseWorkerState {
-    if crate::execution::retained::thread_finished(worker) {
+    if release_committed.load(Ordering::Acquire) {
+        PolicyReleaseWorkerState::Committed
+    } else if crate::execution::retained::thread_finished(worker) {
         PolicyReleaseWorkerState::Finished
     } else if std::time::Instant::now() >= deadline {
         PolicyReleaseWorkerState::TimedOut
@@ -450,13 +463,14 @@ impl Drop for WindowsSandboxCrossProcessGate {
 #[cfg(windows)]
 impl WindowsSandboxCrossProcessGate {
     fn release(&mut self, deadline: std::time::Instant) -> io::Result<()> {
-        self.release_with(deadline, || {})
+        self.release_with(deadline, || {}, None)
     }
 
     fn release_with<F: FnOnce()>(
         &mut self,
         deadline: std::time::Instant,
         before_state_read: F,
+        release_committed: Option<&AtomicBool>,
     ) -> io::Result<()> {
         if self.released {
             return Ok(());
@@ -501,6 +515,9 @@ impl WindowsSandboxCrossProcessGate {
             write_cross_process_gate_state(&self.state_path, &state)?;
             super::record_test_cleanup_trace("policy_release_state_written");
             self.released = true;
+            if let Some(release_committed) = release_committed {
+                release_committed.store(true, Ordering::Release);
+            }
             Ok(())
         })();
         if result.is_err() {
@@ -1005,10 +1022,40 @@ mod tests {
         assert_eq!(
             policy_release_worker_state(
                 &worker,
-                std::time::Instant::now() - std::time::Duration::from_millis(1)
+                std::time::Instant::now() - std::time::Duration::from_millis(1),
+                &AtomicBool::new(false),
             ),
             PolicyReleaseWorkerState::Finished
         );
+        worker
+            .join()
+            .map_err(|_| io::Error::other("policy release worker panicked"))?;
+        Ok(())
+    }
+
+    #[test]
+    fn committed_policy_release_wins_over_elapsed_deadline() -> io::Result<()> {
+        let (started, ready) = std::sync::mpsc::channel();
+        let (release, wait) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let _ = started.send(());
+            let _ = wait.recv();
+        });
+        ready
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .map_err(io::Error::other)?;
+        let committed = AtomicBool::new(true);
+        assert_eq!(
+            policy_release_worker_state(
+                &worker,
+                std::time::Instant::now() - std::time::Duration::from_millis(1),
+                &committed,
+            ),
+            PolicyReleaseWorkerState::Committed
+        );
+        release
+            .send(())
+            .map_err(|_| io::Error::other("policy release worker unavailable"))?;
         worker
             .join()
             .map_err(|_| io::Error::other("policy release worker panicked"))?;
