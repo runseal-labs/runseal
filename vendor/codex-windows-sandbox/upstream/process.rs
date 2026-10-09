@@ -24,6 +24,7 @@ use windows_sys::Win32::System::Console::STD_ERROR_HANDLE;
 use windows_sys::Win32::System::Console::STD_INPUT_HANDLE;
 use windows_sys::Win32::System::Console::STD_OUTPUT_HANDLE;
 use windows_sys::Win32::System::Pipes::CreatePipe;
+use windows_sys::Win32::System::Pipes::PeekNamedPipe;
 use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
 use windows_sys::Win32::System::Threading::CREATE_SUSPENDED;
 use windows_sys::Win32::System::Threading::CREATE_UNICODE_ENVIRONMENT;
@@ -40,6 +41,89 @@ pub struct CreatedProcess {
     pub process_info: PROCESS_INFORMATION,
     pub startup_info: STARTUPINFOW,
     _desktop: LaunchDesktop,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum ProcessIdentity {
+    Current,
+    PrimaryToken(HANDLE),
+}
+
+/// Terminates the owned execution range and verifies that no active processes remain.
+///
+/// # Safety
+/// `raw_job` must be a valid job handle owned by the caller for the entire call.
+pub unsafe fn terminate_process_range_and_wait(
+    raw_job: usize,
+    wait: std::time::Duration,
+) -> std::io::Result<()> {
+    use windows_sys::Win32::System::JobObjects::{
+        JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JobObjectBasicAccountingInformation,
+        QueryInformationJobObject, TerminateJobObject,
+    };
+    let job = raw_job as HANDLE;
+    let deadline = std::time::Instant::now() + wait;
+    let mut termination_requested = false;
+    let mut termination_error = None;
+    loop {
+        let mut info: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = std::mem::zeroed();
+        if QueryInformationJobObject(
+            job,
+            JobObjectBasicAccountingInformation,
+            &mut info as *mut _ as *mut _,
+            std::mem::size_of_val(&info) as u32,
+            std::ptr::null_mut(),
+        ) == 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+        if info.ActiveProcesses == 0 {
+            return Ok(());
+        }
+        if !termination_requested {
+            termination_requested = true;
+            if TerminateJobObject(job, 1) == 0 {
+                // Cancellation may have already started terminating this job.
+                // Keep checking under the same deadline instead of treating a
+                // racing second termination request as proof that cleanup failed.
+                termination_error = Some(std::io::Error::last_os_error());
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(termination_error.unwrap_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "execution range cleanup deadline exceeded",
+                )
+            }));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+#[cfg(test)]
+mod process_range_cleanup_tests {
+    use super::*;
+
+    #[test]
+    fn empty_job_cleanup_needs_only_query_access() -> std::io::Result<()> {
+        use windows_sys::Win32::System::JobObjects::{CreateJobObjectW, OpenJobObjectW};
+        use windows_sys::Win32::System::SystemServices::JOB_OBJECT_QUERY;
+
+        let name = to_wide(format!("Local\\RunSealEmptyJob-{}", std::process::id()));
+        let full_access = unsafe { CreateJobObjectW(std::ptr::null(), name.as_ptr()) };
+        if full_access == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let _full_access = OwnedProcessHandle(full_access);
+        let query_only = unsafe { OpenJobObjectW(JOB_OBJECT_QUERY, 0, name.as_ptr()) };
+        if query_only == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let _query_only = OwnedProcessHandle(query_only);
+
+        unsafe { terminate_process_range_and_wait(query_only as usize, std::time::Duration::ZERO) }
+    }
 }
 
 pub fn make_env_block(env: &HashMap<String, String>) -> Vec<u16> {
@@ -94,6 +178,35 @@ pub unsafe fn create_process_as_user(
     start_suspended: bool,
     security_capabilities: Option<*mut SECURITY_CAPABILITIES>,
 ) -> Result<CreatedProcess> {
+    create_process_for_identity(
+        ProcessIdentity::PrimaryToken(h_token),
+        argv,
+        cwd,
+        env_map,
+        logs_base_dir,
+        stdio,
+        desktop_mode,
+        restricting_sids,
+        start_suspended,
+        security_capabilities,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn create_process_for_identity(
+    identity: ProcessIdentity,
+    argv: &[String],
+    cwd: &Path,
+    env_map: &HashMap<String, String>,
+    logs_base_dir: Option<&Path>,
+    stdio: Option<(HANDLE, HANDLE, HANDLE)>,
+    desktop_mode: LaunchDesktopMode,
+    restricting_sids: &[*mut c_void],
+    start_suspended: bool,
+    security_capabilities: Option<*mut SECURITY_CAPABILITIES>,
+    control_handle: Option<HANDLE>,
+) -> Result<CreatedProcess> {
     let cmdline_str = argv_to_command_line(argv);
     let mut cmdline: Vec<u16> = to_wide(&cmdline_str);
     let env_block = make_env_block(env_map);
@@ -113,7 +226,27 @@ pub unsafe fn create_process_as_user(
             si.StartupInfo.hStdInput = stdin_h;
             si.StartupInfo.hStdOutput = stdout_h;
             si.StartupInfo.hStdError = stderr_h;
+            // The CRT startup table contains only the fixed logical descriptor 3.
+            // Standard descriptors are initialized from the explicit stdio handles.
+            let mut descriptor_table = Vec::new();
+            if let Some(handle) = control_handle {
+                descriptor_table.extend_from_slice(&4u32.to_ne_bytes());
+                descriptor_table.extend_from_slice(&[0, 0, 0, 0x09]);
+                for descriptor in [
+                    INVALID_HANDLE_VALUE,
+                    INVALID_HANDLE_VALUE,
+                    INVALID_HANDLE_VALUE,
+                    handle,
+                ] {
+                    descriptor_table.extend_from_slice(&descriptor.to_ne_bytes());
+                }
+                si.StartupInfo.cbReserved2 = descriptor_table.len() as u16;
+                si.StartupInfo.lpReserved2 = descriptor_table.as_mut_ptr();
+            }
             let mut inherited_handles = vec![stdin_h, stdout_h];
+            if let Some(handle) = control_handle {
+                inherited_handles.push(handle);
+            }
             if !inherited_handles.contains(&stderr_h) {
                 inherited_handles.push(stderr_h);
             }
@@ -139,7 +272,8 @@ pub unsafe fn create_process_as_user(
                 | EXTENDED_STARTUPINFO_PRESENT
                 | if start_suspended { CREATE_SUSPENDED } else { 0 };
             let lowbox = security_capabilities.is_some();
-            let ok = if lowbox {
+            let current_identity = matches!(identity, ProcessIdentity::Current);
+            let ok = if lowbox || current_identity {
                 CreateProcessW(
                     std::ptr::null(),
                     cmdline.as_mut_ptr(),
@@ -153,8 +287,11 @@ pub unsafe fn create_process_as_user(
                     &mut pi,
                 )
             } else {
+                let ProcessIdentity::PrimaryToken(token) = identity else {
+                    anyhow::bail!("primary token launch expected");
+                };
                 CreateProcessAsUserW(
-                    h_token,
+                    token,
                     std::ptr::null(),
                     cmdline.as_mut_ptr(),
                     std::ptr::null_mut(),
@@ -167,19 +304,36 @@ pub unsafe fn create_process_as_user(
                     &mut pi,
                 )
             };
-            if ok == 0 {
-                let err = GetLastError() as i32;
+            let creation_error = (ok == 0).then(|| GetLastError() as i32);
+            if let Some(handle) = control_handle
+                && SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) == 0
+                && ok != 0
+            {
+                // No retained control endpoint may stay inheritable in this process.
+                // Control launches are suspended until their owned range is assigned.
+                let cleanup_ok =
+                    windows_sys::Win32::System::Threading::TerminateProcess(pi.hProcess, 1) != 0
+                        && windows_sys::Win32::System::Threading::WaitForSingleObject(
+                            pi.hProcess,
+                            10000,
+                        ) == 0;
+                CloseHandle(pi.hThread);
+                CloseHandle(pi.hProcess);
+                if !cleanup_ok {
+                    return Err(crate::SandboxCleanupError.into());
+                }
+                return Err(anyhow!("control endpoint inheritance reset failed"));
+            }
+            if let Some(err) = creation_error {
                 let msg = format!(
-                    "{} failed: {} ({}) | cwd={} | cmd={} | env_u16_len={} | si_flags={} | creation_flags={}",
-                    if lowbox {
+                    "{} failed: {} ({}) | env_u16_len={} | si_flags={} | creation_flags={}",
+                    if lowbox || current_identity {
                         "CreateProcessW"
                     } else {
                         "CreateProcessAsUserW"
                     },
                     err,
                     format_last_error(err),
-                    cwd.display(),
-                    cmdline_str,
                     env_block_len,
                     si.StartupInfo.dwFlags,
                     creation_flags,
@@ -187,6 +341,8 @@ pub unsafe fn create_process_as_user(
                 logging::debug_log(&msg, logs_base_dir);
                 return Err(anyhow!(msg));
             }
+            si.StartupInfo.cbReserved2 = 0;
+            si.StartupInfo.lpReserved2 = ptr::null_mut();
             Ok(CreatedProcess {
                 process_info: pi,
                 startup_info: si.StartupInfo,
@@ -194,6 +350,9 @@ pub unsafe fn create_process_as_user(
             })
         }
         None => {
+            let ProcessIdentity::PrimaryToken(h_token) = identity else {
+                anyhow::bail!("current identity launch requires explicit stdio handles");
+            };
             if security_capabilities.is_some() {
                 anyhow::bail!("AppContainer process creation requires an explicit handle list");
             }
@@ -221,11 +380,9 @@ pub unsafe fn create_process_as_user(
             if ok == 0 {
                 let err = GetLastError() as i32;
                 let msg = format!(
-                    "CreateProcessAsUserW failed: {} ({}) | cwd={} | cmd={} | env_u16_len={} | si_flags={} | creation_flags={}",
+                    "CreateProcessAsUserW failed: {} ({}) | env_u16_len={} | si_flags={} | creation_flags={}",
                     err,
                     format_last_error(err),
-                    cwd.display(),
-                    cmdline_str,
                     env_block_len,
                     si.dwFlags,
                     creation_flags,
@@ -264,6 +421,309 @@ pub struct PipeSpawnHandles {
     pub stdout_read: HANDLE,
     pub stderr_read: Option<HANDLE>,
     pub(crate) desktop: LaunchDesktop,
+    pub control: Option<crate::DuplexControl>,
+}
+
+struct OwnedProcessHandle(HANDLE);
+impl Drop for OwnedProcessHandle {
+    fn drop(&mut self) {
+        unsafe {
+            CloseHandle(self.0);
+        }
+    }
+}
+
+/// Inspect buffered bytes without waiting for a foreign writer reference to close.
+pub fn available_pipe_bytes(pipe: &std::fs::File) -> std::io::Result<Option<usize>> {
+    use std::os::windows::io::AsRawHandle;
+    let mut available = 0;
+    let success = unsafe {
+        PeekNamedPipe(
+            pipe.as_raw_handle() as HANDLE,
+            ptr::null_mut(),
+            0,
+            ptr::null_mut(),
+            &mut available,
+            ptr::null_mut(),
+        )
+    };
+    if success != 0 {
+        return Ok(Some(available as usize));
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(windows_sys::Win32::Foundation::ERROR_BROKEN_PIPE as i32) {
+        Ok(None)
+    } else {
+        Err(error)
+    }
+}
+
+/// Local execution with current identity and only an owned lifecycle range.
+/// No filesystem, token, account, network, or setup policy is applied here.
+pub struct LocalExecutionProcess {
+    process: OwnedProcessHandle,
+    job: OwnedProcessHandle,
+    pub stdin: Option<std::fs::File>,
+    pub stdout: Option<std::fs::File>,
+    pub stderr: Option<std::fs::File>,
+    pub control: Option<crate::DuplexControl>,
+    control_owner: Option<crate::DuplexControl>,
+    _desktop: Option<LaunchDesktop>,
+    terminal: Option<std::sync::Arc<crate::ConptyInstance>>,
+}
+
+#[derive(Clone)]
+pub struct LocalTerminal {
+    owner: std::sync::Arc<crate::ConptyInstance>,
+}
+
+impl LocalTerminal {
+    pub fn resize(&self, rows: u16, cols: u16) -> Result<()> {
+        if !(1..=1000).contains(&rows) || !(1..=1000).contains(&cols) {
+            anyhow::bail!("invalid terminal dimensions");
+        }
+        let handle = self
+            .owner
+            .raw_handle()
+            .ok_or_else(|| anyhow!("terminal unavailable"))?;
+        crate::resize_conpty_handle(handle, cols as i16, rows as i16)
+    }
+}
+
+impl LocalExecutionProcess {
+    pub fn spawn(
+        command: &[String],
+        cwd: &Path,
+        environment: &HashMap<String, String>,
+        stdin_open: bool,
+    ) -> Result<Self> {
+        Self::spawn_with_terminal(command, cwd, environment, stdin_open, None)
+    }
+
+    pub fn spawn_with_terminal(
+        command: &[String],
+        cwd: &Path,
+        environment: &HashMap<String, String>,
+        stdin_open: bool,
+        terminal_size: Option<(u16, u16)>,
+    ) -> Result<Self> {
+        Self::spawn_with_io(command, cwd, environment, stdin_open, terminal_size, false)
+    }
+
+    pub fn spawn_with_control(
+        command: &[String],
+        cwd: &Path,
+        environment: &HashMap<String, String>,
+        stdin_open: bool,
+    ) -> Result<Self> {
+        Self::spawn_with_io(command, cwd, environment, stdin_open, None, true)
+    }
+
+    fn spawn_with_io(
+        command: &[String],
+        cwd: &Path,
+        environment: &HashMap<String, String>,
+        stdin_open: bool,
+        terminal_size: Option<(u16, u16)>,
+        control_pipe: bool,
+    ) -> Result<Self> {
+        if terminal_size
+            .is_some_and(|(rows, cols)| !(1..=1000).contains(&rows) || !(1..=1000).contains(&cols))
+            || (terminal_size.is_some() && !stdin_open)
+        {
+            anyhow::bail!("invalid terminal input or dimensions");
+        }
+        use std::os::windows::io::FromRawHandle;
+        use windows_sys::Win32::System::JobObjects::{
+            AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+            SetInformationJobObject,
+        };
+        use windows_sys::Win32::System::Threading::{
+            ResumeThread, TerminateProcess, WaitForSingleObject,
+        };
+        unsafe {
+            let raw_job = CreateJobObjectW(ptr::null(), ptr::null());
+            if raw_job == 0 {
+                return Err(std::io::Error::last_os_error().into());
+            }
+            let job = OwnedProcessHandle(raw_job);
+            let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            if SetInformationJobObject(
+                job.0,
+                JobObjectExtendedLimitInformation,
+                &limits as *const _ as *const _,
+                std::mem::size_of_val(&limits) as u32,
+            ) == 0
+            {
+                return Err(std::io::Error::last_os_error().into());
+            }
+            let (pi, stdin, stdout, stderr, desktop, terminal, control) =
+                if let Some((rows, cols)) = terminal_size {
+                    let (pi, mut terminal) = crate::conpty::spawn_conpty_process_for_identity(
+                        ProcessIdentity::Current,
+                        command,
+                        cwd,
+                        environment,
+                        LaunchDesktopMode::Default,
+                        &[],
+                        None,
+                        true,
+                        None,
+                        (cols as i16, rows as i16),
+                    )?;
+                    let stdin = Some(std::fs::File::from_raw_handle(
+                        terminal.take_input_write() as *mut _
+                    ));
+                    let stdout = Some(std::fs::File::from_raw_handle(
+                        terminal.take_output_read() as *mut _
+                    ));
+                    (
+                        pi,
+                        stdin,
+                        stdout,
+                        None,
+                        None,
+                        Some(std::sync::Arc::new(terminal)),
+                        None,
+                    )
+                } else {
+                    let pipes = spawn_process_with_pipes_for_identity(
+                        ProcessIdentity::Current,
+                        command,
+                        cwd,
+                        environment,
+                        if stdin_open {
+                            StdinMode::Open
+                        } else {
+                            StdinMode::Closed
+                        },
+                        StderrMode::Separate,
+                        LaunchDesktopMode::Default,
+                        &[],
+                        None,
+                        true,
+                        None,
+                        control_pipe,
+                    )?;
+
+                    (
+                        pipes.process,
+                        pipes
+                            .stdin_write
+                            .map(|handle| std::fs::File::from_raw_handle(handle as *mut _)),
+                        Some(std::fs::File::from_raw_handle(pipes.stdout_read as *mut _)),
+                        pipes
+                            .stderr_read
+                            .map(|handle| std::fs::File::from_raw_handle(handle as *mut _)),
+                        Some(pipes.desktop),
+                        None,
+                        pipes.control,
+                    )
+                };
+            let thread = OwnedProcessHandle(pi.hThread);
+            let result = Self {
+                process: OwnedProcessHandle(pi.hProcess),
+                job,
+                stdin,
+                stdout,
+                stderr,
+                _desktop: desktop,
+                terminal,
+                control_owner: control.clone(),
+                control,
+            };
+            if AssignProcessToJobObject(result.job.0, result.process.0) == 0
+                || ResumeThread(thread.0) == u32::MAX
+            {
+                let error = std::io::Error::last_os_error();
+                if TerminateProcess(result.process.0, 1) == 0
+                    || WaitForSingleObject(result.process.0, 10000) != 0
+                {
+                    return Err(crate::SandboxCleanupError.into());
+                }
+                result
+                    .cleanup(std::time::Duration::from_secs(10))
+                    .map_err(|_| crate::SandboxCleanupError)?;
+                return Err(error.into());
+            }
+            Ok(result)
+        }
+    }
+
+    pub fn close_terminal(&mut self) -> Option<std::thread::JoinHandle<std::io::Result<()>>> {
+        self.terminal.take().map(|terminal| {
+            std::thread::spawn(move || {
+                drop(terminal);
+                Ok(())
+            })
+        })
+    }
+
+    pub fn terminal(&self) -> Option<LocalTerminal> {
+        self.terminal.as_ref().map(|owner| LocalTerminal {
+            owner: owner.clone(),
+        })
+    }
+
+    pub fn try_wait(&self) -> std::io::Result<Option<u32>> {
+        use windows_sys::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject};
+        unsafe {
+            match WaitForSingleObject(self.process.0, 0) {
+                0 => {
+                    let mut code = 0;
+                    if GetExitCodeProcess(self.process.0, &mut code) == 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(Some(code))
+                }
+                0x102 => Ok(None),
+                _ => Err(std::io::Error::last_os_error()),
+            }
+        }
+    }
+
+    pub fn cleanup(&self, timeout: std::time::Duration) -> std::io::Result<()> {
+        let deadline = std::time::Instant::now() + timeout;
+        unsafe { terminate_process_range_and_wait(self.job.0 as usize, timeout) }?;
+        if let Some(control) = &self.control_owner {
+            control.finish_output(deadline.saturating_duration_since(std::time::Instant::now()))?;
+        }
+        Ok(())
+    }
+
+    pub fn finish(&self, timeout: std::time::Duration) -> std::io::Result<u32> {
+        let deadline = std::time::Instant::now() + timeout;
+        self.cleanup(timeout)?;
+        // ActiveProcesses can reach zero before the process handle becomes signaled.
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        let wait_ms = u32::try_from(remaining.as_millis())
+            .unwrap_or(u32::MAX - 1)
+            .min(u32::MAX - 1);
+        unsafe {
+            if windows_sys::Win32::System::Threading::WaitForSingleObject(self.process.0, wait_ms)
+                != 0
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "execution exit wait could not be completed",
+                ));
+            }
+        }
+        self.try_wait()?
+            .ok_or_else(|| std::io::Error::other("execution exit status unavailable"))
+    }
+}
+
+impl Drop for LocalExecutionProcess {
+    fn drop(&mut self) {
+        unsafe {
+            // Covers partial setup too; this handle still refers only to the owned process.
+            windows_sys::Win32::System::Threading::TerminateProcess(self.process.0, 1);
+            windows_sys::Win32::System::JobObjects::TerminateJobObject(self.job.0, 1);
+        }
+    }
 }
 
 /// Spawns a process with anonymous pipes and returns the relevant handles.
@@ -281,6 +741,70 @@ pub fn spawn_process_with_pipes(
     start_suspended: bool,
     security_capabilities: Option<*mut SECURITY_CAPABILITIES>,
 ) -> Result<PipeSpawnHandles> {
+    spawn_process_with_pipes_and_control(
+        h_token,
+        argv,
+        cwd,
+        env_map,
+        stdin_mode,
+        stderr_mode,
+        desktop_mode,
+        restricting_sids,
+        logs_base_dir,
+        start_suspended,
+        security_capabilities,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_process_with_pipes_and_control(
+    h_token: HANDLE,
+    argv: &[String],
+    cwd: &Path,
+    env_map: &HashMap<String, String>,
+    stdin_mode: StdinMode,
+    stderr_mode: StderrMode,
+    desktop_mode: LaunchDesktopMode,
+    restricting_sids: &[*mut c_void],
+    logs_base_dir: Option<&Path>,
+    start_suspended: bool,
+    security_capabilities: Option<*mut SECURITY_CAPABILITIES>,
+    control_pipe: bool,
+) -> Result<PipeSpawnHandles> {
+    spawn_process_with_pipes_for_identity(
+        ProcessIdentity::PrimaryToken(h_token),
+        argv,
+        cwd,
+        env_map,
+        stdin_mode,
+        stderr_mode,
+        desktop_mode,
+        restricting_sids,
+        logs_base_dir,
+        start_suspended,
+        security_capabilities,
+        control_pipe,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_process_with_pipes_for_identity(
+    identity: ProcessIdentity,
+    argv: &[String],
+    cwd: &Path,
+    env_map: &HashMap<String, String>,
+    stdin_mode: StdinMode,
+    stderr_mode: StderrMode,
+    desktop_mode: LaunchDesktopMode,
+    restricting_sids: &[*mut c_void],
+    logs_base_dir: Option<&Path>,
+    start_suspended: bool,
+    security_capabilities: Option<*mut SECURITY_CAPABILITIES>,
+    control_pipe: bool,
+) -> Result<PipeSpawnHandles> {
+    let control = control_pipe.then(crate::DuplexControl::pair).transpose()?;
+
     let mut in_r: HANDLE = 0;
     let mut in_w: HANDLE = 0;
     let mut out_r: HANDLE = 0;
@@ -314,8 +838,8 @@ pub fn spawn_process_with_pipes(
 
     let stdio = Some((in_r, out_w, stderr_handle));
     let spawn_result = unsafe {
-        create_process_as_user(
-            h_token,
+        create_process_for_identity(
+            identity,
             argv,
             cwd,
             env_map,
@@ -325,6 +849,7 @@ pub fn spawn_process_with_pipes(
             restricting_sids,
             start_suspended,
             security_capabilities,
+            control.as_ref().map(|(_, child)| child.handle()),
         )
     };
     let created = match spawn_result {
@@ -372,6 +897,7 @@ pub fn spawn_process_with_pipes(
             StderrMode::MergeStdout => None,
         },
         desktop,
+        control: control.map(|(parent, _child)| parent),
     })
 }
 

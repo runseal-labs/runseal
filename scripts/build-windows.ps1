@@ -40,9 +40,12 @@ function Copy-BuiltBinary {
 
 Push-Location $repoRoot
 try {
-    cargo build @profileArgs --bin runseal
-    cargo build @profileArgs --manifest-path vendor\codex-windows-sandbox\upstream\Cargo.toml --bin runseal-windows-sandbox-setup
-    cargo build @profileArgs --manifest-path vendor\codex-windows-sandbox\upstream\Cargo.toml --bin runseal-command-runner
+    cargo build @profileArgs --target-dir target --bin runseal
+    if ($LASTEXITCODE -ne 0) { throw "RunSeal build failed" }
+    cargo build @profileArgs --target-dir target --manifest-path vendor\codex-windows-sandbox\upstream\Cargo.toml --bin runseal-windows-sandbox-setup
+    if ($LASTEXITCODE -ne 0) { throw "Windows setup helper build failed" }
+    cargo build @profileArgs --target-dir target --manifest-path vendor\codex-windows-sandbox\upstream\Cargo.toml --bin runseal-command-runner
+    if ($LASTEXITCODE -ne 0) { throw "Windows command runner build failed" }
 
     $rootTarget = Join-Path $repoRoot "target\$profileName"
     $vendorTarget = Join-Path $repoRoot "vendor\codex-windows-sandbox\upstream\target\$profileName"

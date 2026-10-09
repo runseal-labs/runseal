@@ -5,6 +5,7 @@ mod commands;
 mod error;
 mod events;
 mod execution;
+mod limits;
 mod linux;
 mod macos;
 mod policy;
@@ -32,7 +33,7 @@ use serde_json::{Value, json};
 use std::env;
 use std::path::{Path, PathBuf};
 
-const PROTOCOL_VERSION: &str = "runseal.protocol/v1";
+const PROTOCOL_VERSION: &str = "runseal.protocol/v2";
 const MAX_METADATA_BYTES: usize = 4096;
 const MAX_PROTOCOL_ID_BYTES: usize = 128;
 const MAX_ENV_ENTRIES: usize = 64;
@@ -42,6 +43,20 @@ const WINDOWS_SANDBOX_SETUP_FAILED: &str = "windows sandbox setup failed; first 
 const WINDOWS_SANDBOX_UNSUPPORTED: &str = "windows sandbox setup is only supported on Windows";
 
 pub fn run_cli() {
+    if let Err(error) = limits::initialize() {
+        let args: Vec<String> = env::args().skip(1).collect();
+        let structured = args.first().is_some_and(|command| command == "exec")
+            && args
+                .iter()
+                .take_while(|argument| argument.as_str() != "--")
+                .any(|argument| argument == "--json" || argument == "--events");
+        if structured {
+            println!("{}", protocol::error_payload::cli_error_payload(error));
+        } else {
+            eprintln!("[runseal:{}] {}", error.code, error.message);
+        }
+        std::process::exit(125);
+    }
     if let Err(err) = run() {
         if !err.is_empty() {
             eprintln!("{err}");
@@ -64,6 +79,10 @@ fn run() -> Result<(), String> {
         }
         [command] if command == "version" => commands::version::print_plain(),
         [command] if command == "capabilities" => commands::capabilities::run(),
+        #[cfg(windows)]
+        [command, rest @ ..] if command == "__console-output" => {
+            commands::exec::run_console_output_worker(rest)
+        }
         #[cfg(target_os = "linux")]
         [command, rest @ ..] if command == "__linux-proxy-relay" => {
             backend::run_linux_proxy_relay(rest).map(|code| std::process::exit(code))
@@ -89,8 +108,13 @@ fn run() -> Result<(), String> {
             format!("service {flag} requires a remote transport RFC and is not implemented"),
         ),
         [command, rest @ ..] if command == "setup" => commands::setup::run(rest),
+        [command, rest @ ..] if command == "repair" => commands::repair::run(rest),
         [command, rest @ ..] if command == "explain-policy" => commands::explain_policy::run(rest),
-        [command, rest @ ..] if command == "exec" => commands::exec::run(rest),
+        [command, rest @ ..] if command == "exec" => commands::exec::run(rest).map(|code| {
+            if code != 0 {
+                std::process::exit(code);
+            }
+        }),
         [] => Err("missing command".to_string()),
         _ => Err(format!("unknown command: {}", args.join(" "))),
     }

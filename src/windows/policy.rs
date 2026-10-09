@@ -54,11 +54,13 @@ pub(crate) enum WindowsFilesystemRuleSource {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg(test)]
 pub(crate) struct WindowsFilesystemAclPlan {
     entries: Vec<WindowsFilesystemAclEntry>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg(test)]
 pub(crate) struct WindowsFilesystemAclEntry {
     access: WindowsFilesystemAccess,
     source: WindowsFilesystemRuleSource,
@@ -67,12 +69,14 @@ pub(crate) struct WindowsFilesystemAclEntry {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(test)]
 pub(crate) enum WindowsFilesystemAclEffect {
     Allow,
     Deny,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(test)]
 pub(crate) enum WindowsFilesystemAclRights {
     FullControl,
     Modify,
@@ -80,22 +84,26 @@ pub(crate) enum WindowsFilesystemAclRights {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg(test)]
 pub(crate) enum WindowsFilesystemAclScope {
     RootAndDescendants,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg(test)]
 pub(crate) struct WindowsFilesystemAclTransactionPlan {
     steps: Vec<WindowsFilesystemAclTransactionStep>,
     rollback_roots: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg(test)]
 pub(crate) enum WindowsFilesystemAclTransactionStep {
     CaptureRollback { root: String },
     ApplyEntry { entry: WindowsFilesystemAclEntry },
 }
 
+#[cfg(test)]
 impl WindowsFilesystemAclPlan {
     pub(crate) fn from_rules(rules: &[WindowsFilesystemRule]) -> Self {
         Self {
@@ -111,6 +119,7 @@ impl WindowsFilesystemAclPlan {
     }
 }
 
+#[cfg(test)]
 impl WindowsFilesystemAclTransactionPlan {
     pub(crate) fn from_acl_plan(acl_plan: &WindowsFilesystemAclPlan) -> Self {
         let mut steps = Vec::new();
@@ -168,6 +177,7 @@ impl WindowsFilesystemAclTransactionPlan {
     }
 }
 
+#[cfg(test)]
 impl WindowsFilesystemAclEntry {
     fn from_rule(rule: &WindowsFilesystemRule) -> Self {
         Self {
@@ -765,7 +775,7 @@ mod tests {
             plan.filesystem.mode,
             WindowsFilesystemMode::ReadOnlyCapability
         );
-        assert_eq!(plan.filesystem.read_roots, vec!["/workspace"]);
+        assert_eq!(plan.filesystem.read_roots, vec!["*"]);
         assert!(plan.filesystem.write_roots.is_empty());
         assert!(plan.filesystem.runtime_write_roots.is_empty());
         assert!(plan.filesystem.effective_write_roots().is_empty());
@@ -1029,7 +1039,12 @@ mod tests {
     #[test]
     fn runtime_roots_are_effective_writable_roots_without_changing_policy_roots() {
         let cwd = PathBuf::from("/workspace");
-        let policy = normalize_policy(&json!("read-only"), &cwd, None).unwrap();
+        let policy = normalize_policy(
+            &json!({"sandbox_level":"read-only", "filesystem":{"read":["/workspace"]}}),
+            &cwd,
+            None,
+        )
+        .unwrap();
         let runtime_roots = WindowsRuntimeRoots::new(
             "/workspace/.runseal/runtime/exec_1".to_string(),
             "/workspace/.runseal/runtime/exec_1/profile".to_string(),

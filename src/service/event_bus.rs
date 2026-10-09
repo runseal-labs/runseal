@@ -1,14 +1,6 @@
 use serde_json::Value;
 
-pub(super) fn filter_events(events: &[Value], types: &[String]) -> Vec<Value> {
-    events
-        .iter()
-        .filter(|event| event_matches_types(event, types))
-        .cloned()
-        .collect()
-}
-
-fn event_matches_types(event: &Value, types: &[String]) -> bool {
+pub(super) fn event_matches_types(event: &Value, types: &[String]) -> bool {
     if types.is_empty() {
         return true;
     }

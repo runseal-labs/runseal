@@ -130,6 +130,15 @@ pub(crate) fn start_runner_stdout_reader(
                             OutputStream::Stdout => {
                                 let _ = stdout_tx.send(data);
                             }
+                            OutputStream::Control => {
+                                send_runner_error(
+                                    "unexpected control output",
+                                    &stdout_tx,
+                                    stderr_tx.as_ref(),
+                                );
+                                let _ = exit_tx.send(-1);
+                                break;
+                            }
                             OutputStream::Stderr => {
                                 if let Some(stderr_tx) = stderr_tx.as_ref() {
                                     let _ = stderr_tx.send(data);
@@ -150,9 +159,15 @@ pub(crate) fn start_runner_stdout_reader(
                     break;
                 }
                 Message::SpawnReady { .. }
+                | Message::CleanupStarted { .. }
                 | Message::Stdin { .. }
                 | Message::CloseStdin { .. }
+                | Message::StdinAcknowledged { .. }
+                | Message::Control { .. }
+                | Message::CloseControl { .. }
+                | Message::ControlAcknowledged { .. }
                 | Message::Resize { .. }
+                | Message::Interrupt { .. }
                 | Message::SpawnRequest { .. }
                 | Message::Terminate { .. } => {}
             }

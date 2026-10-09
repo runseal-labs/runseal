@@ -1,3 +1,6 @@
+#[path = "support/realtime_rpc.rs"]
+mod realtime_rpc;
+
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use std::env;
@@ -15,6 +18,22 @@ use std::time::Duration;
 use tempfile::TempDir;
 
 const PRIVATE_TERMS: &[&str] = &["sid", "acl", "wfp", "seatbelt", "seccomp", "landlock"];
+
+#[cfg(windows)]
+fn windows_test_gate() -> std::sync::MutexGuard<'static, ()> {
+    // These groups use different policies against the shared Windows boundary.
+    static GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    GATE.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+#[cfg(not(windows))]
+struct NoopWindowsTestGuard;
+
+#[cfg(not(windows))]
+fn windows_test_gate() -> NoopWindowsTestGuard {
+    NoopWindowsTestGuard
+}
 
 fn runseal_bin() -> PathBuf {
     env::var_os("RUNSEAL_BIN")
@@ -63,24 +82,19 @@ fn resolve_python_bin() -> String {
 }
 
 fn run_rpc(message: &str) -> Result<std::process::Output> {
-    let mut child = Command::new(runseal_bin())
+    let child = Command::new(runseal_bin())
         .args(["rpc", "--stdio"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .context("failed to run runseal rpc")?;
-    child
-        .stdin
-        .as_mut()
-        .context("stdin unavailable")?
-        .write_all(message.as_bytes())
-        .context("failed to write rpc request")?;
-    child.wait_with_output().context("failed to wait for rpc")
+    realtime_rpc::collect_rpc(child, message)
 }
 
 #[test]
 fn adversarial_policy_cases_run() -> Result<()> {
+    let _guard = windows_test_gate();
     adversarial_tier0_policy_cases_emit_public_safe_results()?;
     adversarial_policy_hash_spoof_case_runs()?;
     adversarial_network_override_hash_drift_case_runs()?;
@@ -89,6 +103,7 @@ fn adversarial_policy_cases_run() -> Result<()> {
 
 #[test]
 fn adversarial_execution_injection_cases_run() -> Result<()> {
+    let _guard = windows_test_gate();
     adversarial_execution_injection_deny_cases_run()?;
     adversarial_stdin_file_outside_cwd_case_runs()?;
     adversarial_program_resolution_confusion_case_runs()
@@ -96,6 +111,7 @@ fn adversarial_execution_injection_cases_run() -> Result<()> {
 
 #[test]
 fn adversarial_audit_cases_run() -> Result<()> {
+    let _guard = windows_test_gate();
     adversarial_audit_metadata_redaction_cases_run()?;
     adversarial_audit_lookup_deny_cases_run()?;
     adversarial_audit_consistency_cases_run()?;
@@ -104,12 +120,14 @@ fn adversarial_audit_cases_run() -> Result<()> {
 
 #[test]
 fn adversarial_filesystem_and_runtime_cases_run() -> Result<()> {
+    let _guard = windows_test_gate();
     adversarial_filesystem_path_denial_cases_run()?;
     adversarial_runtime_root_denial_cases_run()
 }
 
 #[test]
 fn adversarial_process_cases_run() -> Result<()> {
+    let _guard = windows_test_gate();
     adversarial_process_policy_cases_run()?;
     #[cfg(windows)]
     adversarial_process_timeout_cases_run()?;
@@ -118,11 +136,13 @@ fn adversarial_process_cases_run() -> Result<()> {
 
 #[test]
 fn adversarial_network_cases_run() -> Result<()> {
+    let _guard = windows_test_gate();
     adversarial_network_fail_closed_cases_run()
 }
 
 #[test]
 fn adversarial_harness_internals_work() -> Result<()> {
+    let _guard = windows_test_gate();
     adversarial_harness_materializes_file_fixtures_before_execution()?;
     adversarial_harness_materializes_directory_fixtures_before_execution()?;
     adversarial_harness_materializes_symlink_fixtures_before_execution()?;
@@ -1450,7 +1470,10 @@ fn windows_timeout_command() -> Value {
 
 #[cfg(windows)]
 fn observed_timeout_result(response: &Value) -> &'static str {
-    match response["error"]["data"]["code"].as_str() {
+    match response["result"]["error"]["code"]
+        .as_str()
+        .or_else(|| response["error"]["data"]["code"].as_str())
+    {
         Some("EXECUTION_TIMEOUT") => "timeout",
         Some("BACKEND_UNAVAILABLE") => "setup_unavailable",
         _ => "harness_error",
@@ -1458,7 +1481,10 @@ fn observed_timeout_result(response: &Value) -> &'static str {
 }
 
 fn observed_filesystem_denial_result(response: &Value) -> &'static str {
-    match response["error"]["data"]["code"].as_str() {
+    match response["result"]["error"]["code"]
+        .as_str()
+        .or_else(|| response["error"]["data"]["code"].as_str())
+    {
         Some(
             "BACKEND_UNAVAILABLE"
             | "BACKEND_CAPABILITY_MISSING"
@@ -1473,7 +1499,10 @@ fn observed_filesystem_denial_result(response: &Value) -> &'static str {
 }
 
 fn observed_policy_rejected_result(response: &Value) -> &'static str {
-    match response["error"]["data"]["code"].as_str() {
+    match response["result"]["error"]["code"]
+        .as_str()
+        .or_else(|| response["error"]["data"]["code"].as_str())
+    {
         Some("INVALID_REQUEST" | "POLICY_INVALID") => "policy_rejected",
         _ => "harness_error",
     }
@@ -1554,7 +1583,10 @@ fn run_case_messages_with_overrides(
 }
 
 fn observed_denial_result(response: &Value) -> &'static str {
-    match response["error"]["data"]["code"].as_str() {
+    match response["result"]["error"]["code"]
+        .as_str()
+        .or_else(|| response["error"]["data"]["code"].as_str())
+    {
         Some("INVALID_REQUEST" | "POLICY_INVALID") => "deny",
         _ => "harness_error",
     }
@@ -1581,19 +1613,25 @@ fn rpc_messages(message: &str) -> Result<Vec<Value>> {
         bail!("{}", String::from_utf8_lossy(&output.stderr));
     }
     let stdout = String::from_utf8(output.stdout).context("stdout must be utf-8")?;
-    stdout
+    let messages = stdout
         .lines()
         .filter(|line| !line.trim().is_empty())
         .map(serde_json::from_str::<Value>)
         .collect::<Result<Vec<_>, _>>()
-        .context("rpc response must be JSON")
+        .context("rpc response must be JSON")?;
+    let bytes = realtime_rpc::stream_bytes(&messages, "execution.stdout")?;
+    let terminal = realtime_rpc::terminal_or_response(&messages)?;
+    if terminal["result"]["stdout_bytes"].is_number() {
+        assert_eq!(
+            terminal["result"]["stdout_bytes"].as_u64(),
+            Some(bytes.len() as u64)
+        );
+    }
+    Ok(messages)
 }
 
 fn response_message(messages: &[Value]) -> Result<&Value> {
-    messages
-        .iter()
-        .find(|message| message.get("id") == Some(&json!(1)))
-        .context("rpc response must exist")
+    realtime_rpc::terminal_or_response(messages)
 }
 
 fn read_audit_events(root: &Path, audit_path: &str) -> Result<Vec<Value>> {

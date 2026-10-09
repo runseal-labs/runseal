@@ -299,15 +299,19 @@ fn tools_call_result(config: &McpConfig, params: &Value) -> Result<Value, RunSea
         Ok(env) => env,
         Err(err) => return Ok(tool_runseal_error(err)),
     };
-    match execute_command(
-        &request.command,
-        &cwd,
-        &policy,
-        ExecutionStdin::Empty,
+    match execute_command(ExecutionRequest {
+        control_input: None,
+        io: crate::backend::ExecutionIo::Pipe,
+        ids: crate::events::new_execution_ids(),
+        control: crate::execution::ExecutionControl::default(),
+        command: request.command,
+        cwd,
+        policy,
+        stdin: ExecutionStdin::Empty,
         env,
-        None,
-        request.timeout,
-    ) {
+        metadata: None,
+        timeout: request.timeout,
+    }) {
         Ok((_events, result)) => {
             let exit_code = result.get("exit_code").and_then(Value::as_i64).unwrap_or(1);
             Ok(tool_result(mcp_execution_payload(&result), exit_code != 0))

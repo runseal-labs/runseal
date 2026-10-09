@@ -19,6 +19,24 @@ function Quote-ProcessArgument {
     '"' + ($Value -replace '(\\*)"', '$1$1\"' -replace '(\\+)$', '$1$1') + '"'
 }
 
+function Get-ExecutionStreamText {
+    param(
+        [object]$Payload,
+        [ValidateSet("stdout", "stderr")]
+        [string]$Stream
+    )
+
+    $streamProperty = $Payload.output.PSObject.Properties[$Stream]
+    if ($null -eq $streamProperty -or $streamProperty.Value.encoding -ne "base64") {
+        throw "JSON execution result omitted the $Stream byte stream"
+    }
+    $data = $streamProperty.Value.data
+    if ($data -notmatch '^base64:') {
+        throw "JSON execution stream did not use the declared base64 encoding"
+    }
+    [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($data.Substring(7)))
+}
+
 function Invoke-RunSealJson {
     param(
         [string[]]$RunArgs,
@@ -41,7 +59,7 @@ function Invoke-RunSealJson {
         $stderrTask = $process.StandardError.ReadToEndAsync()
         if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
             $process.Kill()
-            throw "runseal timed out after ${TimeoutSeconds}s: $($RunArgs -join ' ')"
+            throw "runseal timed out after ${TimeoutSeconds}s"
         }
         $process.WaitForExit()
         $exitCode = $process.ExitCode
@@ -49,25 +67,17 @@ function Invoke-RunSealJson {
         $stderr = $stderrTask.Result
 
         if ($exitCode -ne 0 -and -not $AllowFailure) {
-            throw @"
-runseal failed ($exitCode): $($RunArgs -join ' ')
-stdout:
-$stdout
-stderr:
-$stderr
-"@
+            $stdoutBytes = [System.Text.Encoding]::UTF8.GetByteCount($stdout)
+            $stderrBytes = [System.Text.Encoding]::UTF8.GetByteCount($stderr)
+            throw "runseal command failed (exit_code=$exitCode, stdout_bytes=$stdoutBytes, stderr_bytes=$stderrBytes)"
         }
 
         try {
             $json = $stdout | ConvertFrom-Json
         } catch {
-            throw @"
-runseal stdout was not JSON: $($RunArgs -join ' ')
-stdout:
-$stdout
-stderr:
-$stderr
-"@
+            $stdoutBytes = [System.Text.Encoding]::UTF8.GetByteCount($stdout)
+            $stderrBytes = [System.Text.Encoding]::UTF8.GetByteCount($stderr)
+            throw "runseal stdout was not JSON (stdout_bytes=$stdoutBytes, stderr_bytes=$stderrBytes)"
         }
 
         [pscustomobject]@{
@@ -122,14 +132,44 @@ function Assert-SetupRequiredStatus {
     }
 }
 
-function Assert-ExecFailsClosedForSetup {
+function Assert-ExecRepairedSetup {
+    param(
+        [object]$Run,
+        [string]$GateStateBefore = "unknown"
+    )
+
+    if ($Run.ExitCode -ne 0) {
+        $setupStatus = $null
+        try {
+            $setupStatus = (Invoke-RunSealJson -RunArgs @(
+                "setup", "windows-sandbox", "--status", "--json", "--cwd", $workspace
+            )).Json
+        } catch {
+            # Keep the execution failure primary; report status as unavailable below.
+        }
+        $lastResult = Get-ScheduledSetupBrokerLastResult
+        $errorCode = $Run.Json.error.data.code
+        $cleanupComplete = $Run.Json.error.data.cleanup_complete
+        $gateStateAfter = Get-ExecutionGateSummary
+        if ($null -eq $setupStatus) {
+            throw "sandboxed exec could not repair setup through the broker (code=$errorCode, cleanup_complete=$cleanupComplete, gate_before=$GateStateBefore, gate_after=$gateStateAfter, setup_status=unavailable, broker_last_result=$lastResult)"
+        }
+        throw "sandboxed exec could not repair setup through the broker (code=$errorCode, cleanup_complete=$cleanupComplete, gate_before=$GateStateBefore, gate_after=$gateStateAfter, setup_requires_setup=$($setupStatus.requires_setup), broker=$($setupStatus.broker), next_action=$($setupStatus.next_action), broker_last_result=$lastResult)"
+    }
+    $stdout = Get-ExecutionStreamText -Payload $Run.Json -Stream "stdout"
+    if ($Run.Json.exit_code -ne 0 -or $stdout -notmatch "runsealsandbox") {
+        throw "sandboxed exec did not run as the sandbox identity after repair (exit_code=$($Run.Json.exit_code), identity_match=$($stdout -match 'runsealsandbox'))"
+    }
+}
+
+function Assert-ExecFailsClosedWithoutSetupBroker {
     param([object]$Run)
 
     if ($Run.ExitCode -eq 0) {
-        throw "sandboxed exec unexpectedly succeeded before setup"
+        throw "sandboxed exec unexpectedly succeeded without setup or a broker"
     }
     if ($Run.Json.error.data.code -ne "BACKEND_UNAVAILABLE") {
-        throw "sandboxed exec returned wrong setup-missing error: $($Run.Stdout)"
+        throw "sandboxed exec returned wrong setup-missing error (code=$($Run.Json.error.data.code))"
     }
     if (-not $Run.Json.error.data.setup_status.requires_setup) {
         throw "sandboxed exec error did not include setup_status.requires_setup"
@@ -143,6 +183,40 @@ function Get-ScheduledSetupBrokerLastResult {
     } catch {
         return $null
     }
+}
+
+function Get-ExecutionGateSummary {
+    $gateDirectory = Join-Path ([Environment]::GetFolderPath("CommonApplicationData")) "RunSeal\execution-gates"
+    if (-not (Test-Path -LiteralPath $gateDirectory -PathType Container)) {
+        return "state_dir=missing"
+    }
+
+    try {
+        $files = @(Get-ChildItem -LiteralPath $gateDirectory -File -Force -ErrorAction Stop)
+        $stateFiles = @($files | Where-Object { $_.Name -match '^[0-9a-f]{64}\.json$' })
+        $cleanupMarkers = @($files | Where-Object { $_.Name -like "*.cleanup-failed" })
+        $activeReservations = 0
+        $unreadableStateFiles = 0
+        foreach ($file in $stateFiles) {
+            try {
+                $state = [System.IO.File]::ReadAllText($file.FullName) | ConvertFrom-Json
+                $activeReservations += @($state.active).Count
+            } catch {
+                $unreadableStateFiles += 1
+            }
+        }
+        return "state_files=$($stateFiles.Count), active_reservations=$activeReservations, cleanup_markers=$($cleanupMarkers.Count), unreadable_state_files=$unreadableStateFiles"
+    } catch {
+        return "state=unavailable"
+    }
+}
+
+function Get-ExecutionFailureSummary {
+    param([object]$Run)
+
+    $data = $Run.Json.error.data
+    $executionIdPresent = -not [string]::IsNullOrWhiteSpace($data.execution_id)
+    return "code=$($data.code), cleanup_complete=$($data.cleanup_complete), execution_id_present=$executionIdPresent, exit_code=$($data.exit_code), requested_termination_reason=$($data.requested_termination_reason), timeout_ms=$($data.timeout_ms), stdout_bytes=$($data.stdout_bytes), stderr_bytes=$($data.stderr_bytes), terminal_bytes=$($data.terminal_bytes), control_bytes=$($data.control_bytes)"
 }
 
 function Invoke-Setup {
@@ -185,7 +259,7 @@ try {
         "exec", "--json", "--policy", "workspace-write", "--network", "disabled", "--cwd", $workspace, "--timeout-ms", "5000", "--",
         "whoami.exe"
     ) -TimeoutSeconds 10
-    Assert-ExecFailsClosedForSetup $missingExec
+    Assert-ExecFailsClosedWithoutSetupBroker $missingExec
 
     if (-not $statusBefore.can_run_setup_now) {
         if (-not $AllowElevation) {
@@ -221,19 +295,54 @@ try {
     Write-Host "Checking setup repair path"
     Assert-SetupReady (Invoke-Setup).Json
 
-    Write-Host "Checking stale setup fails closed"
-    $marker = Join-Path $workspace ".runseal\sandbox\.sandbox\setup_marker.json"
+    Write-Host "Checking sandboxed exec after explicit setup"
+    $gateBeforeReadyExec = Get-ExecutionGateSummary
+    $readyExec = Invoke-RunSealJson -AllowFailure -RunArgs @(
+        "exec", "--json", "--policy", "workspace-write", "--network", "disabled", "--cwd", $workspace, "--timeout-ms", "60000", "--",
+        "whoami.exe"
+    ) -TimeoutSeconds 120
+    if ($readyExec.ExitCode -ne 0) {
+        $failureSummary = Get-ExecutionFailureSummary $readyExec
+        $gateAfterReadyExec = Get-ExecutionGateSummary
+        throw "sandboxed exec failed after explicit setup ($failureSummary, gate_before=$gateBeforeReadyExec, gate_after=$gateAfterReadyExec)"
+    }
+    $readyStdout = Get-ExecutionStreamText -Payload $readyExec.Json -Stream "stdout"
+    if ($readyExec.Json.exit_code -ne 0 -or $readyStdout -notmatch "runsealsandbox") {
+        throw "sandboxed exec after explicit setup did not run as the sandbox identity (exit_code=$($readyExec.Json.exit_code), identity_match=$($readyStdout -match 'runsealsandbox'))"
+    }
+
+    Write-Host "Checking setup status stays read-only when setup is stale"
+    $gateBeforeStaleExec = Get-ExecutionGateSummary
+    $sandboxHomeOverride = [Environment]::GetEnvironmentVariable("RUNSEAL_WINDOWS_SANDBOX_HOME")
+    if ([string]::IsNullOrWhiteSpace($sandboxHomeOverride)) {
+        $localAppData = [Environment]::GetEnvironmentVariable("LOCALAPPDATA")
+        if ([string]::IsNullOrWhiteSpace($localAppData)) {
+            $sandboxHome = Join-Path $workspace ".runseal\sandbox"
+        } else {
+            $sandboxHome = Join-Path $localAppData "RunSeal\windows-sandbox"
+        }
+    } else {
+        $sandboxHome = [System.IO.Path]::GetFullPath($sandboxHomeOverride)
+    }
+    $marker = Join-Path $sandboxHome ".sandbox\setup_marker.json"
+    if (-not (Test-Path -LiteralPath $marker -PathType Leaf)) {
+        throw "sandbox setup marker missing after successful setup"
+    }
     Remove-Item -LiteralPath $marker -Force
     $staleStatus = (Invoke-RunSealJson -RunArgs @("setup", "windows-sandbox", "--status", "--json", "--cwd", $workspace)).Json
     Assert-SetupRequiredStatus $staleStatus
 
     $staleExec = Invoke-RunSealJson -AllowFailure -RunArgs @(
-        "exec", "--json", "--policy", "workspace-write", "--network", "disabled", "--cwd", $workspace, "--timeout-ms", "5000", "--",
+        "exec", "--json", "--policy", "workspace-write", "--network", "disabled", "--cwd", $workspace, "--timeout-ms", "60000", "--",
         "whoami.exe"
-    ) -TimeoutSeconds 10
-    Assert-ExecFailsClosedForSetup $staleExec
+    ) -TimeoutSeconds 240
+    Assert-ExecRepairedSetup $staleExec $gateBeforeStaleExec
+    $repairedStatus = (Invoke-RunSealJson -RunArgs @("setup", "windows-sandbox", "--status", "--json", "--cwd", $workspace)).Json
+    if ($repairedStatus.requires_setup) {
+        throw "sandboxed exec returned without repairing stale setup"
+    }
 
-    Write-Host "Repairing stale setup"
+    Write-Host "Checking setup action after automatic repair"
     if ($AllowElevation -and $staleStatus.elevated -eq $false) {
         $elevated = Invoke-Setup -Elevate
         if ($elevated.Json.status -eq "elevation_requested") {
@@ -258,8 +367,9 @@ try {
         "exec", "--json", "--policy", "workspace-write", "--network", "disabled", "--cwd", $workspace, "--timeout-ms", "5000", "--",
         "whoami.exe"
     ) -TimeoutSeconds 10).Json
-    if ($identity.exit_code -ne 0 -or $identity.stdout -notmatch "runsealsandbox") {
-        throw "sandbox identity smoke failed: $($identity.stderr)"
+    $identityStdout = Get-ExecutionStreamText -Payload $identity -Stream "stdout"
+    if ($identity.exit_code -ne 0 -or $identityStdout -notmatch "runsealsandbox") {
+        throw "sandbox identity smoke failed (exit_code=$($identity.exit_code), identity_match=$($identityStdout -match 'runsealsandbox'))"
     }
 
     Write-Host "Checking sandbox runner can write allowed workspace root"
@@ -270,7 +380,7 @@ try {
         "cmd", "/C", "echo runseal-write-ok>runner-token-write.txt"
     ) -TimeoutSeconds 10).Json
     if ($writeProbe.exit_code -ne 0) {
-        throw "sandbox write probe failed: $($writeProbe.stderr)"
+        throw "sandbox write probe failed (exit_code=$($writeProbe.exit_code))"
     }
     if (-not (Test-Path -LiteralPath $writeProbePath -PathType Leaf)) {
         throw "sandbox write probe did not create file in workspace"
@@ -288,7 +398,7 @@ try {
         throw "timeout smoke unexpectedly succeeded"
     }
     if ($timeout.Json.error.data.code -ne "EXECUTION_TIMEOUT") {
-        throw "timeout smoke returned wrong error: $($timeout.Stdout)"
+        throw "timeout smoke returned wrong error (code=$($timeout.Json.error.data.code))"
     }
 
     if ($IncludeGit -and (Get-Command git -ErrorAction SilentlyContinue)) {
@@ -297,8 +407,9 @@ try {
             "exec", "--json", "--policy", "workspace-write", "--network", "disabled", "--cwd", $workspace, "--timeout-ms", "5000", "--",
             "git", "--version"
         ) -TimeoutSeconds 10).Json
-        if ($git.exit_code -ne 0 -or $git.stdout -notmatch "git version") {
-            throw "git smoke failed: $($git.stderr)"
+        $gitStdout = Get-ExecutionStreamText -Payload $git -Stream "stdout"
+        if ($git.exit_code -ne 0 -or $gitStdout -notmatch "git version") {
+            throw "git smoke failed (exit_code=$($git.exit_code), version_match=$($gitStdout -match 'git version'))"
         }
     }
 

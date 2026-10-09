@@ -2,14 +2,16 @@ use crate::policy::{
     BackendFeature, NetworkMode, SandboxLevel, SandboxPolicy, matches_environment_scrub_pattern,
 };
 use crate::windows::policy::{
-    WindowsFilesystemAclPlan, WindowsFilesystemAclTransactionPlan, WindowsFilesystemRule,
-    WindowsHostRoots, WindowsPolicyPlan, WindowsRuntimeRoots,
+    WindowsFilesystemRule, WindowsHostRoots, WindowsPolicyPlan, WindowsRuntimeRoots,
 };
 use crate::windows::vendor_adapter::WindowsVendorSandboxProfile;
 mod capability;
 mod core;
 mod error;
 mod execution;
+mod input;
+pub use input::{ExecutionInput, InputError, InputPoll};
+#[cfg(test)]
 mod filesystem;
 #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 mod managed_proxy;
@@ -23,6 +25,9 @@ mod skeleton;
 mod windows;
 #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 use crate::events::timestamp_now;
+#[cfg(test)]
+use crate::windows::policy::{WindowsFilesystemAclPlan, WindowsFilesystemAclTransactionPlan};
+#[cfg(test)]
 use filesystem::{
     WindowsFilesystemAclDriver, WindowsFilesystemAclSubject,
     apply_private_filesystem_acl_transaction, new_windows_filesystem_acl_driver,
@@ -32,13 +37,13 @@ use filesystem::{
 use managed_proxy::LinuxSandboxProxy;
 #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 use managed_proxy::ManagedSandboxProxy;
-#[cfg(all(test, windows))]
-use process::WindowsKillOnCloseJob;
 #[cfg(test)]
 use process::cleanup_child_after_setup_error;
 #[cfg(any(test, windows))]
 use process::minimal_environment;
+#[cfg(test)]
 use process::spawn_local_command;
+use process::spawn_local_command_with_output;
 use runtime::{
     RUNTIME_ROOT_MARKER, normalize_lexical, prepare_unique_runtime_root,
     runtime_marker_is_regular_file, validate_runtime_root_ancestors,
@@ -50,6 +55,20 @@ use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::process::Output;
+
+pub(crate) fn record_test_cleanup_trace(stage: &str) {
+    #[cfg(all(windows, debug_assertions))]
+    if let Some(path) = std::env::var_os("RUNSEAL_TEST_CLEANUP_TRACE") {
+        use std::io::Write;
+        if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(path) {
+            let _ = writeln!(file, "{stage}");
+        }
+    }
+
+    #[cfg(not(all(windows, debug_assertions)))]
+    let _ = stage;
+}
+
 #[cfg(windows)]
 use {
     codex_protocol::models::PermissionProfile,
@@ -61,10 +80,19 @@ use {
 
 pub use capability::CapabilityStatus;
 use capability::capabilities_json_for;
+
+#[cfg(windows)]
+pub(crate) fn set_sandbox_level_capability_status(payload: &mut Value, status: CapabilityStatus) {
+    capability::set_sandbox_level_status(payload, status);
+}
 #[cfg(test)]
 use capability::missing_backend_features;
 pub use core::SandboxBackend;
+use error::BackendCleanupError;
+pub(crate) use error::BackendCleanupFacts;
 pub use error::BackendError;
+#[cfg(all(test, windows))]
+pub(crate) use error::BackendInputFacts;
 #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 use error::BackendUnavailableError;
 #[cfg(all(test, windows))]
@@ -75,7 +103,11 @@ use error::{
     public_windows_setup_unavailable_reason,
 };
 pub(crate) use error::{backend_unavailable_reason, policy_transition_busy_reason};
-pub use execution::{BackendExecutionOutput, ExecutionEnv, ExecutionStdin};
+pub(crate) use error::{cleanup_failed, failure_exit_code, failure_timed_out, input_failed};
+pub use execution::{
+    BackendExecutionOptions, BackendExecutionOutput, BackendMessage, ExecutionEnv, ExecutionIo,
+    ExecutionOutputSink, ExecutionStdin, OutputStream,
+};
 #[cfg(target_os = "linux")]
 pub(crate) use managed_proxy::run_linux_proxy_relay;
 pub use plan::PlatformSandboxPlan;
@@ -84,13 +116,60 @@ use plan::environment_runtime_json;
 use plan::protected_filesystem_labels;
 #[cfg(windows)]
 use policy_epoch::windows_sandbox_execution_gate;
+#[cfg(windows)]
+pub(crate) use policy_epoch::{ExecutionGateRepair, repair_execution_gate};
 #[cfg(all(test, windows))]
 use policy_epoch::{WindowsSandboxPolicyCohortKey, windows_sandbox_execution_gate_for_key};
 pub use registry::active_backend;
+
+pub(crate) struct ExecutionReservation {
+    #[cfg(windows)]
+    _guard: Option<policy_epoch::WindowsSandboxExecutionGate>,
+}
+
+impl ExecutionReservation {
+    pub(crate) fn finish(
+        &mut self,
+        deadline: std::time::Instant,
+        execution_cleanup_confirmed: bool,
+    ) -> io::Result<()> {
+        #[cfg(windows)]
+        if let Some(guard) = self._guard.as_mut()
+            && !execution_cleanup_confirmed
+        {
+            record_test_cleanup_trace("execution_reservation_cleanup_unconfirmed");
+            let _ = guard.mark_cleanup_failed();
+            return Err(io::Error::other(error::BackendCleanupError));
+        }
+        #[cfg(windows)]
+        if let Some(guard) = self._guard.take() {
+            guard.finish_owned(deadline)?;
+        }
+        #[cfg(not(windows))]
+        let _ = (deadline, execution_cleanup_confirmed);
+        Ok(())
+    }
+}
+
+pub(crate) fn reserve_execution(plan: &PlatformSandboxPlan) -> io::Result<ExecutionReservation> {
+    #[cfg(windows)]
+    let guard = if plan.is_sandbox_enforced() {
+        Some(windows_sandbox_execution_gate(plan)?)
+    } else {
+        None
+    };
+    #[cfg(not(windows))]
+    let _ = plan;
+    Ok(ExecutionReservation {
+        #[cfg(windows)]
+        _guard: guard,
+    })
+}
 #[cfg(test)]
 use skeleton::{LinuxCommunityBackend, MacosExperimentalBackend};
 #[cfg(test)]
 use windows::WindowsReferenceBackend;
+#[cfg(test)]
 use windows::has_single_user_setup_payload;
 #[cfg(windows)]
 pub(crate) use windows::windows_sandbox_home;

@@ -9,8 +9,8 @@
 use crate::desktop::LaunchDesktop;
 use crate::desktop::LaunchDesktopMode;
 use crate::proc_thread_attr::ProcThreadAttributeList;
+use crate::winutil::argv_to_command_line;
 use crate::winutil::format_last_error;
-use crate::winutil::quote_windows_arg;
 use crate::winutil::to_wide;
 use anyhow::Result;
 use codex_utils_pty::PsuedoCon;
@@ -111,24 +111,58 @@ pub fn spawn_conpty_process_as_user(
     logs_base_dir: Option<&Path>,
     start_suspended: bool,
     security_capabilities: Option<*mut SECURITY_CAPABILITIES>,
+    terminal_size: (i16, i16),
 ) -> Result<(PROCESS_INFORMATION, ConptyInstance)> {
-    let cmdline_str = argv
-        .iter()
-        .map(|arg| quote_windows_arg(arg))
-        .collect::<Vec<_>>()
-        .join(" ");
+    spawn_conpty_process_for_identity(
+        crate::process::ProcessIdentity::PrimaryToken(h_token),
+        argv,
+        cwd,
+        env_map,
+        desktop_mode,
+        restricting_sids,
+        logs_base_dir,
+        start_suspended,
+        security_capabilities,
+        terminal_size,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn spawn_conpty_process_for_identity(
+    identity: crate::process::ProcessIdentity,
+    argv: &[String],
+    cwd: &Path,
+    env_map: &HashMap<String, String>,
+    desktop_mode: LaunchDesktopMode,
+    restricting_sids: &[*mut c_void],
+    logs_base_dir: Option<&Path>,
+    start_suspended: bool,
+    security_capabilities: Option<*mut SECURITY_CAPABILITIES>,
+    terminal_size: (i16, i16),
+) -> Result<(PROCESS_INFORMATION, ConptyInstance)> {
+    // A detached helper may inherit the caller's Ctrl+C ignore attribute. Do
+    // not pass that attribute into a new terminal execution.
+    if unsafe { windows_sys::Win32::System::Console::SetConsoleCtrlHandler(None, 0) } == 0 {
+        return Err(anyhow::anyhow!(
+            "restore terminal interrupt processing failed: {}",
+            unsafe { GetLastError() }
+        ));
+    }
+    let cmdline_str = argv_to_command_line(argv);
     let mut cmdline: Vec<u16> = to_wide(&cmdline_str);
     let env_block = make_env_block(env_map);
     let mut si: STARTUPINFOEXW = unsafe { std::mem::zeroed() };
     si.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
-    si.StartupInfo.dwFlags = STARTF_USESTDHANDLES | STARTF_FORCEOFFFEEDBACK;
+    // Prevent redirected parent stdio from leaking into the hosted execution.
+    // The console session initializes these invalid handles as console handles.
+    si.StartupInfo.dwFlags = STARTF_FORCEOFFFEEDBACK | STARTF_USESTDHANDLES;
     si.StartupInfo.hStdInput = INVALID_HANDLE_VALUE;
     si.StartupInfo.hStdOutput = INVALID_HANDLE_VALUE;
     si.StartupInfo.hStdError = INVALID_HANDLE_VALUE;
     let desktop = LaunchDesktop::prepare(desktop_mode, logs_base_dir, restricting_sids)?;
     si.StartupInfo.lpDesktop = desktop.startup_info_desktop();
 
-    let raw = RawConPty::new(/*cols*/ 80, /*rows*/ 24)?;
+    let raw = RawConPty::new(terminal_size.0, terminal_size.1)?;
     let (pseudoconsole, input_write, output_read) = raw.into_handles();
     let hpc = pseudoconsole.raw_handle() as HANDLE;
     let conpty = ConptyInstance {
@@ -148,11 +182,12 @@ pub fn spawn_conpty_process_as_user(
 
     let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
     let lowbox = security_capabilities.is_some();
+    let current_identity = matches!(identity, crate::process::ProcessIdentity::Current);
     let creation_flags = EXTENDED_STARTUPINFO_PRESENT
         | CREATE_UNICODE_ENVIRONMENT
         | if start_suspended { CREATE_SUSPENDED } else { 0 };
     let ok = unsafe {
-        if lowbox {
+        if lowbox || current_identity {
             CreateProcessW(
                 std::ptr::null(),
                 cmdline.as_mut_ptr(),
@@ -167,7 +202,10 @@ pub fn spawn_conpty_process_as_user(
             )
         } else {
             CreateProcessAsUserW(
-                h_token,
+                match identity {
+                    crate::process::ProcessIdentity::PrimaryToken(token) => token,
+                    crate::process::ProcessIdentity::Current => unreachable!(),
+                },
                 std::ptr::null(),
                 cmdline.as_mut_ptr(),
                 std::ptr::null_mut(),
@@ -184,16 +222,14 @@ pub fn spawn_conpty_process_as_user(
     if ok == 0 {
         let err = unsafe { GetLastError() } as i32;
         return Err(anyhow::anyhow!(
-            "{} failed: {} ({}) | cwd={} | cmd={} | env_u16_len={}",
-            if lowbox {
+            "{} failed: {} ({}) | env_u16_len={}",
+            if lowbox || current_identity {
                 "CreateProcessW"
             } else {
                 "CreateProcessAsUserW"
             },
             err,
             format_last_error(err),
-            cwd.display(),
-            cmdline_str,
             env_block.len()
         ));
     }

@@ -34,11 +34,20 @@ fn require_runseal_bin() -> Result<PathBuf> {
 }
 
 fn run_cli(args: &[&str]) -> Result<Output> {
+    #[cfg(windows)]
+    let _guard = windows_cli_lock();
     let bin = require_runseal_bin()?;
     Command::new(bin)
         .args(args)
         .output()
         .context("failed to spawn runseal")
+}
+
+#[cfg(windows)]
+fn windows_cli_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn python_bin() -> &'static str {
@@ -80,6 +89,589 @@ fn stdout_json_lines(output: &Output) -> Result<Vec<Value>> {
         .filter(|line| !line.trim().is_empty())
         .map(|line| serde_json::from_str(line).context("stdout line was not valid JSON"))
         .collect()
+}
+
+#[test]
+fn plain_inherited_stdin_delivers_binary_and_eof() -> Result<()> {
+    use std::io::Write;
+    use std::process::Stdio;
+    for chunk in ["8192", "65536"] {
+        let tmp = TempDir::new()?;
+        let mut child = Command::new(require_runseal_bin()?)
+            .env("RUNSEAL_STREAM_CHUNK_BYTES", chunk)
+            .env("RUNSEAL_INPUT_PENDING_BYTES", "65536")
+            .args(["exec", "--policy", "danger-full-access", "--stdin", "inherit", "--timeout-ms", "10000", "--cwd"])
+            .arg(tmp.path())
+            .args(["--", python_bin(), "-c", "import sys; data=sys.stdin.buffer.read(); sys.stdout.buffer.write(data); sys.stderr.buffer.write(b'EOF')"])
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+        let bytes: Vec<u8> = (0..65536).map(|index| (index % 256) as u8).collect();
+        let mut input = child.stdin.take().context("stdin")?;
+        let written = input.write_all(&bytes);
+        drop(input);
+        let output = child.wait_with_output()?;
+        written?;
+        assert!(
+            output.status.success(),
+            "chunk={chunk}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(output.stdout, bytes);
+        assert_eq!(output.stderr, b"EOF");
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn execution_process_present(pid: u32) -> Result<bool> {
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, ERROR_NO_MORE_FILES, GetLastError, INVALID_HANDLE_VALUE,
+    };
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+        TH32CS_SNAPPROCESS,
+    };
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snapshot == INVALID_HANDLE_VALUE {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        let mut entry = PROCESSENTRY32W {
+            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
+        let result = (|| -> Result<bool> {
+            if Process32FirstW(snapshot, &mut entry) == 0 {
+                return Err(std::io::Error::last_os_error().into());
+            }
+            loop {
+                if entry.th32ProcessID == pid {
+                    return Ok(true);
+                }
+                if Process32NextW(snapshot, &mut entry) == 0 {
+                    if GetLastError() != ERROR_NO_MORE_FILES {
+                        return Err(std::io::Error::last_os_error().into());
+                    }
+                    return Ok(false);
+                }
+            }
+        })();
+        CloseHandle(snapshot);
+        result
+    }
+}
+
+#[test]
+fn exec_refusals_have_stable_exit_and_format_before_target_without_argument_disclosure()
+-> Result<()> {
+    for mode in ["plain", "--json", "--events"] {
+        for (flags, code) in [
+            (vec!["--secret-argument-canary"], "INVALID_REQUEST"),
+            (
+                vec!["--timeout-ms", "secret-argument-canary"],
+                "INVALID_REQUEST",
+            ),
+            (
+                vec!["--network", "secret-argument-canary"],
+                "INVALID_REQUEST",
+            ),
+            (vec!["--policy", "secret-argument-canary"], "POLICY_INVALID"),
+            (vec!["--control-fd", "4"], "INVALID_REQUEST"),
+            (
+                vec!["--control-fd", "3"],
+                if mode != "plain" || cfg!(windows) {
+                    "INVALID_REQUEST"
+                } else {
+                    "BACKEND_CAPABILITY_MISSING"
+                },
+            ),
+            (vec!["--pty"], "INVALID_REQUEST"),
+        ] {
+            let tmp = TempDir::new()?;
+            let marker = tmp.path().join("target.ran");
+            let mut command = Command::new(require_runseal_bin()?);
+            command.arg("exec");
+            if mode != "plain" {
+                command.arg(mode);
+            }
+            let output = command
+                .args(flags)
+                .args(["--cwd"])
+                .arg(tmp.path())
+                .args([
+                    "--",
+                    python_bin(),
+                    "-c",
+                    "import pathlib,sys; pathlib.Path(sys.argv[1]).write_text('RAN')",
+                ])
+                .arg(&marker)
+                .output()?;
+            assert!(!marker.exists());
+            assert_eq!(output.status.code(), Some(125));
+            assert!(!String::from_utf8_lossy(&output.stdout).contains("secret-argument-canary"));
+            assert!(!String::from_utf8_lossy(&output.stderr).contains("secret-argument-canary"));
+            if mode == "plain" {
+                assert!(output.stdout.is_empty());
+                assert!(
+                    String::from_utf8_lossy(&output.stderr)
+                        .starts_with(&format!("[runseal:{code}]"))
+                );
+            } else {
+                assert!(output.stderr.is_empty());
+                let messages = stdout_json_lines(&output)?;
+                assert_eq!(messages.len(), 1);
+                assert_eq!(messages[0]["error"]["data"]["code"], code);
+            }
+        }
+        let tmp = TempDir::new()?;
+        let mut command = Command::new(require_runseal_bin()?);
+        command.arg("exec");
+        if mode != "plain" {
+            command.arg(mode);
+        }
+        let output = command
+            .args(["--policy", "danger-full-access", "--cwd"])
+            .arg(tmp.path().join("missing"))
+            .args(["--", python_bin(), "-c", "print('MUST_NOT_RUN')"])
+            .output()?;
+        assert_eq!(output.status.code(), Some(125));
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("MUST_NOT_RUN"));
+        if mode == "plain" {
+            assert!(output.stdout.is_empty());
+            assert!(
+                String::from_utf8_lossy(&output.stderr).starts_with("[runseal:INVALID_REQUEST]")
+            );
+        } else {
+            let messages = stdout_json_lines(&output)?;
+            assert_eq!(messages.len(), 1);
+            assert_eq!(messages[0]["error"]["data"]["code"], "INVALID_REQUEST");
+            assert!(output.stderr.is_empty());
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn exec_runtime_failures_use_outer_status_and_one_structured_terminal() -> Result<()> {
+    for mode in ["plain", "--json", "--events"] {
+        for (timeout, code, exit) in [
+            (false, "OUTPUT_LIMIT_EXCEEDED", 125),
+            (true, "EXECUTION_TIMEOUT", 124),
+        ] {
+            let tmp = TempDir::new()?;
+            let target = if timeout {
+                "import os,pathlib,time; pathlib.Path('target.pid').write_text(str(os.getpid())); time.sleep(120)"
+            } else {
+                "import os,pathlib; pathlib.Path('target.pid').write_text(str(os.getpid())); os.write(1,b'X'*8193)"
+            };
+            let mut command = Command::new(require_runseal_bin()?);
+            command.env("RUNSEAL_MAX_OUTPUT_BYTES", "8192").arg("exec");
+            if mode != "plain" {
+                command.arg(mode);
+            }
+            let timeout_ms = if cfg!(windows) { "5000" } else { "1000" };
+            let output = command
+                .args([
+                    "--policy",
+                    "danger-full-access",
+                    "--timeout-ms",
+                    timeout_ms,
+                    "--cwd",
+                ])
+                .arg(tmp.path())
+                .args(["--", python_bin(), "-u", "-c", target])
+                .output()?;
+            let observed_code = if mode == "plain" {
+                String::from_utf8_lossy(&output.stderr)
+                    .strip_prefix("[runseal:")
+                    .and_then(|message| message.split(']').next())
+                    .unwrap_or("no plain error code")
+                    .to_string()
+            } else {
+                stdout_json_lines(&output)?
+                    .iter()
+                    .find_map(|message| {
+                        message["error"]["data"]["code"]
+                            .as_str()
+                            .or(message["params"]["result"]["error"]["code"].as_str())
+                    })
+                    .unwrap_or("no structured error code")
+                    .to_string()
+            };
+            assert!(
+                tmp.path().join("target.pid").exists(),
+                "real target must start before runtime failure (mode={mode}, expected={code}, observed={observed_code}, timeout_ms={timeout_ms}, outer_exit={:?})",
+                output.status.code()
+            );
+            #[cfg(windows)]
+            {
+                let pid = fs::read_to_string(tmp.path().join("target.pid"))?.parse::<u32>()?;
+                assert!(
+                    !execution_process_present(pid)?,
+                    "real target must be gone after runtime failure"
+                );
+            }
+            assert_eq!(output.status.code(), Some(exit));
+            if mode == "plain" {
+                assert!(
+                    String::from_utf8_lossy(&output.stderr)
+                        .starts_with(&format!("[runseal:{code}]"))
+                );
+            } else {
+                assert!(output.stderr.is_empty());
+                let messages = stdout_json_lines(&output)?;
+                if mode == "--json" {
+                    assert_eq!(messages.len(), 1);
+                    assert_eq!(messages[0]["error"]["data"]["code"], code);
+                    assert_eq!(messages[0]["error"]["data"]["cleanup_complete"], true);
+                } else {
+                    assert!(messages.iter().all(|message| message["type"].is_string()));
+                    let terminals = messages
+                        .iter()
+                        .filter(|message| {
+                            matches!(
+                                message["type"].as_str(),
+                                Some("execution.failed" | "execution.finished")
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    assert_eq!(terminals.len(), 1);
+                    assert_eq!(terminals[0]["result"]["error"]["code"], code);
+                    assert_eq!(terminals[0]["result"]["cleanup_complete"], true);
+                }
+            }
+            let mut terminal_count = 0;
+            for entry in fs::read_dir(tmp.path().join(".runseal/audit"))? {
+                for line in fs::read_to_string(entry?.path())?.lines() {
+                    let event: Value = serde_json::from_str(line)?;
+                    if event["type"] == "execution.failed" {
+                        terminal_count += 1;
+                        assert_eq!(event["result"]["error"]["code"], code);
+                        assert_eq!(event["result"]["cleanup_complete"], true);
+                    }
+                }
+            }
+            assert_eq!(terminal_count, 1);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn child_exit_125_and_spoofed_diagnostic_remain_child_results_in_each_cli_mode() -> Result<()> {
+    for mode in ["plain", "--json", "--events"] {
+        for exit in [0, 7, 125] {
+            let tmp = TempDir::new()?;
+            let mut command = Command::new(require_runseal_bin()?);
+            command.arg("exec");
+            if mode != "plain" {
+                command.arg(mode);
+            }
+            let output=command.args(["--policy","danger-full-access","--cwd"]).arg(tmp.path())
+                .args(["--",python_bin(),"-u","-c","import os,sys; assert sys.argv[2]=='--json'; os.write(1,b'CHILD'); os.write(2,b'[runseal:INVALID_REQUEST] child bytes'); sys.exit(int(sys.argv[1]))",&exit.to_string(),"--json"]).output()?;
+            if mode == "plain" {
+                assert_eq!(output.status.code(), Some(exit));
+                assert_eq!(output.stdout, b"CHILD");
+                assert_eq!(output.stderr, b"[runseal:INVALID_REQUEST] child bytes");
+            } else {
+                assert_eq!(output.status.code(), Some(0));
+                assert!(output.stderr.is_empty());
+                let messages = stdout_json_lines(&output)?;
+                if mode == "--json" {
+                    assert_eq!(messages.len(), 1);
+                    assert_eq!(messages[0]["exit_code"], exit);
+                    assert!(messages[0].get("error").is_none());
+                } else {
+                    let terminal = messages
+                        .iter()
+                        .filter(|message| message["type"] == "execution.finished")
+                        .collect::<Vec<_>>();
+                    assert_eq!(terminal.len(), 1);
+                    assert_eq!(terminal[0]["result"]["exit_code"], exit);
+                    assert!(terminal[0]["result"].get("error").is_none());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn cli_pty_rejects_invalid_modes_before_child_start() -> Result<()> {
+    for flags in [
+        vec!["--pty"],
+        vec!["--pty", "--stdin", "empty"],
+        vec!["--pty", "--stdin", "inherit", "--json"],
+        vec!["--pty", "--stdin", "inherit", "--events"],
+    ] {
+        let tmp = TempDir::new()?;
+        let marker = tmp.path().join("started");
+        let output = Command::new(require_runseal_bin()?)
+            .arg("exec")
+            .args(flags)
+            .args(["--policy", "danger-full-access", "--"])
+            .args([
+                python_bin(),
+                "-c",
+                "import pathlib,sys; pathlib.Path(sys.argv[1]).write_text('started')",
+            ])
+            .arg(&marker)
+            .output()?;
+        assert!(!output.status.success());
+        assert!(!marker.exists());
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            text.contains("--pty requires --stdin inherit and plain output"),
+            "{text}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn plain_inherited_stdin_does_not_wait_for_input_after_child_exit() -> Result<()> {
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+    let tmp = TempDir::new()?;
+    let mut child = Command::new(require_runseal_bin()?)
+        .args([
+            "exec",
+            "--policy",
+            "danger-full-access",
+            "--stdin",
+            "inherit",
+            "--cwd",
+        ])
+        .arg(tmp.path())
+        .args(["--", python_bin(), "-c", "import sys; sys.exit(11)"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let input = child.stdin.take().context("stdin")?;
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break Some(status);
+        }
+        if Instant::now() >= deadline {
+            child.kill()?;
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    drop(input);
+    child.wait()?;
+    assert_eq!(
+        status
+            .context("wrapper must exit while caller stdin remains open")?
+            .code(),
+        Some(11)
+    );
+    Ok(())
+}
+
+#[test]
+fn inherited_stdin_is_rejected_for_machine_output_before_child_start() -> Result<()> {
+    for mode in ["--json", "--events"] {
+        let tmp = TempDir::new()?;
+        let marker = tmp.path().join("started");
+        let output = Command::new(require_runseal_bin()?)
+            .args([
+                "exec",
+                mode,
+                "--stdin",
+                "inherit",
+                "--policy",
+                "danger-full-access",
+                "--cwd",
+            ])
+            .arg(tmp.path())
+            .args([
+                "--",
+                python_bin(),
+                "-c",
+                "import pathlib,sys; pathlib.Path(sys.argv[1]).write_text('started')",
+            ])
+            .arg(&marker)
+            .output()?;
+        assert!(!output.status.success());
+        assert_eq!(
+            stdout_json(&output)?["error"]["data"]["code"],
+            "INVALID_REQUEST"
+        );
+        assert!(!marker.exists());
+    }
+    Ok(())
+}
+
+#[test]
+fn plain_pipe_is_live_binary_separated_and_preserves_child_exit() -> Result<()> {
+    use std::io::Read;
+    use std::process::Stdio;
+    use std::sync::mpsc;
+    use std::time::Duration;
+    let tmp = TempDir::new()?;
+    let gate = tmp.path().join("release");
+    let mut child = Command::new(require_runseal_bin()?).args(["exec","--policy","danger-full-access","--timeout-ms","10000","--cwd"]).arg(tmp.path()).args(["--",python_bin(),"-u","-c","import os,pathlib,sys,time; os.write(1,b'\\x00\\xffREADY'); os.write(2,b'\\xfeERR\\x00'); gate=pathlib.Path(sys.argv[1]);\nwhile not gate.exists(): time.sleep(0.01)\nos.write(1,b'END'); sys.exit(7)"]).arg(&gate).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    let mut stdout = child.stdout.take().context("stdout")?;
+    let (sender, receiver) = mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        let mut ready = [0; 7];
+        let result = stdout.read_exact(&mut ready).map(|()| ready);
+        let _ = sender.send(result);
+        let mut rest = Vec::new();
+        stdout.read_to_end(&mut rest).map(|_| rest)
+    });
+    let ready = receiver.recv_timeout(Duration::from_secs(3));
+    let alive = child.try_wait()?.is_none();
+    fs::write(&gate, b"release")?;
+    let output = child.wait_with_output()?;
+    let rest = reader
+        .join()
+        .map_err(|_| anyhow::anyhow!("stdout reader panicked"))??;
+    assert_eq!(
+        ready.context("live output before gate release")??,
+        *b"\x00\xffREADY"
+    );
+    assert!(alive);
+    assert_eq!(rest, b"END");
+    assert_eq!(output.stderr, b"\xfeERR\x00");
+    assert_eq!(output.status.code(), Some(7));
+    Ok(())
+}
+
+#[test]
+fn cli_json_preserves_binary_output_and_uses_outer_success_for_child_failure() -> Result<()> {
+    let output = run_cli(&[
+        "exec",
+        "--json",
+        "--policy",
+        "danger-full-access",
+        "--",
+        python_bin(),
+        "-c",
+        "import os,sys; os.write(1,b'\\x00\\xff'); os.write(2,b'\\xfe\\x00'); sys.exit(9)",
+    ])?;
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    let result = stdout_json(&output)?;
+    assert_eq!(result["exit_code"], 9);
+    assert!(result.get("stdout").is_none());
+    assert!(result.get("stderr").is_none());
+    for (stream, bytes) in [("stdout", b"\x00\xff"), ("stderr", b"\xfe\x00")] {
+        let item = &result["output"][stream];
+        assert_eq!(item["encoding"], "base64");
+        assert_eq!(item["bytes"], 2);
+        assert_eq!(item["truncated"], false);
+        assert_eq!(
+            STANDARD.decode(
+                item["data"]
+                    .as_str()
+                    .context("data")?
+                    .strip_prefix("base64:")
+                    .context("base64 prefix")?
+            )?,
+            bytes
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn exec_events_delivers_ready_before_child_gate_is_released() -> Result<()> {
+    assert_exec_events_ready_before_gate("danger-full-access")
+}
+
+#[cfg(windows)]
+#[test]
+#[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
+fn sandboxed_exec_events_delivers_ready_before_child_gate_is_released() -> Result<()> {
+    assert_exec_events_ready_before_gate("workspace-write")
+}
+
+fn assert_exec_events_ready_before_gate(policy: &str) -> Result<()> {
+    #[cfg(windows)]
+    let _guard = windows_cli_lock();
+    use std::io::{BufRead, BufReader};
+    use std::process::Stdio;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+    let tmp = TempDir::new()?;
+    let gate = tmp.path().join("release");
+    let mut child = Command::new(require_runseal_bin()?)
+        .args(["exec", "--events", "--policy", policy, "--timeout-ms", "10000", "--cwd"])
+        .arg(tmp.path()).args(["--", python_bin(), "-u", "-c",
+            "import pathlib,sys,time; print('READY',flush=True); gate=pathlib.Path(sys.argv[1]);\nwhile not gate.exists(): time.sleep(0.01)\nprint('DONE',flush=True)"])
+        .arg(&gate).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    let stdout = child.stdout.take().context("event stdout")?;
+    let (sender, receiver) = mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            if sender.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    let mut deadline = Instant::now() + Duration::from_secs(10);
+    let mut ready = false;
+    while let Ok(line) = receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+        let event: Value = serde_json::from_str(&line?)?;
+        if event["type"] == "execution.started" {
+            deadline = Instant::now() + Duration::from_secs(2);
+        }
+        if event["type"] == "execution.stdout" {
+            let encoded = event["data"]
+                .as_str()
+                .context("event data")?
+                .strip_prefix("base64:")
+                .context("base64")?;
+            ready = STANDARD
+                .decode(encoded)?
+                .windows(5)
+                .any(|bytes| bytes == b"READY");
+            if ready {
+                break;
+            }
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+    }
+    let alive_before_release = child.try_wait()?.is_none();
+    fs::write(&gate, b"release")?;
+    let output = child.wait_with_output()?;
+    reader
+        .join()
+        .map_err(|_| anyhow::anyhow!("event reader panicked"))?;
+    assert!(
+        ready,
+        "READY must be received while the child waits on the test gate"
+    );
+    assert!(
+        alive_before_release,
+        "child must still be running before gate release"
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let events = receiver
+        .into_iter()
+        .map(|line| -> Result<Value> { Ok(serde_json::from_str(&line?)?) })
+        .collect::<Result<Vec<_>>>()?;
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event["type"] == "execution.finished")
+            .count(),
+        1
+    );
+    Ok(())
 }
 
 fn decode_stream_event(event: &Value) -> Result<String> {
@@ -213,7 +805,7 @@ fn expected_proxy_feature_status() -> &'static str {
 }
 
 fn expected_network_proxy_status() -> &'static str {
-    expected_status(expected_proxy_feature_reported())
+    expected_proxy_feature_status()
 }
 
 fn expected_resource_limits_supported() -> bool {
@@ -230,33 +822,31 @@ fn expected_status(supported: bool) -> &'static str {
 
 fn expected_read_only_status() -> &'static str {
     if cfg!(any(target_os = "linux", target_os = "macos")) {
-        "supported"
+        "experimental"
     } else {
         expected_status(expected_windows_sandbox_supported())
     }
 }
 
-fn expected_workspace_write_status() -> &'static str {
-    if cfg!(any(target_os = "linux", target_os = "macos")) {
-        "supported"
-    } else {
-        expected_status(expected_windows_sandbox_supported())
+fn expected_sandbox_levels_status(payload: &Value) -> &'static str {
+    if !cfg!(windows) {
+        return expected_read_only_status();
     }
-}
 
-fn expected_workspace_contained_status() -> &'static str {
-    if cfg!(any(target_os = "linux", target_os = "macos")) {
-        "supported"
-    } else if cfg!(windows) {
-        expected_status(expected_windows_sandbox_supported())
-    } else {
-        "unsupported"
+    match (
+        payload["setup_status"]["platform_supported"].as_bool(),
+        payload["setup_status"]["requires_setup"].as_bool(),
+    ) {
+        (Some(false), _) => "unsupported",
+        (Some(true), Some(true)) => "requires_setup",
+        (Some(true), Some(false)) => "supported",
+        _ => "unavailable",
     }
 }
 
 fn expected_network_disabled_status() -> &'static str {
     if cfg!(any(target_os = "linux", target_os = "macos")) {
-        "supported"
+        "experimental"
     } else {
         expected_status(expected_windows_sandbox_supported())
     }
@@ -510,7 +1100,8 @@ fn setup_help_describes_explicit_windows_setup() -> Result<()> {
         assert!(stdout.contains("Usage: runseal setup windows-sandbox [--cwd <path>]"));
         assert!(stdout.contains("Use --elevate to request UAC"));
         assert!(stdout.contains("Later repairs reuse the sandbox broker"));
-        assert!(stdout.contains("fails closed"));
+        assert!(stdout.contains("repairs missing or stale setup through the installed broker"));
+        assert!(stdout.contains("Without an installed broker, sandboxed exec fails closed"));
         assert!(stdout.contains("--status"));
         assert!(stdout.contains("--json"));
         assert!(stdout.contains("--elevate"));
@@ -746,7 +1337,7 @@ fn version_reports_protocol_and_runtime_versions() -> Result<()> {
     );
     let payload = stdout_json(&output)?;
     assert!(payload["runseal_version"].as_str().is_some());
-    assert_eq!(payload["protocol_version"], "runseal.protocol/v1");
+    assert_eq!(payload["protocol_version"], "runseal.protocol/v2");
     assert!(
         payload["policy_versions"]
             .as_array()
@@ -767,6 +1358,7 @@ fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
         String::from_utf8_lossy(&output.stderr)
     );
     let payload = stdout_json(&output)?;
+    let sandbox_levels_status = expected_sandbox_levels_status(&payload);
     assert_eq!(payload["backend"], expected_backend_name());
     assert_eq!(payload["backend_status"], expected_backend_status());
     assert!(payload["platform"].as_str().is_some());
@@ -856,15 +1448,15 @@ fn capabilities_cli_reports_active_backend_baseline() -> Result<()> {
     assert_eq!(payload["sandbox_levels"]["danger-full-access"], "supported");
     assert_eq!(
         payload["sandbox_levels"]["read-only"],
-        expected_read_only_status()
+        sandbox_levels_status
     );
     assert_eq!(
         payload["sandbox_levels"]["workspace-write"],
-        expected_workspace_write_status()
+        sandbox_levels_status
     );
     assert_eq!(
         payload["sandbox_levels"]["workspace-contained"],
-        expected_workspace_contained_status()
+        sandbox_levels_status
     );
     assert_eq!(
         payload["network_modes"]["proxy"],
@@ -1211,10 +1803,9 @@ fn sandboxed_exec_cli_uses_backend_or_reports_unavailable() -> Result<()> {
                     .contains("windows sandbox setup unavailable"),
                 "{payload}"
             );
-            assert_eq!(
-                payload["error"]["data"]["setup_status"]["setup"],
-                "windows-sandbox"
-            );
+            if let Some(setup_status) = payload["error"]["data"].get("setup_status") {
+                assert_eq!(setup_status["setup"], "windows-sandbox");
+            }
             assert_no_private_windows_setup_terms(&payload.to_string());
             let audit_dir = tmp.path().join(".runseal").join("audit");
             let audit_files = fs::read_dir(&audit_dir)
@@ -1354,13 +1945,15 @@ fn exec_cli_enforces_timeout_ms() -> Result<()> {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.is_empty(), "{stderr}");
     let payload = stdout_json(&output)?;
-    assert!(
-        payload["error"]["data"]["reason"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("execution timed out"),
-        "{payload}"
-    );
+    let result = &payload["error"]["data"];
+    assert_eq!(result["code"], "EXECUTION_TIMEOUT", "{payload}");
+    assert_eq!(result["termination_reason"], "timeout", "{payload}");
+    assert_eq!(result["status"], "failed", "{payload}");
+    assert_eq!(result["cleanup_complete"], true, "{payload}");
+    // The accepted timeout includes preparation, so native start is optional.
+    if result["started_at"].is_null() {
+        assert!(result["exit_code"].is_null(), "{payload}");
+    }
     Ok(())
 }
 
@@ -1418,5 +2011,60 @@ fn exec_machine_readable_modes_report_parse_errors_as_json() -> Result<()> {
             messages[0]
         );
     }
+    Ok(())
+}
+
+#[test]
+fn cli_control_rejects_invalid_modes_and_missing_endpoint_before_child_start() -> Result<()> {
+    for flags in [
+        vec!["--control-fd", "4"],
+        vec!["--control-fd", "3", "--json"],
+        vec!["--control-fd", "3", "--events"],
+        vec!["--control-fd", "3", "--pty", "--stdin", "inherit"],
+        vec!["--control-fd", "3"],
+    ] {
+        let tmp = TempDir::new()?;
+        let marker = tmp.path().join("started");
+        let mut command = Command::new(env!("CARGO_BIN_EXE_runseal"));
+        command
+            .arg("exec")
+            .args(flags)
+            .args(["--policy", "danger-full-access", "--cwd"])
+            .arg(tmp.path())
+            .args([
+                "--",
+                python_bin(),
+                "-c",
+                "import pathlib,sys; pathlib.Path(sys.argv[1]).write_text('started')",
+            ])
+            .arg(&marker);
+        let output = command.output()?;
+        assert!(!output.status.success());
+        assert!(!marker.exists(), "invalid control request launched child");
+        assert!(!output.stdout.is_empty() || !output.stderr.is_empty());
+    }
+    Ok(())
+}
+
+#[test]
+fn repair_execution_gates_help_describes_proof_requirements() -> Result<()> {
+    let help = run_cli(&["repair", "execution-gates", "--help"])?;
+    assert!(help.status.success());
+    let text = String::from_utf8_lossy(&help.stdout);
+    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(normalized.contains("runseal repair execution-gates"));
+    assert!(normalized.contains("--accept-unverified-release"));
+    assert!(normalized.contains("elevated Administrator token"));
+    assert!(normalized.contains("does not bypass unavailable process inspection"));
+    assert!(normalized.contains("normal admission"));
+    Ok(())
+}
+
+#[test]
+fn repair_execution_gates_rejects_unknown_arguments_as_json() -> Result<()> {
+    let output = run_cli(&["repair", "execution-gates", "--json", "--not-a-flag"])?;
+    assert!(!output.status.success());
+    let payload = stdout_json(&output)?;
+    assert_eq!(payload["error"]["data"]["code"], "INVALID_REQUEST");
     Ok(())
 }

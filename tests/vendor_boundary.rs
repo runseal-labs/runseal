@@ -201,18 +201,6 @@ fn vendored_windows_runner_suppresses_startup_feedback() {
 }
 
 #[test]
-fn vendored_windows_process_spawn_errors_include_context() {
-    let process = VENDOR_SETUP_SOURCES
-        .iter()
-        .find_map(|(name, source)| (*name == "process.rs").then_some(*source))
-        .expect("process.rs must be included");
-
-    assert!(process.contains("CreateProcessAsUserW failed: {} ({}) | cwd={} | cmd={}"));
-    assert!(process.contains("return Err(anyhow!(msg));"));
-    assert!(!process.contains("return Err(anyhow!(\"CreateProcessAsUserW failed: {err}\"));"));
-}
-
-#[test]
 fn release_windows_archives_include_runner_helpers() {
     let package_step = RELEASE_WORKFLOW
         .split_once("Package Windows release artifacts")
@@ -359,7 +347,6 @@ fn vendored_windows_runner_uses_runseal_binary_name() {
         assert!(!source.contains("codex-command-runner.exe"));
     }
 
-    assert!(runner_client.contains("runner-connect-"));
     assert!(runner_pipe.contains("runner-"));
 }
 

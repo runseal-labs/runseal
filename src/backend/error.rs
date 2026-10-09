@@ -1,6 +1,71 @@
 use super::*;
 
 #[derive(Debug)]
+pub(super) struct BackendCleanupError;
+#[derive(Debug)]
+pub(crate) struct BackendCleanupFacts {
+    pub(crate) exit_code: Option<i32>,
+    pub(crate) timed_out: bool,
+}
+
+#[derive(Debug)]
+pub(crate) struct BackendInputFacts {
+    pub(crate) exit_code: i32,
+    pub(crate) timed_out: bool,
+}
+impl std::fmt::Display for BackendInputFacts {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("execution input failed")
+    }
+}
+impl std::error::Error for BackendInputFacts {}
+pub(crate) fn input_failed(err: &io::Error) -> bool {
+    err.get_ref()
+        .is_some_and(<dyn std::error::Error + Send + Sync>::is::<BackendInputFacts>)
+}
+pub(crate) fn failure_exit_code(err: &io::Error) -> Option<i32> {
+    cleanup_exit_code(err).or_else(|| {
+        err.get_ref()?
+            .downcast_ref::<BackendInputFacts>()
+            .map(|facts| facts.exit_code)
+    })
+}
+pub(crate) fn failure_timed_out(err: &io::Error) -> bool {
+    cleanup_timed_out(err)
+        || err
+            .get_ref()
+            .and_then(|error| error.downcast_ref::<BackendInputFacts>())
+            .is_some_and(|facts| facts.timed_out)
+}
+impl std::fmt::Display for BackendCleanupFacts {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("execution cleanup could not be verified")
+    }
+}
+impl std::error::Error for BackendCleanupFacts {}
+pub(crate) fn cleanup_timed_out(err: &io::Error) -> bool {
+    err.get_ref()
+        .and_then(|error| error.downcast_ref::<BackendCleanupFacts>())
+        .is_some_and(|error| error.timed_out)
+}
+
+pub(crate) fn cleanup_exit_code(err: &io::Error) -> Option<i32> {
+    err.get_ref()?
+        .downcast_ref::<BackendCleanupFacts>()?
+        .exit_code
+}
+impl std::fmt::Display for BackendCleanupError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("execution cleanup could not be verified")
+    }
+}
+impl std::error::Error for BackendCleanupError {}
+pub(crate) fn cleanup_failed(err: &io::Error) -> bool {
+    err.get_ref()
+        .is_some_and(|error| error.is::<BackendCleanupError>() || error.is::<BackendCleanupFacts>())
+}
+
+#[derive(Debug)]
 pub(super) struct BackendUnavailableError {
     pub(super) reason: String,
 }

@@ -80,6 +80,7 @@ fn spawn_legacy_process(
             logs_base_dir,
             /*start_suspended*/ false,
             None,
+            (80, 24),
         )?;
         let hpc = conpty.raw_handle();
         let output_join = spawn_output_reader(conpty.take_output_read(), stdout_tx);

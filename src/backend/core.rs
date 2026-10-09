@@ -1,6 +1,10 @@
-use super::capability::missing_backend_features;
+use super::capability::{
+    ExecutionCapabilityStatuses, baseline_execution_capabilities, missing_backend_features,
+};
 use super::error::BackendError;
-use super::execution::{BackendExecutionOutput, ExecutionEnv, ExecutionStdin};
+use super::execution::{
+    BackendExecutionOptions, BackendExecutionOutput, ExecutionEnv, ExecutionStdin,
+};
 use super::plan::PlatformSandboxPlan;
 use super::skeleton::{LinuxCommunityBackend, LocalBackend, MacosExperimentalBackend};
 use super::windows::WindowsReferenceBackend;
@@ -8,13 +12,15 @@ use crate::policy::{BackendFeature, SandboxPolicy};
 use serde_json::Value;
 use std::io;
 use std::path::Path;
-use std::time::Duration;
 
 pub trait SandboxBackend {
     fn name(&self) -> &'static str;
     fn status(&self) -> &'static str;
     fn platform(&self) -> &'static str;
     fn supported_features(&self) -> &'static [BackendFeature];
+    fn execution_capabilities(&self) -> ExecutionCapabilityStatuses {
+        baseline_execution_capabilities()
+    }
     fn missing_features(&self, policy: &SandboxPolicy) -> Vec<BackendFeature> {
         missing_backend_features(policy, self.supported_features())
     }
@@ -37,7 +43,7 @@ pub trait SandboxBackend {
         cwd: &Path,
         stdin: ExecutionStdin,
         env: &ExecutionEnv,
-        timeout: Option<Duration>,
+        options: BackendExecutionOptions,
     ) -> io::Result<BackendExecutionOutput>;
     fn capabilities_json(&self) -> Value;
 }
@@ -78,6 +84,10 @@ impl SandboxBackend for ActiveBackend {
         self.as_backend().supported_features()
     }
 
+    fn execution_capabilities(&self) -> ExecutionCapabilityStatuses {
+        self.as_backend().execution_capabilities()
+    }
+
     fn compile_plan(
         &self,
         execution_id: &str,
@@ -94,10 +104,10 @@ impl SandboxBackend for ActiveBackend {
         cwd: &Path,
         stdin: ExecutionStdin,
         env: &ExecutionEnv,
-        timeout: Option<Duration>,
+        options: BackendExecutionOptions,
     ) -> io::Result<BackendExecutionOutput> {
         self.as_backend()
-            .execute_plan(plan, command, cwd, stdin, env, timeout)
+            .execute_plan(plan, command, cwd, stdin, env, options)
     }
 
     fn capabilities_json(&self) -> Value {

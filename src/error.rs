@@ -8,6 +8,7 @@ pub(crate) struct RunSealError {
     pub(crate) message: String,
     pub(crate) reason: String,
     pub(crate) details: Option<Value>,
+    pub(crate) terminal_event: Option<Value>,
 }
 
 impl RunSealError {
@@ -19,6 +20,7 @@ impl RunSealError {
             code,
             reason,
             details: None,
+            terminal_event: None,
         }
     }
 
@@ -34,6 +36,7 @@ impl RunSealError {
             code,
             reason,
             details: Some(details),
+            terminal_event: None,
         }
     }
 }

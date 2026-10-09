@@ -60,7 +60,7 @@ impl WindowsReferenceBackend {
         );
         #[cfg(windows)]
         let private_vendor_permission_profile = vendor_profile
-            .permission_profile()
+            .permission_profile_with_runtime_roots(&windows_policy.filesystem.runtime_write_roots)
             .ok()
             .and_then(|profile| serde_json::to_string(&profile).ok());
         #[cfg(not(windows))]
@@ -113,6 +113,7 @@ impl WindowsReferenceBackend {
     }
 }
 
+#[cfg(test)]
 pub(super) fn has_single_user_setup_payload(payload: Option<&str>) -> bool {
     let Some(payload) = payload else {
         return false;
@@ -180,6 +181,17 @@ impl SandboxBackend for WindowsReferenceBackend {
         WINDOWS_REFERENCE_SUPPORTED_FEATURES
     }
 
+    fn execution_capabilities(&self) -> super::capability::ExecutionCapabilityStatuses {
+        #[cfg(windows)]
+        {
+            super::capability::windows_execution_capabilities()
+        }
+        #[cfg(not(windows))]
+        {
+            super::capability::baseline_execution_capabilities()
+        }
+    }
+
     fn compile_plan(
         &self,
         execution_id: &str,
@@ -194,6 +206,54 @@ impl SandboxBackend for WindowsReferenceBackend {
                 policy,
             ))
         } else {
+            #[cfg(windows)]
+            {
+                let protected =
+                    super::policy_epoch::cross_process_gate_state_dir().and_then(|root| {
+                        match fs::canonicalize(root) {
+                            Ok(root) => {
+                                let cwd = fs::canonicalize(cwd)?;
+                                let root: Vec<u16> =
+                                    std::os::windows::ffi::OsStrExt::encode_wide(root.as_os_str())
+                                        .collect();
+                                let cwd: Vec<u16> =
+                                    std::os::windows::ffi::OsStrExt::encode_wide(cwd.as_os_str())
+                                        .collect();
+                                let matches = cwd.len() >= root.len()
+                                    && unsafe {
+                                        windows_sys::Win32::Globalization::CompareStringOrdinal(
+                                            cwd.as_ptr(),
+                                            root.len() as _,
+                                            root.as_ptr(),
+                                            root.len() as _,
+                                            1,
+                                        )
+                                    } == windows_sys::Win32::Globalization::CSTR_EQUAL;
+                                Ok(matches
+                                    && (cwd.len() == root.len()
+                                        || cwd[root.len()] == u16::from(b'\\')))
+                            }
+                            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+                            Err(error) => Err(error),
+                        }
+                    });
+                match protected {
+                    Ok(false) => {}
+                    Ok(true) => {
+                        let mut error = BackendError::unsupported(self, policy);
+                        error.reason = "workspace overlaps protected execution state".to_string();
+                        error.missing_features = vec!["runtime_roots"];
+                        return Err(error);
+                    }
+                    Err(_) => {
+                        let mut error = BackendError::unsupported(self, policy);
+                        error.code = "BACKEND_UNAVAILABLE";
+                        error.reason = "protected execution state unavailable".to_string();
+                        error.missing_features.clear();
+                        return Err(error);
+                    }
+                }
+            }
             let mut plan = self.fail_closed_plan(execution_id, cwd, policy);
             if self.missing_features(policy).is_empty() {
                 plan.enforcement = "windows-sandbox";
@@ -215,12 +275,13 @@ impl SandboxBackend for WindowsReferenceBackend {
         cwd: &Path,
         stdin: ExecutionStdin,
         env: &ExecutionEnv,
-        timeout: Option<Duration>,
+        options: BackendExecutionOptions,
     ) -> io::Result<BackendExecutionOutput> {
+        let BackendExecutionOptions { timeout, output } = options;
         if plan.is_sandbox_enforced() {
-            return execute_windows_sandbox_plan(plan, command, cwd, stdin, env, timeout);
+            return execute_windows_sandbox_plan(plan, command, cwd, stdin, env, timeout, output);
         }
-        spawn_local_command(plan, command, cwd, stdin, env, timeout)
+        spawn_local_command_with_output(plan, command, cwd, stdin, env, timeout, output)
     }
 
     fn capabilities_json(&self) -> Value {
@@ -239,14 +300,7 @@ impl SandboxBackend for WindowsReferenceBackend {
 }
 
 #[cfg(windows)]
-pub(super) fn execute_windows_sandbox_plan(
-    plan: &PlatformSandboxPlan,
-    command: &[String],
-    cwd: &Path,
-    stdin: ExecutionStdin,
-    env: &ExecutionEnv,
-    timeout: Option<Duration>,
-) -> io::Result<BackendExecutionOutput> {
+pub(super) fn prepare_windows_sandbox_setup(cwd: &Path) -> io::Result<PathBuf> {
     let setup_status =
         crate::commands::setup::windows_sandbox_setup_status_for_cwd(cwd).map_err(|err| {
             io::Error::other(BackendUnavailableError {
@@ -274,11 +328,97 @@ pub(super) fn execute_windows_sandbox_plan(
         )?;
     }
 
+    Ok(vendor_sandbox_home)
+}
+
+#[cfg(windows)]
+pub(super) fn execute_windows_sandbox_plan(
+    plan: &PlatformSandboxPlan,
+    command: &[String],
+    cwd: &Path,
+    stdin: ExecutionStdin,
+    env: &ExecutionEnv,
+    timeout: Option<Duration>,
+    output: Option<ExecutionOutputSink>,
+) -> io::Result<BackendExecutionOutput> {
+    let cleanup_budget = codex_windows_sandbox::CleanupBudget::try_from(
+        crate::limits::deployment().cleanup_timeout_ms as u64,
+    )
+    .map_err(io::Error::other)?;
+    let vendor_sandbox_home = prepare_windows_sandbox_setup(cwd)?;
+
     let _runtime_root = required_plan_path(plan.runtime_root.as_deref(), "runtime_root")?;
-    let _execution_guard = windows_sandbox_execution_gate(plan, &vendor_sandbox_home)?;
-    let _stdin = stdin;
+    let input_acknowledged = match &stdin {
+        ExecutionStdin::Stream(queue) => {
+            let queue = queue.clone();
+            let control = output.as_ref().map(|sink| sink.control.clone());
+            Some(Box::new(move |count| {
+                let accepted = queue.acknowledge(count).is_ok();
+                if !accepted && let Some(control) = &control {
+                    control.request(crate::execution::TerminationCause::InputFailed);
+                }
+                accepted
+            }) as Box<dyn FnMut(usize) -> bool + Send>)
+        }
+        _ => None,
+    };
+    let (stdin_bytes, input_source) = match stdin {
+        ExecutionStdin::Empty => (Vec::new(), None),
+        ExecutionStdin::Bytes(bytes) | ExecutionStdin::File(bytes) => (bytes, None),
+        ExecutionStdin::Stream(queue) => {
+            let input_control = output.as_ref().map(|sink| sink.control.clone());
+            let terminal_control = output
+                .as_ref()
+                .filter(|sink| sink.io.is_pty())
+                .map(|sink| sink.control.clone());
+            (
+                Vec::new(),
+                Some(Box::new(move || {
+                    if let Some(command) = terminal_control
+                        .as_ref()
+                        .and_then(crate::execution::ExecutionControl::take_terminal_command)
+                    {
+                        return match command {
+                            crate::execution::TerminalCommand::Resize { rows, cols } => {
+                                codex_windows_sandbox::SandboxInputPoll::Resize { rows, cols }
+                            }
+                            crate::execution::TerminalCommand::Interrupt => {
+                                codex_windows_sandbox::SandboxInputPoll::Interrupt
+                            }
+                        };
+                    }
+                    match queue.poll() {
+                        Ok(InputPoll::Data(bytes)) => {
+                            codex_windows_sandbox::SandboxInputPoll::Data(bytes)
+                        }
+                        Ok(InputPoll::Pending) => codex_windows_sandbox::SandboxInputPoll::Pending,
+                        Ok(InputPoll::Eof) => codex_windows_sandbox::SandboxInputPoll::Eof,
+                        Err(_) => {
+                            if let Some(control) = &input_control {
+                                control.request(crate::execution::TerminationCause::InputFailed);
+                            }
+                            codex_windows_sandbox::SandboxInputPoll::Failed
+                        }
+                    }
+                })
+                    as codex_windows_sandbox::SandboxInputSource),
+            )
+        }
+    };
     let workspace_roots = windows_sandbox_workspace_roots_for_plan(cwd, plan)?;
     let write_roots_override = windows_sandbox_write_roots_for_plan(plan);
+    let mut deny_write_paths_override = plan
+        .filesystem_deny
+        .iter()
+        .map(|root| {
+            AbsolutePathBuf::try_from(PathBuf::from(root))
+                .map_err(|err| io::Error::other(err.to_string()))
+        })
+        .collect::<io::Result<Vec<_>>>()?;
+    deny_write_paths_override.push(
+        AbsolutePathBuf::try_from(super::policy_epoch::cross_process_gate_state_dir()?)
+            .map_err(|_| io::Error::other("execution gate protection unavailable"))?,
+    );
     let permission_profile = plan.vendor_permission_profile()?;
     plan.prepare_runtime_roots()?;
 
@@ -308,11 +448,18 @@ pub(super) fn execute_windows_sandbox_plan(
             Vec::new()
         };
         let env_map = sandbox_environment(plan, env, managed_proxy.as_ref());
-        let workspace_contained = plan.sandbox_level == SandboxLevel::WorkspaceContained.as_str();
-        let read_cap_sid = if workspace_contained {
-            let workspace_root = workspace_roots.first().ok_or_else(|| {
-                io::Error::other("workspace-contained requires an active workspace root")
-            })?;
+        let scoped_read = codex_windows_sandbox::isolation_mode_for_permission_profile(
+            &permission_profile,
+            &workspace_roots,
+            cwd,
+            &env_map,
+        )
+        .map_err(|_| io::Error::other("sandbox permission profile unavailable"))?
+            == codex_windows_sandbox::WindowsSandboxIsolationMode::AppContainerCapabilities;
+        let read_cap_sid = if scoped_read {
+            let workspace_root = workspace_roots
+                .first()
+                .ok_or_else(|| io::Error::other("sandbox requires an active workspace root"))?;
             Some(
                 codex_windows_sandbox::workspace_appcontainer_read_capability_sid(
                     &vendor_sandbox_home,
@@ -335,24 +482,161 @@ pub(super) fn execute_windows_sandbox_plan(
                     cwd,
                     env_map,
                     timeout_ms: timeout.map(duration_millis_u64),
-                    cancellation: None,
-                    use_private_desktop: false,
+                    stdin: stdin_bytes,
+                    terminal_size: output.as_ref().and_then(|sink| match sink.io {
+                        ExecutionIo::Pipe | ExecutionIo::PipeControl => None,
+                        ExecutionIo::Pty { rows, cols } => {
+                            Some(codex_windows_sandbox::ResizePayload { rows, cols })
+                        }
+                    }),
+                    input_source,
+                    input_acknowledged,
+                    control_source: output
+                        .as_ref()
+                        .and_then(|sink| {
+                            sink.control_input
+                                .clone()
+                                .map(|queue| (queue, sink.control.clone()))
+                        })
+                        .map(|(queue, control)| {
+                            Box::new(move || match queue.poll() {
+                                Ok(InputPoll::Data(bytes)) => {
+                                    codex_windows_sandbox::SandboxInputPoll::Data(bytes)
+                                }
+                                Ok(InputPoll::Pending) => {
+                                    codex_windows_sandbox::SandboxInputPoll::Pending
+                                }
+                                Ok(InputPoll::Eof) => codex_windows_sandbox::SandboxInputPoll::Eof,
+                                Err(_) => {
+                                    control
+                                        .request(crate::execution::TerminationCause::InputFailed);
+                                    codex_windows_sandbox::SandboxInputPoll::Failed
+                                }
+                            })
+                                as codex_windows_sandbox::SandboxInputSource
+                        }),
+                    control_acknowledged: output
+                        .as_ref()
+                        .and_then(|sink| {
+                            sink.control_input
+                                .clone()
+                                .map(|queue| (queue, sink.control.clone()))
+                        })
+                        .map(|(queue, control)| {
+                            Box::new(move |count| {
+                                let accepted = queue.acknowledge(count).is_ok();
+                                if !accepted {
+                                    control
+                                        .request(crate::execution::TerminationCause::InputFailed);
+                                }
+                                accepted
+                            }) as Box<dyn FnMut(usize) -> bool + Send>
+                        }),
+                    cancellation: Some(
+                        output
+                            .as_ref()
+                            .map(|sink| {
+                                let control = sink.control.clone();
+                                let deadline_control = control.clone();
+                                let cleanup_control = control.clone();
+                                codex_windows_sandbox::WindowsSandboxCancellationToken::new(
+                                    move || control.is_cancelled(),
+                                )
+                                .with_cleanup_deadline(move || deadline_control.begin_cleanup())
+                                .with_cleanup_started(
+                                    move |deadline, exit_code, timed_out| {
+                                        if timed_out {
+                                            cleanup_control.request(
+                                                crate::execution::TerminationCause::Timeout,
+                                            );
+                                        } else if exit_code.is_some() {
+                                            cleanup_control.request(
+                                                crate::execution::TerminationCause::Exited,
+                                            );
+                                        }
+                                        cleanup_control.adopt_cleanup_deadline(deadline)
+                                    },
+                                )
+                            })
+                            .unwrap_or_else(|| {
+                                codex_windows_sandbox::WindowsSandboxCancellationToken::new(|| {
+                                    false
+                                })
+                            })
+                            .with_cleanup_budget(cleanup_budget),
+                    ),
+                    started_observer: output.clone().map(|sink| {
+                        Box::new(move || {
+                            let _ = sink.started();
+                        }) as Box<dyn FnMut() + Send>
+                    }),
+                    output_observer: output.clone().map(|sink| {
+                        Box::new(move |stream, bytes: &[u8]| {
+                            let stream = match stream {
+                                codex_windows_sandbox::OutputStream::Stdout if sink.io.is_pty() => {
+                                    OutputStream::Terminal
+                                }
+                                codex_windows_sandbox::OutputStream::Stdout => OutputStream::Stdout,
+                                codex_windows_sandbox::OutputStream::Stderr => OutputStream::Stderr,
+                                codex_windows_sandbox::OutputStream::Control => {
+                                    OutputStream::Control
+                                }
+                            };
+                            let _ = sink.send(stream, bytes);
+                        }) as codex_windows_sandbox::SandboxOutputObserver
+                    }),
+                    use_private_desktop: true,
                     proxy_enforced: plan.network_managed_proxy == "required",
-                    allow_network_proxy: plan.network_managed_proxy == "required",
+                    allow_network_proxy: plan.network_direct_egress != "deny"
+                        || plan.network_managed_proxy == "required",
                     sandbox_proxy_settings: managed_proxy_settings(managed_proxy.as_ref()),
                     read_cap_sid,
                     read_roots_override: None,
-                    read_roots_include_platform_defaults: workspace_contained,
+                    read_roots_include_platform_defaults: scoped_read,
                     write_roots_override: Some(write_roots_override.as_slice()),
-                    deny_write_paths_override: &[],
+                    deny_write_paths_override: &deny_write_paths_override,
                 },
             )
             .map_err(|err| {
+                if let Some(failure) =
+                    err.downcast_ref::<codex_windows_sandbox::SandboxCaptureInputError>()
+                {
+                    super::record_test_cleanup_trace("sandbox_capture_input_failed");
+                    if let Some(sink) = &output {
+                        sink.control.request(if failure.timed_out {
+                            crate::execution::TerminationCause::Timeout
+                        } else {
+                            crate::execution::TerminationCause::InputFailed
+                        });
+                    }
+                    return io::Error::other(super::error::BackendInputFacts {
+                        exit_code: failure.exit_code,
+                        timed_out: failure.timed_out,
+                    });
+                }
+                if let Some(failure) =
+                    err.downcast_ref::<codex_windows_sandbox::SandboxCaptureCleanupError>()
+                {
+                    super::record_test_cleanup_trace("sandbox_capture_cleanup_failed");
+                    return io::Error::other(super::error::BackendCleanupFacts {
+                        exit_code: failure.exit_code,
+                        timed_out: failure.timed_out,
+                    });
+                }
+                if err
+                    .downcast_ref::<codex_windows_sandbox::SandboxCleanupError>()
+                    .is_some()
+                {
+                    super::record_test_cleanup_trace("sandbox_runner_cleanup_failed");
+                    return io::Error::other(BackendCleanupError);
+                }
                 if let Some(failure) = codex_windows_sandbox::extract_setup_failure(&err) {
+                    super::record_test_cleanup_trace("sandbox_setup_unavailable");
                     return io::Error::other(BackendUnavailableError {
                         reason: public_windows_setup_unavailable_reason(failure.code.as_str()),
                     });
                 }
+                super::record_test_cleanup_trace("sandbox_backend_unclassified_error");
                 io::Error::other(err.to_string())
             })?;
         if let Some(managed_proxy) = &managed_proxy {
@@ -361,15 +645,59 @@ pub(super) fn execute_windows_sandbox_plan(
         Ok((capture, events))
     })();
     let cleanup = plan.cleanup_runtime_roots();
-
+    if let Err(error) = &cleanup {
+        super::record_test_cleanup_trace("runtime_root_cleanup_failed");
+        let logs_base_dir = vendor_sandbox_home.join(".sandbox");
+        codex_windows_sandbox::log_note(
+            &format!(
+                "execution cleanup failed at stage: runtime_roots:{:?}",
+                error.kind()
+            )
+            .to_ascii_lowercase(),
+            Some(&logs_base_dir),
+        );
+    }
+    if cleanup.is_ok()
+        && let Err(error) = &result
+        && super::cleanup_failed(error)
+    {
+        let stage = if super::failure_exit_code(error).is_some() {
+            "sandbox_capture"
+        } else {
+            "sandbox_transport"
+        };
+        let logs_base_dir = vendor_sandbox_home.join(".sandbox");
+        codex_windows_sandbox::log_note(
+            &format!("execution cleanup failed at stage: {stage}"),
+            Some(&logs_base_dir),
+        );
+    }
+    if cleanup.is_ok()
+        && let Err(error) = &result
+        && !super::cleanup_failed(error)
+        && !super::input_failed(error)
+    {
+        let logs_base_dir = vendor_sandbox_home.join(".sandbox");
+        codex_windows_sandbox::log_note(
+            "execution backend returned error at stage: unclassified",
+            Some(&logs_base_dir),
+        );
+    }
     let (capture, events) = match (result, cleanup) {
         (Ok(capture), Ok(_)) => capture,
         (Err(err), Ok(_)) => return Err(err),
-        (Ok(_), Err(err)) => return Err(err),
-        (Err(run_err), Err(cleanup_err)) => {
-            return Err(io::Error::other(format!(
-                "sandbox execution failed ({run_err}); runtime cleanup failed ({cleanup_err})"
-            )));
+        (Ok((capture, _)), Err(_)) => {
+            return Err(io::Error::other(super::error::BackendCleanupFacts {
+                exit_code: Some(capture.exit_code),
+                timed_out: capture.timed_out,
+            }));
+        }
+        (Err(err), Err(_)) if super::cleanup_failed(&err) => return Err(err),
+        (Err(err), Err(_)) => {
+            return Err(io::Error::other(super::error::BackendCleanupFacts {
+                exit_code: super::failure_exit_code(&err),
+                timed_out: super::failure_timed_out(&err),
+            }));
         }
     };
 
@@ -380,6 +708,7 @@ pub(super) fn execute_windows_sandbox_plan(
             stderr: capture.stderr,
         },
         timed_out: capture.timed_out,
+        cleanup_complete: true,
         events,
     })
 }
@@ -521,8 +850,9 @@ fn execute_windows_sandbox_plan(
     stdin: ExecutionStdin,
     env: &ExecutionEnv,
     timeout: Option<Duration>,
+    output: Option<ExecutionOutputSink>,
 ) -> io::Result<BackendExecutionOutput> {
-    spawn_local_command(plan, command, cwd, stdin, env, timeout)
+    spawn_local_command_with_output(plan, command, cwd, stdin, env, timeout, output)
 }
 
 #[cfg(windows)]
@@ -595,14 +925,18 @@ fn sandbox_environment(
     let mut result = HashMap::new();
     for (key, value) in minimal_environment(plan) {
         result.insert(
-            key.to_string_lossy().into_owned(),
+            key.to_string_lossy().to_ascii_uppercase(),
             value.to_string_lossy().into_owned(),
         );
     }
-    result.extend(env.entries.iter().cloned());
+    result.extend(
+        env.entries
+            .iter()
+            .map(|(key, value)| (key.to_ascii_uppercase(), value.clone())),
+    );
     if let Some(proxy) = managed_proxy {
         for (key, value) in proxy.environment() {
-            result.insert(key, value);
+            result.insert(key.to_ascii_uppercase(), value);
         }
     }
     result

@@ -24,8 +24,10 @@ pub(crate) fn backend_execution_error(
 fn backend_unavailable_setup_status(reason: &str, cwd: &Path) -> Option<Value> {
     #[cfg(windows)]
     {
-        if reason.starts_with("windows sandbox setup unavailable") {
-            return crate::commands::setup::windows_sandbox_setup_status_for_cwd(cwd).ok();
+        if reason.starts_with("windows sandbox") {
+            return Some(windows_setup_status_or_fallback(
+                crate::commands::setup::windows_sandbox_setup_status_for_cwd(cwd),
+            ));
         }
     }
 
@@ -37,6 +39,20 @@ fn backend_unavailable_setup_status(reason: &str, cwd: &Path) -> Option<Value> {
     None
 }
 
+#[cfg(windows)]
+fn windows_setup_status_or_fallback(status: Result<Value, String>) -> Value {
+    status.unwrap_or_else(|_| {
+        crate::commands::setup::windows_sandbox_setup_status_payload(true, false, false, None)
+    })
+}
+
+#[cfg(windows)]
+pub(crate) fn windows_setup_status_for_backend_error(cwd: &Path) -> Value {
+    windows_setup_status_or_fallback(
+        crate::commands::setup::windows_sandbox_setup_status_for_cwd(cwd),
+    )
+}
+
 #[cfg(all(test, windows))]
 mod tests {
     use super::*;
@@ -46,6 +62,30 @@ mod tests {
         let err = io::Error::other("runner failed");
 
         assert_eq!(backend_execution_error(&err, true, Path::new(".")), None);
+    }
+
+    #[test]
+    fn windows_sandbox_binding_unavailability_includes_setup_status() {
+        let setup_status = backend_unavailable_setup_status(
+            "windows sandbox process binding unavailable",
+            Path::new("."),
+        )
+        .expect("Windows sandbox availability errors include setup status");
+
+        assert_eq!(setup_status["setup"], "windows-sandbox");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn unavailable_setup_status_probe_keeps_structured_fail_closed_status() {
+        let setup_status = windows_setup_status_or_fallback(Err("probe unavailable".into()));
+
+        assert_eq!(setup_status["setup"], "windows-sandbox");
+        assert_eq!(setup_status["platform_supported"], true);
+        assert_eq!(setup_status["elevated"], Value::Null);
+        assert_eq!(setup_status["can_repair"], false);
+        assert_eq!(setup_status["can_run_setup_now"], false);
+        assert_eq!(setup_status["next_action"], "open_elevated_shell");
     }
 
     #[cfg(windows)]

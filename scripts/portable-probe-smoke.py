@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import base64
 import json
 import os
 import platform
@@ -60,6 +61,19 @@ def run_json(args: list[str], expect_success: bool) -> tuple[int, dict]:
     return result.returncode, json.loads(result.stdout)
 
 
+def output_text(result: dict, stream: str = "stdout") -> str:
+    payload = result.get("output", {}).get(stream, {})
+    data = payload.get("data")
+    if payload.get("encoding") != "base64" or not isinstance(data, str) or not data.startswith("base64:"):
+        raise SystemExit(f"missing base64 {stream} in structured execution result")
+    try:
+        return base64.b64decode(data.removeprefix("base64:"), validate=True).decode(
+            "utf-8", errors="replace"
+        )
+    except ValueError as exc:
+        raise SystemExit(f"invalid base64 {stream} in structured execution result: {exc}") from exc
+
+
 def assert_probes(payload: dict, system: str) -> None:
     probes = payload.get("capability_probes")
     if not isinstance(probes, list):
@@ -117,23 +131,25 @@ def assert_network_disabled_blocks_direct_egress(system: str, command: str) -> N
     }[system]
     if result.get("platform_plan", {}).get("enforcement") != expected_enforcement:
         raise SystemExit(f"unexpected network.disabled plan: {result}")
-    if result.get("exit_code") == 0 or "direct-network-ok" in result.get("stdout", ""):
+    if result.get("exit_code") == 0 or "direct-network-ok" in output_text(result):
         raise SystemExit(f"{system} network.disabled allowed direct egress: {result}")
 
 
 def assert_linux_read_only(payload: dict) -> None:
     if payload.get("backend_status") != "experimental":
-        raise SystemExit(f"unexpected Linux backend status: {payload}")
-    if payload.get("sandbox_levels", {}).get("read-only") != "supported":
-        raise SystemExit(f"Linux read-only must be supported: {payload}")
-    if payload.get("network_modes", {}).get("disabled") != "supported":
-        raise SystemExit(f"Linux network.disabled must be supported: {payload}")
-    if payload.get("sandbox_levels", {}).get("workspace-write") != "supported":
-        raise SystemExit(f"Linux workspace-write must be supported: {payload}")
-    if payload.get("sandbox_levels", {}).get("workspace-contained") != "supported":
-        raise SystemExit(f"Linux workspace-contained must be supported: {payload}")
-    if payload.get("network_modes", {}).get("proxy") != "supported":
-        raise SystemExit(f"Linux network.proxy must be supported: {payload}")
+        raise SystemExit(f"unexpected Linux backend status: {payload.get('backend_status')!r}")
+    for capability, name in [
+        (payload.get("sandbox_levels", {}).get("read-only"), "sandbox_levels.read-only"),
+        (payload.get("sandbox_levels", {}).get("workspace-write"), "sandbox_levels.workspace-write"),
+        (
+            payload.get("sandbox_levels", {}).get("workspace-contained"),
+            "sandbox_levels.workspace-contained",
+        ),
+        (payload.get("network_modes", {}).get("disabled"), "network_modes.disabled"),
+        (payload.get("network_modes", {}).get("proxy"), "network_modes.proxy"),
+    ]:
+        if capability != "experimental":
+            raise SystemExit(f"Linux {name} must remain experimental, got {capability!r}")
     for feature in ["network_proxy", "managed_proxy"]:
         if payload.get("features", {}).get(feature) is not True:
             raise SystemExit(f"Linux {feature} must be available: {payload}")
@@ -225,17 +241,19 @@ def assert_linux_workspace_write(command: str) -> None:
 
 def assert_macos_read_only(payload: dict) -> None:
     if payload.get("backend_status") != "experimental":
-        raise SystemExit(f"unexpected macOS backend status: {payload}")
-    if payload.get("sandbox_levels", {}).get("read-only") != "supported":
-        raise SystemExit(f"macOS read-only must be supported: {payload}")
-    if payload.get("sandbox_levels", {}).get("workspace-write") != "supported":
-        raise SystemExit(f"macOS workspace-write must be supported: {payload}")
-    if payload.get("sandbox_levels", {}).get("workspace-contained") != "supported":
-        raise SystemExit(f"macOS workspace-contained must be supported: {payload}")
-    if payload.get("network_modes", {}).get("disabled") != "supported":
-        raise SystemExit(f"macOS network.disabled must be supported: {payload}")
-    if payload.get("network_modes", {}).get("proxy") != "supported":
-        raise SystemExit(f"macOS network.proxy must be supported: {payload}")
+        raise SystemExit(f"unexpected macOS backend status: {payload.get('backend_status')!r}")
+    for capability, name in [
+        (payload.get("sandbox_levels", {}).get("read-only"), "sandbox_levels.read-only"),
+        (payload.get("sandbox_levels", {}).get("workspace-write"), "sandbox_levels.workspace-write"),
+        (
+            payload.get("sandbox_levels", {}).get("workspace-contained"),
+            "sandbox_levels.workspace-contained",
+        ),
+        (payload.get("network_modes", {}).get("disabled"), "network_modes.disabled"),
+        (payload.get("network_modes", {}).get("proxy"), "network_modes.proxy"),
+    ]:
+        if capability != "experimental":
+            raise SystemExit(f"macOS {name} must remain experimental, got {capability!r}")
     for feature in ["network_proxy", "managed_proxy"]:
         if payload.get("features", {}).get(feature) is not True:
             raise SystemExit(f"macOS {feature} must be available: {payload}")
@@ -272,8 +290,6 @@ def assert_macos_read_only(payload: dict) -> None:
 
 
 def assert_portable_proxy(system: str, enforcement: str, policy: str, command: str) -> None:
-    contained_command = "/usr/bin/python3"
-    proxy_command = contained_command if Path(contained_command).exists() else command
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     listener.bind(("127.0.0.1", 0))
     listener.listen(1)
@@ -317,6 +333,31 @@ def assert_portable_proxy(system: str, enforcement: str, policy: str, command: s
             "print('managed-proxy-ok')",
         ]
     )
+    proxy_command = [command, "-c", code]
+    direct_command = [
+        command,
+        "-c",
+        "import socket; socket.create_connection(('1.1.1.1', 53), timeout=0.5); print('direct-network-ok')",
+    ]
+    if policy == "workspace-contained":
+        curl = "/usr/bin/curl"
+        netcat = "/usr/bin/nc"
+        if not Path(curl).is_file() or not Path(netcat).is_file():
+            raise SystemExit("workspace-contained proxy smoke requires system curl and nc")
+        proxy_shell = (
+            "set -eu; "
+            f"{shlex.quote(curl)} --fail --silent --show-error "
+            "--proxy \"$HTTP_PROXY\" "
+            "--proxy-header \"Proxy-Authorization: $RUNSEAL_NETWORK_PROXY_AUTHORIZATION\" "
+            f"http://127.0.0.1:{port}/proxy-ok; "
+            "printf managed-proxy-ok"
+        )
+        proxy_command = ["/bin/sh", "-c", proxy_shell]
+        direct_command = [
+            "/bin/sh",
+            "-c",
+            f"{shlex.quote(netcat)} -z -w 1 1.1.1.1 53 && printf direct-network-ok",
+        ]
     with tempfile.TemporaryDirectory(prefix="runseal-portable-proxy-") as cwd:
         _, result = run_json(
             [
@@ -329,9 +370,7 @@ def assert_portable_proxy(system: str, enforcement: str, policy: str, command: s
                 "--cwd",
                 cwd,
                 "--",
-                proxy_command,
-                "-c",
-                code,
+                *proxy_command,
             ],
             expect_success=True,
         )
@@ -346,9 +385,7 @@ def assert_portable_proxy(system: str, enforcement: str, policy: str, command: s
                 "--cwd",
                 cwd,
                 "--",
-                proxy_command,
-                "-c",
-                "import socket; socket.create_connection(('1.1.1.1', 53), timeout=0.5); print('direct-network-ok')",
+                *direct_command,
             ],
             expect_success=True,
         )
@@ -361,12 +398,12 @@ def assert_portable_proxy(system: str, enforcement: str, policy: str, command: s
     plan = result.get("platform_plan", {})
     if (
         result.get("exit_code") != 0
-        or "managed-proxy-ok" not in result.get("stdout", "")
+        or "managed-proxy-ok" not in output_text(result)
         or plan.get("enforcement") != enforcement
         or plan.get("network", {}).get("managed_proxy") != "required"
     ):
         raise SystemExit(f"{system} {policy} managed proxy execution failed: {result}")
-    if direct.get("exit_code") == 0 or "direct-network-ok" in direct.get("stdout", ""):
+    if direct.get("exit_code") == 0 or "direct-network-ok" in output_text(direct):
         raise SystemExit(f"{system} {policy} proxy mode allowed direct egress: {direct}")
 
 
@@ -482,7 +519,7 @@ def assert_portable_workspace_contained(system: str) -> None:
             ],
             expect_success=True,
         )
-        if result.get("exit_code") == 0 or "outside-secret" in result.get("stdout", ""):
+        if result.get("exit_code") == 0 or "outside-secret" in output_text(result):
             raise SystemExit(f"{system} workspace-contained allowed symlink escape: {result}")
 
 

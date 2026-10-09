@@ -7,8 +7,7 @@ use super::{
 };
 #[cfg(windows)]
 use super::{
-    POLICY_TRANSITION_BUSY_REASON, WindowsKillOnCloseJob, WindowsSandboxPolicyCohortKey,
-    execute_windows_sandbox_plan, policy_transition_busy_reason,
+    POLICY_TRANSITION_BUSY_REASON, WindowsSandboxPolicyCohortKey, policy_transition_busy_reason,
     public_windows_setup_unavailable_reason, windows_sandbox_command,
     windows_sandbox_execution_gate_for_key, windows_sandbox_path_key,
     windows_sandbox_workspace_roots_for_plan, windows_sandbox_write_roots_for_plan,
@@ -29,7 +28,7 @@ use std::path::{Path, PathBuf};
 #[cfg(windows)]
 use std::sync::{MutexGuard, OnceLock};
 #[cfg(windows)]
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tempfile::TempDir;
 
 #[cfg(windows)]
@@ -85,11 +84,11 @@ fn windows_sandbox_execution_gate_allows_same_policy_and_rejects_mixed_policy() 
     let _test_lock = windows_sandbox_gate_test_lock();
     let policy_a = WindowsSandboxPolicyCohortKey {
         policy_hash: "hash-a".to_string(),
-        workspace_key: "workspace".to_string(),
+        binding_key: "workspace".to_string(),
     };
     let policy_b = WindowsSandboxPolicyCohortKey {
         policy_hash: "hash-b".to_string(),
-        workspace_key: "workspace".to_string(),
+        binding_key: "workspace".to_string(),
     };
 
     let guard = windows_sandbox_execution_gate_for_key(policy_a.clone())?;
@@ -318,7 +317,8 @@ fn danger_full_access_requires_no_sandbox_backend_features() {
 
 #[test]
 fn windows_reference_does_not_compile_sandboxed_policy_as_local_execution() {
-    let cwd = PathBuf::from("/workspace");
+    let workspace = TempDir::new().unwrap();
+    let cwd = workspace.path().to_path_buf();
     let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
 
     let result = WindowsReferenceBackend.compile_plan("exec_sandboxed", &cwd, &policy);
@@ -389,18 +389,18 @@ fn linux_skeleton_reports_experimental_disabled_features() {
         "experimental"
     );
     assert_eq!(capabilities["features"]["policy_epoch"], true);
-    assert_eq!(capabilities["sandbox_levels"]["read-only"], "supported");
+    assert_eq!(capabilities["sandbox_levels"]["read-only"], "experimental");
     assert_eq!(
         capabilities["sandbox_levels"]["workspace-write"],
-        "supported"
+        "experimental"
     );
     assert_eq!(
         capabilities["sandbox_levels"]["workspace-contained"],
-        "supported"
+        "experimental"
     );
     assert_eq!(capabilities["network_modes"]["unmanaged"], "supported");
-    assert_eq!(capabilities["network_modes"]["disabled"], "supported");
-    assert_eq!(capabilities["network_modes"]["proxy"], "supported");
+    assert_eq!(capabilities["network_modes"]["disabled"], "experimental");
+    assert_eq!(capabilities["network_modes"]["proxy"], "experimental");
     let probes = capabilities["capability_probes"].as_array().unwrap();
     assert_eq!(probes.len(), 10);
     assert_probe_schema(&probes[0], "filesystem_policy", "landlock");
@@ -579,18 +579,18 @@ fn macos_skeleton_reports_experimental_disabled_features() {
         "experimental"
     );
     assert_eq!(capabilities["features"]["policy_epoch"], true);
-    assert_eq!(capabilities["sandbox_levels"]["read-only"], "supported");
+    assert_eq!(capabilities["sandbox_levels"]["read-only"], "experimental");
     assert_eq!(
         capabilities["sandbox_levels"]["workspace-write"],
-        "supported"
+        "experimental"
     );
     assert_eq!(
         capabilities["sandbox_levels"]["workspace-contained"],
-        "supported"
+        "experimental"
     );
     assert_eq!(capabilities["network_modes"]["unmanaged"], "supported");
-    assert_eq!(capabilities["network_modes"]["disabled"], "supported");
-    assert_eq!(capabilities["network_modes"]["proxy"], "supported");
+    assert_eq!(capabilities["network_modes"]["disabled"], "experimental");
+    assert_eq!(capabilities["network_modes"]["proxy"], "experimental");
     let probes = capabilities["capability_probes"].as_array().unwrap();
     assert_eq!(probes.len(), 6);
     assert_probe_schema(&probes[0], "filesystem_policy", "sandbox_exec");
@@ -1374,29 +1374,39 @@ fn sandbox_cleanup_preserves_runtime_tree_after_filesystem_rollback_failure() ->
 
 #[cfg(windows)]
 #[test]
-fn sandbox_execution_fails_closed_before_runtime_setup_when_setup_is_missing() -> io::Result<()> {
+fn missing_sandbox_setup_is_rejected_without_creating_runtime_roots() -> io::Result<()> {
     let _test_lock = windows_sandbox_gate_test_lock();
+    let _home_lock = windows_sandbox_home_test_lock();
     let tmp = TempDir::new()?;
+    struct RestoreSandboxHome(Option<OsString>);
+    impl Drop for RestoreSandboxHome {
+        fn drop(&mut self) {
+            // Environment-mutating tests hold the same sandbox-home lock.
+            unsafe {
+                match self.0.take() {
+                    Some(value) => std::env::set_var("RUNSEAL_WINDOWS_SANDBOX_HOME", value),
+                    None => std::env::remove_var("RUNSEAL_WINDOWS_SANDBOX_HOME"),
+                }
+            }
+        }
+    }
+    let _restore = RestoreSandboxHome(std::env::var_os("RUNSEAL_WINDOWS_SANDBOX_HOME"));
+    // Missing setup must be a fixture, independent of machine-installed helpers/state.
+    unsafe {
+        std::env::set_var(
+            "RUNSEAL_WINDOWS_SANDBOX_HOME",
+            tmp.path().join("missing-setup"),
+        );
+    }
     let cwd = tmp.path().join("workspace");
     fs::create_dir_all(&cwd)?;
     let policy = normalize_policy(&json!("workspace-write"), &cwd, None).unwrap();
     let plan = WindowsReferenceBackend.fail_closed_plan("exec_setup_missing", &cwd, &policy);
     let runtime_root = PathBuf::from(plan.runtime_root.as_ref().unwrap());
-    let command = vec![
-        "cmd.exe".to_string(),
-        "/C".to_string(),
-        "echo ok".to_string(),
-    ];
-
-    let err = execute_windows_sandbox_plan(
-        &plan,
-        &command,
-        &cwd,
-        ExecutionStdin::Empty,
-        &ExecutionEnv::default(),
-        None,
-    )
-    .expect_err("missing Windows setup must fail closed");
+    // Setup validation has its own fixture. Execution admission must first
+    // inspect the machine binding and can legitimately refuse before setup.
+    let err = crate::backend::windows::prepare_windows_sandbox_setup(&cwd)
+        .expect_err("missing Windows setup must fail closed");
 
     assert_eq!(err.kind(), io::ErrorKind::Other);
     assert!(
@@ -1419,55 +1429,43 @@ fn cleanup_child_after_setup_error_preserves_setup_error() -> io::Result<()> {
 }
 
 #[cfg(windows)]
+fn local_process_fixture() -> io::Result<codex_windows_sandbox::LocalExecutionProcess> {
+    codex_windows_sandbox::LocalExecutionProcess::spawn(
+        &[
+            "powershell".to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            "Start-Sleep -Seconds 30; exit 7".to_string(),
+        ],
+        &std::env::current_dir()?,
+        &std::env::vars().collect(),
+        false,
+    )
+    .map_err(io::Error::other)
+}
+
+#[cfg(windows)]
 #[test]
-fn windows_kill_on_close_job_terminates_child_process() -> io::Result<()> {
-    let job = WindowsKillOnCloseJob::new()?;
-    let mut child = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-Command", "Start-Sleep -Seconds 30; exit 7"])
-        .spawn()?;
-
-    job.assign_child(&child)?;
-    let started = Instant::now();
-    drop(job);
-    child.wait()?;
-
-    assert!(
-        started.elapsed() < Duration::from_secs(5),
-        "kill-on-close job should terminate child before the command exits naturally"
-    );
+fn windows_local_process_range_finishes_owned_process() -> io::Result<()> {
+    let process = local_process_fixture()?;
+    assert!(process.try_wait()?.is_none());
+    let code = process.finish(Duration::from_secs(5))?;
+    assert_eq!(code, 1);
+    assert_eq!(process.try_wait()?, Some(code));
     Ok(())
 }
 
 #[cfg(windows)]
 #[test]
-fn windows_kill_on_close_job_leaves_unassigned_process_running() -> io::Result<()> {
-    let job = WindowsKillOnCloseJob::new()?;
-    let mut assigned = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-Command", "Start-Sleep -Seconds 30; exit 7"])
-        .spawn()?;
-    let mut unassigned = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-Command", "Start-Sleep -Seconds 30; exit 9"])
-        .spawn()?;
-
-    job.assign_child(&assigned)?;
-    let started = Instant::now();
-    drop(job);
-    assigned.wait()?;
-    let elapsed = started.elapsed();
-    let unassigned_still_running = unassigned.try_wait()?.is_none();
-    if unassigned_still_running {
-        unassigned.kill()?;
-    }
-    let _ = unassigned.wait();
-
+fn windows_local_process_range_leaves_peer_running() -> io::Result<()> {
+    let process = local_process_fixture()?;
+    let peer = local_process_fixture()?;
+    process.finish(Duration::from_secs(5))?;
     assert!(
-        elapsed < Duration::from_secs(5),
-        "kill-on-close job should terminate only the assigned child promptly"
+        peer.try_wait()?.is_none(),
+        "cleanup must not terminate a separate execution range"
     );
-    assert!(
-        unassigned_still_running,
-        "kill-on-close job must not terminate unrelated processes"
-    );
+    peer.finish(Duration::from_secs(5))?;
     Ok(())
 }
 

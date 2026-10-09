@@ -32,13 +32,19 @@ pub(crate) fn stdin_from_params(
         }
         "bytes" => stdin_bytes_from_params(stdin),
         "file" => stdin_file_from_params(stdin, cwd),
-        "inherit" | "stream" => Err(RunSealError::new(
+        "stream" => {
+            validate_stdin_keys(stdin, &["mode"])?;
+            Ok(ExecutionStdin::Stream(
+                crate::backend::ExecutionInput::default(),
+            ))
+        }
+        "inherit" => Err(RunSealError::new(
             "INVALID_REQUEST",
             format!("params.stdin.mode={mode} is not supported by execute"),
         )),
         _ => Err(RunSealError::new(
             "INVALID_REQUEST",
-            format!("params.stdin.mode must be empty, bytes, or file, got {mode}"),
+            format!("params.stdin.mode must be empty, bytes, file, or stream, got {mode}"),
         )),
     }
 }
@@ -187,5 +193,6 @@ pub(crate) fn stdin_audit_json(stdin: &ExecutionStdin) -> Value {
             "mode": "file",
             "byte_count": bytes.len(),
         }),
+        ExecutionStdin::Stream(_) => json!({"mode":"stream","byte_count":0}),
     }
 }

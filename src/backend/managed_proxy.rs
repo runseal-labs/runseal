@@ -31,12 +31,15 @@ use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject};
 
 const MAX_HEADER_BYTES: usize = 64 * 1024;
 const NO_PROXY: &str = "";
+#[cfg(windows)]
 const MANAGED_PROXY_PORT: u16 = 43129;
 #[cfg(target_os = "linux")]
 const LINUX_SANDBOX_PROXY_PORT: u16 = 43129;
 #[cfg(target_os = "linux")]
 const LINUX_SANDBOX_PROXY_SOCKET: &str = "/run/runseal-proxy/proxy.sock";
-const MANAGED_PROXY_BIND_RETRY_TIMEOUT: Duration = Duration::from_secs(30);
+// A second RunSeal process should become health-checkable as soon as its
+// listener starts; a longer opaque port wait can outlive an admitted execution.
+const MANAGED_PROXY_BIND_RETRY_TIMEOUT: Duration = Duration::from_secs(3);
 const MANAGED_PROXY_BIND_RETRY_INTERVAL: Duration = Duration::from_millis(50);
 const MANAGED_PROXY_HEALTH_HOST: &str = "runseal.local";
 const MANAGED_PROXY_HEALTH_PATH: &str = "/.runseal/managed-proxy/health";
@@ -321,21 +324,27 @@ impl ManagedSandboxProxyState {
 }
 
 fn bind_proxy_listener(addr: SocketAddr) -> io::Result<TcpListener> {
+    bind_proxy_listener_with_timeout(addr, MANAGED_PROXY_BIND_RETRY_TIMEOUT)
+}
+
+fn bind_proxy_listener_with_timeout(
+    addr: SocketAddr,
+    retry_timeout: Duration,
+) -> io::Result<TcpListener> {
     let started_at = Instant::now();
     loop {
         match TcpListener::bind(addr) {
             Ok(listener) => return Ok(listener),
             Err(err)
-                if addr.port() == MANAGED_PROXY_PORT
-                    && err.kind() == io::ErrorKind::AddrInUse
-                    && started_at.elapsed() < MANAGED_PROXY_BIND_RETRY_TIMEOUT =>
+                if err.kind() == io::ErrorKind::AddrInUse
+                    && started_at.elapsed() < retry_timeout =>
             {
                 thread::sleep(MANAGED_PROXY_BIND_RETRY_INTERVAL);
             }
-            Err(err) if addr.port() == MANAGED_PROXY_PORT => {
+            Err(err) if err.kind() == io::ErrorKind::AddrInUse => {
                 return Err(io::Error::new(
                     err.kind(),
-                    format!("fixed managed proxy port {addr} is unavailable: {err}"),
+                    format!("managed proxy listener {addr} is unavailable: {err}"),
                 ));
             }
             Err(err) => return Err(err),
@@ -348,6 +357,15 @@ fn managed_proxy_health_check(addr: SocketAddr) -> bool {
     let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(200)) else {
         return false;
     };
+    if stream
+        .set_read_timeout(Some(Duration::from_millis(200)))
+        .is_err()
+        || stream
+            .set_write_timeout(Some(Duration::from_millis(200)))
+            .is_err()
+    {
+        return false;
+    }
     let request = format!(
         "GET http://{MANAGED_PROXY_HEALTH_HOST}{MANAGED_PROXY_HEALTH_PATH} HTTP/1.1\r\nHost: {MANAGED_PROXY_HEALTH_HOST}\r\nConnection: close\r\n\r\n"
     );
@@ -1075,6 +1093,35 @@ mod tests {
             TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_err(),
             "managed proxy listener must stop after the last proxy handle drops"
         );
+    }
+
+    #[test]
+    fn occupied_listener_retry_is_bounded() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind occupied port");
+        let addr = listener.local_addr().expect("occupied port address");
+        let started_at = Instant::now();
+
+        let error = bind_proxy_listener_with_timeout(addr, Duration::from_millis(100))
+            .expect_err("an occupied listener address must not bind");
+
+        assert_eq!(error.kind(), io::ErrorKind::AddrInUse);
+        assert!(started_at.elapsed() < Duration::from_secs(1));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn unresponsive_proxy_health_endpoint_is_bounded() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("bind health fixture");
+        let addr = listener.local_addr().expect("health fixture address");
+        let server = thread::spawn(move || {
+            let (_stream, _) = listener.accept().expect("accept health probe");
+            thread::sleep(Duration::from_secs(2));
+        });
+        let started_at = Instant::now();
+
+        assert!(!managed_proxy_health_check(addr));
+        assert!(started_at.elapsed() < Duration::from_secs(1));
+        server.join().expect("health fixture thread");
     }
 
     #[test]
