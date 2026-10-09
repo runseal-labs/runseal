@@ -201,8 +201,14 @@ pub(super) fn spawn_local_command_with_output(
                     match pipe.read(&mut bytes) {
                         Ok(0) => return Ok(()),
                         Ok(count) => {
-                            if let Some(sink) = &reader_sink {
-                                sink.send(super::OutputStream::Control, &bytes[..count])?;
+                            if let Some(sink) = &reader_sink
+                                && let Err(error) =
+                                    sink.send(super::OutputStream::Control, &bytes[..count])
+                            {
+                                if output_delivery_was_cancelled(sink, &error) {
+                                    return Ok(());
+                                }
+                                return Err(error);
                             }
                         }
                         Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
@@ -764,8 +770,11 @@ fn read_windows_pipe_in_thread(
                 break;
             }
             if let Some(output) = &output {
-                if output.send(stream, &buffer[..count]).is_err() {
-                    break;
+                if let Err(error) = output.send(stream, &buffer[..count]) {
+                    if output_delivery_was_cancelled(output, &error) {
+                        break;
+                    }
+                    return Err(error);
                 }
             } else {
                 captured.extend_from_slice(&buffer[..count]);
@@ -773,6 +782,15 @@ fn read_windows_pipe_in_thread(
         }
         Ok(captured)
     })
+}
+
+#[cfg(windows)]
+fn output_delivery_was_cancelled(output: &super::ExecutionOutputSink, error: &io::Error) -> bool {
+    output.control.is_cancelled()
+        && matches!(
+            error.kind(),
+            io::ErrorKind::Interrupted | io::ErrorKind::TimedOut | io::ErrorKind::BrokenPipe
+        )
 }
 
 #[cfg(all(unix, test))]
