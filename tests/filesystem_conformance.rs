@@ -268,13 +268,25 @@ fn execute_params_unlocked(params: Value) -> Result<ExecutionObservation> {
 }
 
 fn execute_messages_unlocked(params: Value) -> Result<Vec<Value>> {
-    execute_messages_unlocked_with_watchdog(params, Duration::from_secs(15))
+    // Bound Windows probes in RunSeal, then leave time for the cleanup deadline
+    // before the harness watchdog can kill the RPC host.
+    #[cfg(windows)]
+    let watchdog = Duration::from_secs(45);
+    #[cfg(not(windows))]
+    let watchdog = Duration::from_secs(15);
+    execute_messages_unlocked_with_watchdog(params, watchdog)
 }
 
 fn execute_messages_unlocked_with_watchdog(
-    params: Value,
+    mut params: Value,
     watchdog: Duration,
 ) -> Result<Vec<Value>> {
+    #[cfg(windows)]
+    if params.get("timeout_ms").is_none()
+        && let Some(object) = params.as_object_mut()
+    {
+        object.insert("timeout_ms".to_string(), json!(30_000));
+    }
     let output = run_rpc_with_watchdog(&rpc_request("execute", params), watchdog)?;
 
     assert!(
