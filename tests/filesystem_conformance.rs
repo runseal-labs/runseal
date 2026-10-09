@@ -122,16 +122,16 @@ fn windows_python_bin() -> Result<String> {
     let output = Command::new("where.exe")
         .arg("python")
         .output()
-        .context("failed to locate Python for the Windows proxy probe")?;
+        .context("failed to locate Python for the Windows conformance probe")?;
     anyhow::ensure!(
         output.status.success(),
-        "Python is required for the Windows proxy probe"
+        "Python is required for the Windows conformance probe"
     );
     String::from_utf8(output.stdout)?
         .lines()
         .next()
         .map(str::to_owned)
-        .context("Python is required for the Windows proxy probe")
+        .context("Python is required for the Windows conformance probe")
 }
 
 #[cfg(windows)]
@@ -849,6 +849,13 @@ fn read_only_denies_workspace_write_when_supported_or_fails_closed() -> Result<(
     fs::create_dir_all(&workspace)?;
     let target = workspace.join("read-only-write.txt");
     let code = format!("from pathlib import Path; Path({target:?}).write_text('blocked')");
+    #[cfg(windows)]
+    let response = execute_params(json!({
+        "command": [windows_python_bin()?, "-c", code],
+        "cwd": workspace,
+        "policy": "read-only"
+    }))?;
+    #[cfg(not(windows))]
     let response = execute_platform_script(
         "read-only",
         &workspace,
