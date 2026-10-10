@@ -898,6 +898,13 @@ fn workspace_contained_denies_external_read_when_supported_or_fails_closed() -> 
     let outside = tmp.path().join("host-profile-secret.txt");
     fs::write(&outside, "outside-secret")?;
     let code = format!("from pathlib import Path; print(Path({outside:?}).read_text())");
+    #[cfg(windows)]
+    let response = execute_params(json!({
+        "command": [windows_python_bin()?, "-u", "-c", code],
+        "cwd": workspace,
+        "policy": "workspace-contained"
+    }))?;
+    #[cfg(not(windows))]
     let response = execute_platform_script(
         "workspace-contained",
         &workspace,
@@ -1233,10 +1240,18 @@ fn runtime_roots_are_cleaned_after_execution_when_supported_or_fails_closed() ->
          path = pathlib.Path(os.environ['HOME']) / {marker:?}\n\
          path.write_text('runtime marker', encoding='utf-8')"
     );
+    #[cfg(not(windows))]
     let ps_script = format!(
         "Set-Content -LiteralPath (Join-Path $env:USERPROFILE {}) -Value 'runtime marker' -NoNewline",
         ps_literal(marker)
     );
+    #[cfg(windows)]
+    let response = execute_params(json!({
+        "command": [windows_python_bin()?, "-u", "-c", code],
+        "cwd": workspace,
+        "policy": "workspace-write"
+    }))?;
+    #[cfg(not(windows))]
     let response = execute_platform_script("workspace-write", &workspace, None, code, ps_script)?;
 
     if is_backend_missing(&response) {
