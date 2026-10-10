@@ -898,6 +898,13 @@ fn workspace_contained_denies_external_read_when_supported_or_fails_closed() -> 
     let outside = tmp.path().join("host-profile-secret.txt");
     fs::write(&outside, "outside-secret")?;
     let code = format!("from pathlib import Path; print(Path({outside:?}).read_text())");
+    #[cfg(windows)]
+    let response = execute_params(json!({
+        "command": [windows_python_bin()?, "-u", "-c", code],
+        "cwd": workspace,
+        "policy": "workspace-contained"
+    }))?;
+    #[cfg(not(windows))]
     let response = execute_platform_script(
         "workspace-contained",
         &workspace,
