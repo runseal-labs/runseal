@@ -5616,7 +5616,7 @@ fn cli_stalled_console_output_for_policy(policy: &str) -> Result<()> {
                 let cleanup_stage = read_console_cleanup_stage(tmp.path(), &runner_log_offsets);
                 let lifecycle_trace = read_console_cleanup_trace(tmp.path());
                 anyhow::bail!(
-                    "stalled Console CLI cleanup did not finish for {policy} (driver_exited={driver_exited}, command_running={command_running}, sandbox_processes_running={sandbox_processes_running}, terminal={terminals}, cleanup_stage={cleanup_stage}, lifecycle_trace={lifecycle_trace})"
+                    "stalled Console CLI cleanup did not finish for {policy} (stream={stream}, timeout={timeout}, driver_exited={driver_exited}, command_running={command_running}, sandbox_processes_running={sandbox_processes_running}, terminal={terminals}, cleanup_stage={cleanup_stage}, lifecycle_trace={lifecycle_trace})"
                 );
             }
             std::thread::sleep(Duration::from_millis(5));
@@ -5907,6 +5907,15 @@ fn read_console_cleanup_trace(workspace: &std::path::Path) -> String {
         return "none".to_owned();
     };
     let allowed = [
+        "console_output_finish_started",
+        "console_output_cleanup_deadline",
+        "console_output_cleanup_retained",
+        "console_output_child_exited",
+        "console_output_writer_exited",
+        "console_output_drop_started",
+        "console_output_drop_finished",
+        "console_signal_unregister_started",
+        "console_signal_unregister_finished",
         "engine_started",
         "backend_worker_exit_timeout",
         "backend_worker_exit_timeout_after_success",

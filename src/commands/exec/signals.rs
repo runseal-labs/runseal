@@ -124,12 +124,14 @@ mod windows {
         // Once execution cleanup has joined its worker, further interrupts cannot
         // change the already accepted cause or race through dangling references.
         pub(crate) fn unregister(&mut self) -> Result<(), String> {
+            crate::backend::record_test_cleanup_trace("console_signal_unregister_started");
             if self.registered {
                 if unsafe { SetConsoleCtrlHandler(Some(console_control), 0) } == 0 {
                     return Err("console cancellation handler restoration failed".into());
                 }
                 self.registered = false;
             }
+            crate::backend::record_test_cleanup_trace("console_signal_unregister_finished");
             Ok(())
         }
     }

@@ -200,6 +200,17 @@ fn run_inner(
         }
         Err(err) => {
             let code = failure_exit(&err);
+            // stdout and stderr can share a stalled Console. Do not start a new
+            // native write for a diagnostic after delivery has already failed.
+            #[cfg(windows)]
+            if stdout.worker_delivery_failed() || stderr.worker_delivery_failed() {
+                let deadline = control.begin_cleanup();
+                return Ok(if finish_outputs(&mut stdout, &mut stderr, deadline) {
+                    code
+                } else {
+                    125
+                });
+            }
             let (target, bytes) = if request.json || request.events {
                 (&mut stdout, format!("{}\n", cli_error_payload(err)))
             } else {
