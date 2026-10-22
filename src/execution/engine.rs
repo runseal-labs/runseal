@@ -639,7 +639,7 @@ fn execute_inner<B: SandboxBackend + Send + Sync + 'static>(
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
         };
         let chunk = match chunk {
-            crate::backend::BackendMessage::Started { time } => {
+            crate::backend::BackendMessage::Started { time, process_id } => {
                 if started_at.is_some() {
                     control.request(super::TerminationCause::ExecutionFailed);
                     owner_error = Some(RunSealError::new(
@@ -651,6 +651,7 @@ fn execute_inner<B: SandboxBackend + Send + Sync + 'static>(
                 let started = execution_event_at(
                     json!({
                         "type": "execution.started",
+                        "process_id": process_id,
                         "execution_id": ids.execution_id,
                         "policy_id": policy_id,
                         "policy_hash": policy_hash,
@@ -680,6 +681,22 @@ fn execute_inner<B: SandboxBackend + Send + Sync + 'static>(
                     owner_error = Some(err);
                 }
 
+                continue;
+            }
+            crate::backend::BackendMessage::SignalDelivered {
+                sequence,
+                process_id,
+            } => {
+                let event = execution_event_at(
+                    json!({"type":"execution.signal_delivered", "execution_id":ids.execution_id,
+                    "signal":"interrupt", "sequence":sequence, "target_process_id":process_id}),
+                    &timestamp_now(),
+                    &event_context,
+                );
+                if let Err(err) = journal.emit(&event, observer) {
+                    control.request(super::TerminationCause::from_started_error_code(&err.code));
+                    owner_error = Some(err);
+                }
                 continue;
             }
             crate::backend::BackendMessage::Output(chunk) => chunk,

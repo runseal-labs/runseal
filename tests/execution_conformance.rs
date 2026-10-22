@@ -450,7 +450,7 @@ fn configured_chunks_refuse_one_extra_byte_and_preserve_binary_output_offsets() 
         }
         let mut params = json!({"command":[python()?,"-u","-c",code],"cwd":tmp.path(),"policy":"danger-full-access","stdin":{"mode":"stream"}});
         if control_enabled {
-            params["io"] = json!({"mode":"pipe","control":{"mode":"pipe","child_fd":3}});
+            params["io"] = json!({"mode":"pipe","control":{"mode":"socket","child_fd":3}});
         }
         client.send(1, "execute", params)?;
         let receipt = client.next(Duration::from_secs(2))?;
@@ -655,7 +655,7 @@ fn tiny_input_writes_preserve_binary_order_eof_and_backpressure_on_native_stream
         );
         let mut params = json!({"command":[python()?,"-u","-c",code],"cwd":tmp.path(),"policy":"danger-full-access"});
         if control {
-            params["io"] = json!({"mode":"pipe","control":{"mode":"pipe","child_fd":3}});
+            params["io"] = json!({"mode":"pipe","control":{"mode":"socket","child_fd":3}});
         } else {
             params["stdin"] = json!({"mode":"stream"});
         }
@@ -1261,7 +1261,7 @@ fn configured_output_cap_counts_native_control_and_terminal_streams() -> Result<
         let io = if pty {
             json!({"mode":"pty","rows":24,"cols":80})
         } else {
-            json!({"mode":"pipe","control":{"mode":"pipe","child_fd":3}})
+            json!({"mode":"pipe","control":{"mode":"socket","child_fd":3}})
         };
         client.send(1,"execute",json!({"command":[python()?,"-u","-c",code],"cwd":tmp.path(),"policy":"danger-full-access","stdin":{"mode":"stream"},"io":io}))?;
         let receipt = client.next(Duration::from_secs(2))?;
@@ -6802,8 +6802,12 @@ fn pty_interrupt_case(policy: &str) -> Result<()> {
     assert_eq!(receipt["result"]["status"], "preparing", "{receipt}");
     let shell = receipt["result"]["execution_id"].clone();
     let mut prompt = Vec::new();
+    let mut started_pid = None;
     loop {
         let message = client.next(Duration::from_secs(15))?;
+        if message["params"]["type"] == "execution.started" {
+            started_pid = message["params"]["process_id"].as_u64();
+        }
         if message["params"]["type"] == "execution.terminal" {
             prompt.extend(
                 STANDARD.decode(
@@ -6859,6 +6863,7 @@ fn pty_interrupt_case(policy: &str) -> Result<()> {
     }
     let fg_pid: u32 = std::fs::read_to_string(tmp.path().join("fg.pid"))?.parse()?;
     let shell_pid: u32 = std::fs::read_to_string(tmp.path().join("shell.pid"))?.parse()?;
+    assert_eq!(started_pid, Some(u64::from(shell_pid)));
     assert!(process_present(fg_pid)? && process_present(shell_pid)?);
     client.send(2,"execute",json!({"command":[python,"-u","-c","import os,pathlib,time; pathlib.Path('peer.pid').write_text(str(os.getpid())); print('PEER_READY',flush=True)\nwhile True: pathlib.Path('peer.beat').write_text(str(time.monotonic())); time.sleep(0.05)"],"cwd":tmp.path(),"policy":policy}))?;
     let mut peer = Value::Null;
@@ -6878,8 +6883,9 @@ fn pty_interrupt_case(policy: &str) -> Result<()> {
         json!({"execution_id":shell,"signal":"interrupt"}),
     )?;
     let mut accepted = false;
+    let mut delivered = false;
     let deadline = Instant::now() + Duration::from_secs(10);
-    while !accepted || process_present(fg_pid)? {
+    while !accepted || !delivered || process_present(fg_pid)? {
         assert!(
             Instant::now() < deadline,
             "foreground survived interrupt: {startup_trace:?}"
@@ -6900,8 +6906,14 @@ fn pty_interrupt_case(policy: &str) -> Result<()> {
                 startup_trace.push(String::from_utf8_lossy(&data).into_owned());
             }
         }
+        if message["params"]["type"] == "execution.signal_delivered" {
+            assert_eq!(message["params"]["sequence"], 1);
+            assert_eq!(message["params"]["target_process_id"], shell_pid);
+            delivered = true;
+        }
         if message["id"] == 4 {
             assert_eq!(message["result"]["accepted"], true, "{message}");
+            assert_eq!(message["result"]["sequence"], 1);
             accepted = true;
         }
         assert!(
@@ -7006,6 +7018,7 @@ sys.exit(7)
         &std::env::vars().collect(),
         false,
         3,
+        false,
     )?;
     let peer = codex_windows_sandbox::LocalExecutionProcess::spawn(
         &[python()?, "-c".into(), "import time;time.sleep(30)".into()],
@@ -7264,7 +7277,7 @@ sys.exit(7)
         .replace("(3,", &format!("({child_fd},"));
         client.send(1, "execute", json!({
             "command":[python_executable,"-I","-S","-u","-c",child_code], "cwd":tmp.path(), "policy":policy,
-            "stdin":{"mode":"stream"}, "io":{"mode":"pipe","control":{"mode":"pipe","child_fd":child_fd}}
+            "stdin":{"mode":"stream"}, "io":{"mode":"pipe","control":{"mode":"socket","child_fd":child_fd}}
         }))?;
         let receipt = client.next(Duration::from_secs(2))?;
         assert_eq!(
@@ -7532,7 +7545,7 @@ fn rpc_control_remains_live_with_blocked_stdin_and_cancels_after_control_backpre
         let tmp = TempDir::new()?;
         let mut client = Client::spawn("service")?;
         let code = "import os,subprocess,sys,time; child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(120)']); print('READY '+str(os.getpid())+' '+str(child.pid),flush=True); data=b''\nwhile len(data)<5: data+=os.read(3,5-len(data))\nos.write(3,data); print('FROZEN',flush=True); time.sleep(120)";
-        client.send(1,"execute",json!({"command":[python()?,"-u","-c",code],"cwd":tmp.path(),"policy":policy,"stdin":{"mode":"stream"},"io":{"mode":"pipe","control":{"mode":"pipe","child_fd":3}}}))?;
+        client.send(1,"execute",json!({"command":[python()?,"-u","-c",code],"cwd":tmp.path(),"policy":policy,"stdin":{"mode":"stream"},"io":{"mode":"pipe","control":{"mode":"socket","child_fd":3}}}))?;
         let receipt = client.next(Duration::from_secs(2))?;
         assert_eq!(receipt["result"]["status"], "preparing", "{receipt}");
         let id = receipt["result"]["execution_id"]
@@ -7660,7 +7673,7 @@ fn rpc_control_output_shares_the_execution_output_limit() -> Result<()> {
         let tmp = TempDir::new()?;
         let mut client = Client::spawn("service")?;
         let code = "import os,time; os.write(1,b'A'*65536); os.write(2,b'B'*65536)\nwhile True: os.write(3,b'C'*65536)";
-        client.send(1,"execute",json!({"command":[python()?,"-u","-c",code],"cwd":tmp.path(),"policy":{"version":"runseal.policy/v1","sandbox_level":policy,"resources":{"max_output_bytes":196608}},"io":{"mode":"pipe","control":{"mode":"pipe","child_fd":3}}}))?;
+        client.send(1,"execute",json!({"command":[python()?,"-u","-c",code],"cwd":tmp.path(),"policy":{"version":"runseal.policy/v1","sandbox_level":policy,"resources":{"max_output_bytes":196608}},"io":{"mode":"pipe","control":{"mode":"socket","child_fd":3}}}))?;
         let receipt = client.next(Duration::from_secs(2))?;
         assert_eq!(receipt["result"]["status"], "preparing", "{receipt}");
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -7752,6 +7765,7 @@ sys.exit(7)
             &std::env::vars().collect(),
             false,
             3,
+            false,
         )?;
         let mut control = cli.control.take().context("caller control")?;
         let mut stdout = cli.stdout.take().context("stdout")?;
@@ -7899,6 +7913,7 @@ fn cli_control_stalled_caller_cleans_owned_range_and_preserves_peer() -> Result<
             },
             false,
             3,
+            false,
         )?;
         let mut unread_control = cli.control.take().context("caller control")?;
         let mut stdout = cli.stdout.take().context("stdout")?;
@@ -8225,3 +8240,61 @@ fn cli_stdio_stalled_or_disconnected_caller_cleans_owned_range_and_preserves_pee
 #[cfg(windows)]
 #[path = "support/storage_oplock.rs"]
 mod storage_oplock;
+
+#[cfg(windows)]
+#[test]
+#[ignore = "requires Node.js for native asynchronous pipe conformance"]
+fn native_byte_pipe_supports_async_child_and_sealed_input() -> Result<()> {
+    use std::io::{Read, Write};
+    let _guard = process_test_gate();
+    let node = String::from_utf8(Command::new("where.exe").arg("node").output()?.stdout)?
+        .lines()
+        .next()
+        .context("Node.js executable")?
+        .to_owned();
+    for child_fd in [3, 7] {
+        let tmp = TempDir::new()?;
+        let code = format!(
+            "const c=new (require('node:net').Socket)({{fd:{child_fd},readable:true,writable:true,allowHalfOpen:true}}); console.log(process.pid); let data=Buffer.alloc(0); c.on('data',b=>{{data=Buffer.concat([data,b]);if(data.length===6)c.end(data,()=>c.destroy())}})"
+        );
+        let mut child = codex_windows_sandbox::LocalExecutionProcess::spawn_with_control(
+            &[node.clone(), "-e".into(), code],
+            tmp.path(),
+            &std::env::vars().collect(),
+            false,
+            child_fd,
+            true,
+        )?;
+        let pid = child.process_id();
+        let mut channel = child.control.take().context("control")?;
+        let payload = [0, 255, 13, 10, 128, 0];
+        channel.write_all(&payload)?;
+        channel.close_input()?;
+        assert_eq!(
+            channel.write(&[1]).expect_err("input sealed").kind(),
+            std::io::ErrorKind::BrokenPipe
+        );
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut received = Vec::new();
+        while received.len() < payload.len() || child.try_wait()?.is_none() {
+            assert!(Instant::now() < deadline, "native pipe completion watchdog");
+            let mut buffer = [0; 64];
+            match channel.read(&mut buffer) {
+                Ok(count) => received.extend_from_slice(&buffer[..count]),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(error) => return Err(error.into()),
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(child.finish(Duration::from_secs(5))?, 0);
+        assert_eq!(received, payload);
+        let mut output = String::new();
+        child
+            .stdout
+            .take()
+            .context("stdout")?
+            .read_to_string(&mut output)?;
+        assert_eq!(output.trim().parse::<u32>()?, pid);
+    }
+    Ok(())
+}

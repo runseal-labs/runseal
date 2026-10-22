@@ -496,6 +496,10 @@ impl LocalTerminal {
 }
 
 impl LocalExecutionProcess {
+    pub fn process_id(&self) -> u32 {
+        unsafe { windows_sys::Win32::System::Threading::GetProcessId(self.process.0) }
+    }
+
     pub fn spawn(
         command: &[String],
         cwd: &Path,
@@ -521,8 +525,19 @@ impl LocalExecutionProcess {
         environment: &HashMap<String, String>,
         stdin_open: bool,
         child_fd: u16,
+        byte_pipe: bool,
     ) -> Result<Self> {
-        Self::spawn_with_io(command, cwd, environment, stdin_open, None, Some(child_fd))
+        Self::spawn_with_io(
+            command,
+            cwd,
+            environment,
+            stdin_open,
+            None,
+            Some(crate::ControlDescriptor {
+                child_fd,
+                byte_pipe,
+            }),
+        )
     }
 
     fn spawn_with_io(
@@ -531,7 +546,7 @@ impl LocalExecutionProcess {
         environment: &HashMap<String, String>,
         stdin_open: bool,
         terminal_size: Option<(u16, u16)>,
-        control_fd: Option<u16>,
+        control_fd: Option<crate::ControlDescriptor>,
     ) -> Result<Self> {
         if terminal_size
             .is_some_and(|(rows, cols)| !(1..=1000).contains(&rows) || !(1..=1000).contains(&cols))
@@ -776,7 +791,7 @@ pub fn spawn_process_with_pipes_and_control(
     logs_base_dir: Option<&Path>,
     start_suspended: bool,
     security_capabilities: Option<*mut SECURITY_CAPABILITIES>,
-    control_fd: Option<u16>,
+    control_fd: Option<crate::ControlDescriptor>,
 ) -> Result<PipeSpawnHandles> {
     spawn_process_with_pipes_for_identity(
         ProcessIdentity::PrimaryToken(h_token),
@@ -807,13 +822,13 @@ fn spawn_process_with_pipes_for_identity(
     logs_base_dir: Option<&Path>,
     start_suspended: bool,
     security_capabilities: Option<*mut SECURITY_CAPABILITIES>,
-    control_fd: Option<u16>,
+    control_fd: Option<crate::ControlDescriptor>,
 ) -> Result<PipeSpawnHandles> {
-    if control_fd.is_some_and(|fd| !(3..=255).contains(&fd)) {
+    if control_fd.is_some_and(|fd| !(3..=255).contains(&fd.child_fd)) {
         anyhow::bail!("invalid control descriptor");
     }
     let control = control_fd
-        .map(|_| crate::DuplexControl::pair())
+        .map(|fd| crate::DuplexControl::pair(fd.byte_pipe))
         .transpose()?;
 
     let mut in_r: HANDLE = 0;
@@ -862,7 +877,7 @@ fn spawn_process_with_pipes_for_identity(
             security_capabilities,
             control
                 .as_ref()
-                .map(|(_, child)| (child.handle(), control_fd.unwrap())),
+                .map(|(_, child)| (child.handle(), control_fd.unwrap().child_fd)),
         )
     };
     let created = match spawn_result {

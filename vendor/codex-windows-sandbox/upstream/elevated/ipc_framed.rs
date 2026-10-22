@@ -26,7 +26,7 @@ use std::path::PathBuf;
 const MAX_FRAME_LEN: usize = 8 * 1024 * 1024;
 
 /// Protocol version shared by the parent process and elevated command runner.
-pub const IPC_PROTOCOL_VERSION: u8 = 13;
+pub const IPC_PROTOCOL_VERSION: u8 = 14;
 
 /// Validated deployment wait budget; distinct from the command execution timeout.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -71,10 +71,15 @@ pub struct FramedMessage {
     pub message: Message,
 }
 
-/// IPC message variants exchanged between parent and runner.
-///
-/// `SpawnRequest`, `Stdin`, `CloseStdin`, `Resize`, and `Terminate` are parent->runner commands.
-/// `SpawnReady`, `Output`, `Exit`, and `Error` are runner->parent events/results.
+/// Native child descriptor and transport selected by the lifecycle owner.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct ControlDescriptor {
+    pub child_fd: u16,
+    pub byte_pipe: bool,
+}
+
+/// IPC messages between parent and runner. `InterruptWritten` confirms a native
+/// terminal input write; it does not acknowledge ordinary stdin credit.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Message {
@@ -93,6 +98,7 @@ pub enum Message {
     Error { payload: ErrorPayload },
     Terminate { payload: CleanupDeadlinePayload },
     Interrupt { payload: EmptyPayload },
+    InterruptWritten { payload: EmptyPayload },
 }
 
 /// Spawn parameters sent from parent to runner.
@@ -112,7 +118,7 @@ pub struct SpawnRequest {
     pub terminal_size: Option<ResizePayload>,
     #[serde(default)]
     pub stdin_open: bool,
-    pub control_fd: Option<u16>,
+    pub control_fd: Option<ControlDescriptor>,
     #[serde(default)]
     pub use_private_desktop: bool,
 }

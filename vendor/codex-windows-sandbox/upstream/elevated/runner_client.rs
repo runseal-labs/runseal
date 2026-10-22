@@ -103,6 +103,7 @@ fn runner_launch_cwd<'a>(runner_exe: &'a Path, fallback_cwd: &'a Path) -> &'a Pa
 }
 
 pub(crate) struct RunnerTransport {
+    pub(crate) process_id: u32,
     pipe_write: File,
     pipe_read: File,
 }
@@ -118,7 +119,10 @@ impl RunnerTransport {
                 FramePoll::Closed => anyhow::bail!("runner closed before startup confirmation"),
                 FramePoll::Message(message) => {
                     return match message.message {
-                        Message::SpawnReady { .. } => Ok(()),
+                        Message::SpawnReady { payload } if payload.process_id != 0 => {
+                            self.process_id = payload.process_id;
+                            Ok(())
+                        }
                         Message::Exit { payload } => {
                             Err(anyhow::anyhow!(crate::SandboxCaptureCleanupError {
                                 exit_code: Some(payload.exit_code),
@@ -649,6 +653,7 @@ pub(crate) fn spawn_runner_transport(
             spawn_request_sent.clone(),
         )?;
         let mut transport = RunnerTransport {
+            process_id: 0,
             pipe_write,
             pipe_read,
         };
@@ -926,6 +931,7 @@ mod tests {
             owner,
             &mut budget,
             startup.map(|_| RunnerTransport {
+                process_id: 0,
                 pipe_write: tempfile::tempfile().expect("fixture write"),
                 pipe_read: tempfile::tempfile().expect("fixture read"),
             }),
@@ -987,6 +993,7 @@ mod tests {
                 let (tx, rx) = mpsc::channel();
                 let worker = thread::spawn(move || {
                     let mut transport = RunnerTransport {
+                        process_id: 0,
                         pipe_read,
                         pipe_write,
                     };

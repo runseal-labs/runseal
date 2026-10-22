@@ -146,6 +146,8 @@ mod allow;
 mod appcontainer;
 #[cfg(target_os = "windows")]
 mod audit;
+#[cfg(windows)]
+mod byte_pipe;
 #[cfg(target_os = "windows")]
 mod cap;
 #[cfg(target_os = "windows")]
@@ -324,6 +326,8 @@ pub use ipc_framed::CleanupDeadlinePayload;
 pub use ipc_framed::CleanupFailureStage;
 #[cfg(target_os = "windows")]
 pub use ipc_framed::CleanupStartedPayload;
+#[cfg(windows)]
+pub use ipc_framed::ControlDescriptor;
 #[cfg(target_os = "windows")]
 pub use ipc_framed::ErrorPayload;
 #[cfg(target_os = "windows")]

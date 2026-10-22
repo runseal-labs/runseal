@@ -443,7 +443,10 @@ fn restore_appcontainer_profile_environment(
 }
 
 fn spawn_ipc_process(req: &SpawnRequest) -> Result<IpcSpawnedProcess> {
-    if req.control_fd.is_some_and(|fd| !(3..=255).contains(&fd)) {
+    if req
+        .control_fd
+        .is_some_and(|fd| !(3..=255).contains(&fd.child_fd))
+    {
         anyhow::bail!("invalid control descriptor");
     }
     if req.tty && req.control_fd.is_some() {
@@ -938,6 +941,10 @@ fn spawn_input_loop(
     let (input_sender, input_receiver) =
         std::sync::mpsc::sync_channel::<Option<(Vec<u8>, bool)>>(1);
     let input_done = done.clone();
+    let input_process = process_handle.clone();
+    let input_terminated = terminated_by_request.clone();
+    let input_clock = cleanup_clock.clone();
+    let input_job = job.clone();
     let input_worker = std::thread::spawn(move || {
         if let Some(handle) = stdin_handle {
             while !input_done.load(Ordering::Acquire) {
@@ -960,6 +967,12 @@ fn spawn_input_loop(
                         )
                     };
                     if ok == 0 || written == 0 {
+                        request_termination(
+                            &input_terminated,
+                            &input_process,
+                            &input_clock,
+                            Some(&input_job),
+                        );
                         unsafe {
                             CloseHandle(handle);
                         }
@@ -967,15 +980,18 @@ fn spawn_input_loop(
                     }
                     offset += written as usize;
                 }
-                if !acknowledge {
-                    continue;
-                }
                 let acknowledgement = FramedMessage {
                     version: IPC_PROTOCOL_VERSION,
-                    message: Message::StdinAcknowledged {
-                        payload: codex_windows_sandbox::StdinAcknowledgedPayload {
-                            bytes: bytes.len(),
-                        },
+                    message: if !acknowledge {
+                        Message::InterruptWritten {
+                            payload: Default::default(),
+                        }
+                    } else {
+                        Message::StdinAcknowledged {
+                            payload: codex_windows_sandbox::StdinAcknowledgedPayload {
+                                bytes: bytes.len(),
+                            },
+                        }
                     },
                 };
                 if let Ok(mut output) = output.lock() {

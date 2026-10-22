@@ -27,11 +27,12 @@ pub struct ElevatedSandboxProfileCaptureRequest<'a> {
     pub terminal_size: Option<crate::ResizePayload>,
     pub input_source: Option<SandboxInputSource>,
     pub input_acknowledged: Option<Box<dyn FnMut(usize) -> bool + Send>>,
-    pub control_fd: Option<u16>,
+    pub control_fd: Option<crate::ControlDescriptor>,
     pub control_source: Option<SandboxInputSource>,
     pub control_acknowledged: Option<Box<dyn FnMut(usize) -> bool + Send>>,
     pub output_observer: Option<SandboxOutputObserver<'a>>,
-    pub started_observer: Option<Box<dyn FnMut() + Send + 'a>>,
+    pub interrupt_observer: Option<Box<dyn FnMut() + Send + 'a>>,
+    pub started_observer: Option<Box<dyn FnMut(u32) + Send + 'a>>,
     pub cancellation: Option<crate::WindowsSandboxCancellationToken>,
     pub use_private_desktop: bool,
     pub proxy_enforced: bool,
@@ -452,6 +453,7 @@ mod windows_impl {
             mut control_acknowledged,
             mut output_observer,
             mut started_observer,
+            mut interrupt_observer,
             cancellation,
             use_private_desktop,
             proxy_enforced,
@@ -477,7 +479,7 @@ mod windows_impl {
             )?;
         let control_open = control_source.is_some();
         if control_open != control_fd.is_some()
-            || control_fd.is_some_and(|fd| !(3..=255).contains(&fd))
+            || control_fd.is_some_and(|fd| !(3..=255).contains(&fd.child_fd))
         {
             anyhow::bail!("invalid control descriptor");
         }
@@ -583,7 +585,7 @@ mod windows_impl {
             )?;
             // The transport returns only after consuming the runner's SpawnReady frame.
             if let Some(observer) = &mut started_observer {
-                observer();
+                observer(transport.process_id);
             }
             let (pipe_write, mut pipe_read) = transport.into_files();
             let acknowledged_bytes = Arc::new(AtomicUsize::new(0));
@@ -647,6 +649,11 @@ mod windows_impl {
                         ) {
                             Ok(facts) => cleanup_facts = Some(facts),
                             Err(error) => break Err(error),
+                        }
+                    }
+                    Message::InterruptWritten { .. } => {
+                        if let Some(observer) = &mut interrupt_observer {
+                            observer();
                         }
                     }
                     Message::StdinAcknowledged { payload } => {

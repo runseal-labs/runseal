@@ -4690,7 +4690,7 @@ fn portable_unsupported_interactive_modes_fail_before_execution_start() -> Resul
         ("pty", json!({"mode":"pty","rows":24,"cols":80})),
         (
             "control_channel",
-            json!({"mode":"pipe","control":{"mode":"pipe","child_fd":3}}),
+            json!({"mode":"pipe","control":{"mode":"socket","child_fd":3}}),
         ),
     ] {
         assert_eq!(reported[name], "unsupported", "{name}");

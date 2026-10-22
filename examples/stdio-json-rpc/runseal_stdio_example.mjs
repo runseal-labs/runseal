@@ -170,7 +170,7 @@ async function runControlExample(client, args, capabilities) {
   const receipt = await client.call('execute', {
     command: [process.execPath, '-e', child],
     cwd: args.cwd, policy: args.policy, network: { mode: args.network },
-    stdin: { mode: 'stream' }, io: { mode: 'pipe', control: { mode: 'pipe', child_fd: 3 } },
+    stdin: { mode: 'stream' }, io: { mode: 'pipe', control: { mode: 'socket', child_fd: 3 } },
   });
   if (receipt.status !== 'preparing') throw new Error('Control execution did not return an admission receipt');
   const id = receipt.execution_id;

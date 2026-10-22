@@ -86,6 +86,7 @@ pub(super) fn spawn_local_command_with_output(
             &environment,
             !matches!(&stdin, ExecutionStdin::Empty),
             child_fd,
+            output.as_ref().is_some_and(|sink| sink.io.byte_pipe()),
         )
     } else {
         codex_windows_sandbox::LocalExecutionProcess::spawn_with_terminal(
@@ -107,7 +108,7 @@ pub(super) fn spawn_local_command_with_output(
         }
     })?;
     if let Some(sink) = &output {
-        let _ = sink.started();
+        let _ = sink.started(process.process_id());
     }
     let range_empty = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let stop_readers = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -265,7 +266,10 @@ pub(super) fn spawn_local_command_with_output(
                                         .map_err(|_| io::Error::other("terminal resize failed"))?
                                 }
                                 crate::execution::TerminalCommand::Interrupt => {
-                                    pipe.write_all(&[3])?
+                                    pipe.write_all(&[3])?;
+                                    if let Some(sink) = &output {
+                                        sink.signal_delivered()?;
+                                    }
                                 }
                             }
                             continue;
@@ -463,7 +467,7 @@ pub(super) fn spawn_local_command_with_output(
 
     let mut child = process.spawn()?;
     if let Some(sink) = &output {
-        let _ = sink.started();
+        let _ = sink.started(child.id());
     }
     let stdout_reader = child
         .stdout

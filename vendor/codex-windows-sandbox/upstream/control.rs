@@ -73,7 +73,7 @@ fn socket_error() -> io::Error {
 /// An owned local byte stream. The parent uses nonblocking socket operations;
 /// the child endpoint supports synchronous CRT descriptor reads and writes.
 #[derive(Clone)]
-pub struct DuplexControl {
+pub struct SocketControl {
     socket: Arc<Socket>,
     output_guard: Arc<Socket>,
     output_finish: Arc<Mutex<OutputCompletion>>,
@@ -91,17 +91,17 @@ enum OutputFinish {
     Finished,
     Failed,
 }
-pub(crate) struct ChildControl {
+pub(crate) struct SocketChildControl {
     socket: Arc<Socket>,
 }
-impl ChildControl {
+impl SocketChildControl {
     pub(crate) fn handle(&self) -> HANDLE {
         self.socket.raw() as HANDLE
     }
 }
 
-impl DuplexControl {
-    pub(crate) fn pair() -> Result<(Self, ChildControl)> {
+impl SocketControl {
+    pub(crate) fn pair() -> Result<(Self, SocketChildControl)> {
         let winsock = Winsock::start()?;
         let base = std::env::temp_dir().canonicalize()?;
         let directory = tempfile::Builder::new().prefix("rs").tempdir_in(&base)?;
@@ -205,7 +205,7 @@ impl DuplexControl {
                     output_guard: child.clone(),
                     output_finish: Arc::new(Mutex::new(OutputCompletion::default())),
                 },
-                ChildControl { socket: child },
+                SocketChildControl { socket: child },
             ))
         })();
         directory.close().map_err(|_| crate::SandboxCleanupError)?;
@@ -315,7 +315,7 @@ fn shutdown_send(socket: &Socket) -> io::Result<()> {
     Ok(())
 }
 
-impl io::Read for DuplexControl {
+impl io::Read for SocketControl {
     fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
         if bytes.is_empty() {
             return Ok(0);
@@ -335,7 +335,7 @@ impl io::Read for DuplexControl {
         }
     }
 }
-impl io::Write for DuplexControl {
+impl io::Write for SocketControl {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         if self.socket.write_closed.load(Ordering::Acquire) {
             return Err(io::ErrorKind::BrokenPipe.into());
@@ -541,7 +541,7 @@ mod tests {
 
     #[test]
     fn output_close_preserves_bytes_and_independent_input_half_close() -> Result<()> {
-        let (mut control, child) = DuplexControl::pair()?;
+        let (mut control, child) = SocketControl::pair()?;
         let bytes = b"control output";
         assert_eq!(
             unsafe { send(child.socket.raw(), bytes.as_ptr(), bytes.len() as _, 0) },
@@ -615,7 +615,7 @@ mod tests {
     #[test]
     fn control_output_close_requires_native_exit_and_retains_owner_at_original_deadline()
     -> Result<()> {
-        let (mut control, child) = DuplexControl::pair()?;
+        let (mut control, child) = SocketControl::pair()?;
         let (entered, ready) = std::sync::mpsc::channel();
         let gate = Arc::new(NativeExitGate {
             entered,
@@ -729,6 +729,82 @@ mod tests {
             "unconfirmed closer must remain owned"
         );
         assert!(native_ended && caller_ended);
+        Ok(())
+    }
+}
+
+/// The chosen child transport is explicit: byte pipes integrate with native
+/// asynchronous pipe APIs; sockets provide independent write-side shutdown.
+#[derive(Clone)]
+pub struct DuplexControl {
+    inner: ControlTransport,
+}
+#[derive(Clone)]
+enum ControlTransport {
+    Socket(SocketControl),
+    Pipe(crate::byte_pipe::BytePipe),
+}
+pub(crate) enum ChildControl {
+    Socket(SocketChildControl),
+    Pipe(std::fs::File),
+}
+impl ChildControl {
+    pub(crate) fn handle(&self) -> HANDLE {
+        match self {
+            Self::Socket(child) => child.handle(),
+            Self::Pipe(file) => file.as_raw_handle() as HANDLE,
+        }
+    }
+}
+impl DuplexControl {
+    pub(crate) fn pair(byte_pipe: bool) -> Result<(Self, ChildControl)> {
+        if byte_pipe {
+            let (pipe, child) = crate::byte_pipe::BytePipe::pair()?;
+            Ok((
+                Self {
+                    inner: ControlTransport::Pipe(pipe),
+                },
+                ChildControl::Pipe(child),
+            ))
+        } else {
+            let (socket, child) = SocketControl::pair()?;
+            Ok((
+                Self {
+                    inner: ControlTransport::Socket(socket),
+                },
+                ChildControl::Socket(child),
+            ))
+        }
+    }
+    pub fn close_input(&self) -> io::Result<()> {
+        match &self.inner {
+            ControlTransport::Socket(s) => s.close_input(),
+            ControlTransport::Pipe(p) => p.close_input(),
+        }
+    }
+    pub fn finish_output(&self, timeout: std::time::Duration) -> io::Result<()> {
+        match &self.inner {
+            ControlTransport::Socket(s) => s.finish_output(timeout),
+            ControlTransport::Pipe(p) => p.finish_output(),
+        }
+    }
+}
+impl io::Read for DuplexControl {
+    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        match &mut self.inner {
+            ControlTransport::Socket(s) => io::Read::read(s, bytes),
+            ControlTransport::Pipe(p) => io::Read::read(p, bytes),
+        }
+    }
+}
+impl io::Write for DuplexControl {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        match &mut self.inner {
+            ControlTransport::Socket(s) => io::Write::write(s, bytes),
+            ControlTransport::Pipe(p) => io::Write::write(p, bytes),
+        }
+    }
+    fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }
 }

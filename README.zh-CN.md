@@ -166,4 +166,4 @@ python3 scripts/portable-probe-smoke.py
 - [Escape 定义与 adversarial conformance（RFC-0015）](https://github.com/runseal-labs/rfcs/blob/main/rfcs/0015-escape-definition-and-adversarial-conformance.md)
 - [Adversarial conformance harness（RFC-0016）](https://github.com/runseal-labs/rfcs/blob/main/rfcs/0016-adversarial-conformance-harness-and-case-format.md)
 
-RPC 管道控制通道接受显式指定的子进程描述符 3 至 255；CLI 使用描述符 3。参见 [RFC-0022](https://github.com/runseal-labs/rfcs/blob/main/rfcs/0022-control-descriptor-selection.md)。终端 interrupt 和 resize 回执仅确认接收，不证明原生送达或进程组身份。
+RPC 管道控制通道接受显式指定的子进程描述符 3 至 255；CLI 使用描述符 3。参见 [RFC-0022](https://github.com/runseal-labs/rfcs/blob/main/rfcs/0022-control-descriptor-selection.md)。控制通道 `pipe` 模式提供原生异步字节管道（关闭输入只封闭后续写入，不向对端发送 EOF）；`socket` 模式提供 CRT 字节 I/O 和独立半关闭。启动事件报告真实子进程 PID；interrupt 接收回执包含序号，`execution.signal_delivered` 确认 Ctrl-C 已写入对应 Windows 控制台。resize 回执仅确认接收。

@@ -491,7 +491,14 @@ pub(super) fn execute_windows_sandbox_plan(
                     }),
                     input_source,
                     input_acknowledged,
-                    control_fd: output.as_ref().and_then(|sink| sink.io.control_fd()),
+                    control_fd: output.as_ref().and_then(|sink| {
+                        sink.io.control_fd().map(|child_fd| {
+                            codex_windows_sandbox::ControlDescriptor {
+                                child_fd,
+                                byte_pipe: sink.io.byte_pipe(),
+                            }
+                        })
+                    }),
                     control_source: output
                         .as_ref()
                         .and_then(|sink| {
@@ -566,10 +573,15 @@ pub(super) fn execute_windows_sandbox_plan(
                             })
                             .with_cleanup_budget(cleanup_budget),
                     ),
-                    started_observer: output.clone().map(|sink| {
+                    interrupt_observer: output.clone().map(|sink| {
                         Box::new(move || {
-                            let _ = sink.started();
+                            let _ = sink.signal_delivered();
                         }) as Box<dyn FnMut() + Send>
+                    }),
+                    started_observer: output.clone().map(|sink| {
+                        Box::new(move |pid| {
+                            let _ = sink.started(pid);
+                        }) as Box<dyn FnMut(u32) + Send>
                     }),
                     output_observer: output.clone().map(|sink| {
                         Box::new(move |stream, bytes: &[u8]| {

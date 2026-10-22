@@ -688,9 +688,9 @@ impl Service {
             )];
         }
         vec![match active.control.interrupt() {
-            Ok(()) => rpc::result(
+            Ok(sequence) => rpc::result(
                 id,
-                json!({"execution_id":execution_id,"accepted":true,"signal":"interrupt"}),
+                json!({"execution_id":execution_id,"accepted":true,"signal":"interrupt","sequence":sequence}),
             ),
             Err(error) => rpc::error(
                 id,

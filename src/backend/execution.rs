@@ -17,6 +17,7 @@ pub enum ExecutionIo {
     Pipe,
     PipeControl {
         child_fd: u16,
+        byte_pipe: bool,
     },
     // Parsed on every platform so unsupported requests can be rejected before
     // execution; only the Windows reference backend consumes the dimensions.
@@ -32,9 +33,18 @@ impl ExecutionIo {
     }
     pub fn control_fd(self) -> Option<u16> {
         match self {
-            Self::PipeControl { child_fd } => Some(child_fd),
+            Self::PipeControl { child_fd, .. } => Some(child_fd),
             _ => None,
         }
+    }
+    pub fn byte_pipe(self) -> bool {
+        matches!(
+            self,
+            Self::PipeControl {
+                byte_pipe: true,
+                ..
+            }
+        )
     }
     pub fn is_pty(self) -> bool {
         matches!(self, Self::Pty { .. })
@@ -49,7 +59,8 @@ pub struct OutputChunk {
 
 #[derive(Debug)]
 pub enum BackendMessage {
-    Started { time: String },
+    Started { time: String, process_id: u32 },
+    SignalDelivered { sequence: u64, process_id: u32 },
     Output(OutputChunk),
 }
 
@@ -82,10 +93,32 @@ impl ExecutionOutputSink {
         Ok(())
     }
 
-    pub fn started(&self) -> io::Result<()> {
+    pub fn started(&self, process_id: u32) -> io::Result<()> {
+        let _ = self.control.process_id.set(process_id);
         self.deliver(
             BackendMessage::Started {
                 time: timestamp_now(),
+                process_id,
+            },
+            false,
+        )
+    }
+
+    pub fn signal_delivered(&self) -> io::Result<()> {
+        let process_id = *self
+            .control
+            .process_id
+            .get()
+            .ok_or_else(|| io::Error::other("missing terminal identity"))?;
+        let sequence = self
+            .control
+            .delivered_sequence
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
+            + 1;
+        self.deliver(
+            BackendMessage::SignalDelivered {
+                sequence,
+                process_id,
             },
             false,
         )

@@ -1628,7 +1628,18 @@ fn exec_events_stream_uses_execution_vocabulary() -> Result<()> {
                 .starts_with("execution."))
             .all(|event| event.get("execution_id").is_some())
     );
-    assert!(events.iter().all(|event| event.get("process_id").is_none()));
+    assert!(
+        events
+            .iter()
+            .any(|event| event["type"] == "execution.started"
+                && event["process_id"].as_u64().is_some_and(|pid| pid > 0))
+    );
+    assert!(
+        events
+            .iter()
+            .filter(|event| event["type"] != "execution.started")
+            .all(|event| event.get("process_id").is_none())
+    );
     Ok(())
 }
 

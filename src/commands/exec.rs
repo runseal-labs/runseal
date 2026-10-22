@@ -127,7 +127,10 @@ fn run_inner(
     };
     let execution_io = terminal.as_ref().map_or(
         if request.control_fd3 {
-            crate::backend::ExecutionIo::PipeControl { child_fd: 3 }
+            crate::backend::ExecutionIo::PipeControl {
+                child_fd: 3,
+                byte_pipe: false,
+            }
         } else {
             crate::backend::ExecutionIo::Pipe
         },

@@ -1,11 +1,14 @@
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
 /// A single cancellation request shared by the lifecycle owner and backend.
 #[derive(Clone, Default)]
 pub(crate) struct ExecutionControl {
+    pub(crate) process_id: Arc<std::sync::OnceLock<u32>>,
+    interrupt_sequence: Arc<AtomicU64>,
+    pub(crate) delivered_sequence: Arc<AtomicU64>,
     accepted_at: Arc<std::sync::OnceLock<std::time::Instant>>,
     cancelled: Arc<AtomicBool>,
     terminal_commands: Arc<Mutex<std::collections::VecDeque<TerminalCommand>>>,
@@ -90,8 +93,9 @@ impl ExecutionControl {
     pub(crate) fn resize(&self, rows: u16, cols: u16) -> Result<(), crate::backend::InputError> {
         self.queue_terminal(TerminalCommand::Resize { rows, cols })
     }
-    pub(crate) fn interrupt(&self) -> Result<(), crate::backend::InputError> {
-        self.queue_terminal(TerminalCommand::Interrupt)
+    pub(crate) fn interrupt(&self) -> Result<u64, crate::backend::InputError> {
+        self.queue_terminal(TerminalCommand::Interrupt)?;
+        Ok(self.interrupt_sequence.fetch_add(1, Ordering::AcqRel) + 1)
     }
     fn queue_terminal(&self, command: TerminalCommand) -> Result<(), crate::backend::InputError> {
         let mut queue = self

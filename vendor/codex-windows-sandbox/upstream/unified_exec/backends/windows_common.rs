@@ -167,6 +167,7 @@ pub(crate) fn start_runner_stdout_reader(
                 | Message::CloseControl { .. }
                 | Message::ControlAcknowledged { .. }
                 | Message::Resize { .. }
+                | Message::InterruptWritten { .. }
                 | Message::Interrupt { .. }
                 | Message::SpawnRequest { .. }
                 | Message::Terminate { .. } => {}

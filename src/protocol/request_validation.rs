@@ -141,10 +141,13 @@ fn io_from_params(
                             "control child_fd must be from 3 to 255",
                         )
                     })?;
-                if control.get("mode").and_then(Value::as_str) != Some("pipe") {
+                if !matches!(
+                    control.get("mode").and_then(Value::as_str),
+                    Some("pipe" | "socket")
+                ) {
                     return Err(RunSealError::new(
                         "INVALID_REQUEST",
-                        "control requires pipe mode and child_fd from 3 to 255",
+                        "control requires pipe or socket mode and child_fd from 3 to 255",
                     ));
                 }
                 #[cfg(not(windows))]
@@ -156,6 +159,7 @@ fn io_from_params(
                 #[cfg(windows)]
                 return Ok(crate::backend::ExecutionIo::PipeControl {
                     child_fd: _child_fd as u16,
+                    byte_pipe: control.get("mode").and_then(Value::as_str) == Some("pipe"),
                 });
             }
             Ok(crate::backend::ExecutionIo::Pipe)
@@ -743,7 +747,7 @@ mod descriptor_tests {
             json!(3.5),
             json!("7"),
         ] {
-            let params = json!({"io":{"mode":"pipe","control":{"mode":"pipe","child_fd":fd}}});
+            let params = json!({"io":{"mode":"pipe","control":{"mode":"socket","child_fd":fd}}});
             assert!(
                 io_from_params(
                     match params.as_object() {
@@ -760,8 +764,11 @@ mod descriptor_tests {
     #[cfg(windows)]
     #[test]
     fn control_descriptor_selection_is_preserved() {
-        for fd in [3, 7, 255] {
-            let params = json!({"io":{"mode":"pipe","control":{"mode":"pipe","child_fd":fd}}});
+        for (fd, mode) in [3, 7, 255]
+            .into_iter()
+            .flat_map(|fd| ["pipe", "socket"].map(|mode| (fd, mode)))
+        {
+            let params = json!({"io":{"mode":"pipe","control":{"mode":mode,"child_fd":fd}}});
             let selected = match io_from_params(
                 match params.as_object() {
                     Some(value) => value,
@@ -773,6 +780,7 @@ mod descriptor_tests {
                 Err(error) => panic!("{error:?}"),
             };
             assert_eq!(selected.control_fd(), Some(fd));
+            assert_eq!(selected.byte_pipe(), mode == "pipe");
         }
     }
 }
