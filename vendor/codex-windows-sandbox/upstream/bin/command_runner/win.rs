@@ -443,7 +443,10 @@ fn restore_appcontainer_profile_environment(
 }
 
 fn spawn_ipc_process(req: &SpawnRequest) -> Result<IpcSpawnedProcess> {
-    if req.tty && req.control_open {
+    if req.control_fd.is_some_and(|fd| !(3..=255).contains(&fd)) {
+        anyhow::bail!("invalid control descriptor");
+    }
+    if req.tty && req.control_fd.is_some() {
         anyhow::bail!("control requires pipe mode");
     }
     let log_dir = req.codex_home.clone();
@@ -582,7 +585,7 @@ fn spawn_ipc_process(req: &SpawnRequest) -> Result<IpcSpawnedProcess> {
             Some(log_dir.as_path()),
             /*start_suspended*/ true,
             security_capabilities,
-            req.control_open,
+            req.control_fd,
         )?;
         let pi = spawned_pipes.process;
         let stdout_handle = spawned_pipes.stdout_read;
@@ -1727,7 +1730,7 @@ mod cleanup_tests {
                     tty: false,
                     terminal_size: None,
                     stdin_open: true,
-                    control_open: false,
+                    control_fd: None,
                     use_private_desktop: false,
                 }),
             },

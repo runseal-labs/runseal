@@ -15,7 +15,9 @@ pub enum OutputStream {
 pub enum ExecutionIo {
     #[default]
     Pipe,
-    PipeControl,
+    PipeControl {
+        child_fd: u16,
+    },
     // Parsed on every platform so unsupported requests can be rejected before
     // execution; only the Windows reference backend consumes the dimensions.
     #[cfg_attr(not(windows), allow(dead_code))]
@@ -26,7 +28,13 @@ pub enum ExecutionIo {
 }
 impl ExecutionIo {
     pub fn has_control(self) -> bool {
-        matches!(self, Self::PipeControl)
+        self.control_fd().is_some()
+    }
+    pub fn control_fd(self) -> Option<u16> {
+        match self {
+            Self::PipeControl { child_fd } => Some(child_fd),
+            _ => None,
+        }
     }
     pub fn is_pty(self) -> bool {
         matches!(self, Self::Pty { .. })

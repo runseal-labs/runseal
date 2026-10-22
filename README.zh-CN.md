@@ -165,3 +165,5 @@ python3 scripts/portable-probe-smoke.py
 - [稳定执行协议（RFC-0006）](https://github.com/runseal-labs/rfcs/blob/main/rfcs/0006-stable-execution-protocol.md)
 - [Escape 定义与 adversarial conformance（RFC-0015）](https://github.com/runseal-labs/rfcs/blob/main/rfcs/0015-escape-definition-and-adversarial-conformance.md)
 - [Adversarial conformance harness（RFC-0016）](https://github.com/runseal-labs/rfcs/blob/main/rfcs/0016-adversarial-conformance-harness-and-case-format.md)
+
+RPC 管道控制通道接受显式指定的子进程描述符 3 至 255；CLI 使用描述符 3。参见 [RFC-0022](https://github.com/runseal-labs/rfcs/blob/main/rfcs/0022-control-descriptor-selection.md)。终端 interrupt 和 resize 回执仅确认接收，不证明原生送达或进程组身份。

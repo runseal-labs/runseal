@@ -95,7 +95,7 @@ pub(crate) async fn spawn_windows_sandbox_session_elevated_for_permission_profil
         cleanup_budget: crate::CleanupBudget::default(),
         tty,
         stdin_open,
-        control_open: false,
+        control_fd: None,
         use_private_desktop,
     };
     let codex_home = codex_home.to_path_buf();

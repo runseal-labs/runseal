@@ -205,7 +205,7 @@ unsafe fn create_process_for_identity(
     restricting_sids: &[*mut c_void],
     start_suspended: bool,
     security_capabilities: Option<*mut SECURITY_CAPABILITIES>,
-    control_handle: Option<HANDLE>,
+    control_handle: Option<(HANDLE, u16)>,
 ) -> Result<CreatedProcess> {
     let cmdline_str = argv_to_command_line(argv);
     let mut cmdline: Vec<u16> = to_wide(&cmdline_str);
@@ -226,25 +226,30 @@ unsafe fn create_process_for_identity(
             si.StartupInfo.hStdInput = stdin_h;
             si.StartupInfo.hStdOutput = stdout_h;
             si.StartupInfo.hStdError = stderr_h;
-            // The CRT startup table contains only the fixed logical descriptor 3.
+            // The CRT startup table contains only the requested logical descriptor.
             // Standard descriptors are initialized from the explicit stdio handles.
             let mut descriptor_table = Vec::new();
-            if let Some(handle) = control_handle {
-                descriptor_table.extend_from_slice(&4u32.to_ne_bytes());
-                descriptor_table.extend_from_slice(&[0, 0, 0, 0x09]);
-                for descriptor in [
-                    INVALID_HANDLE_VALUE,
-                    INVALID_HANDLE_VALUE,
-                    INVALID_HANDLE_VALUE,
-                    handle,
-                ] {
+            if let Some((handle, child_fd)) = control_handle {
+                if !(3..=255).contains(&child_fd) {
+                    anyhow::bail!("invalid control descriptor");
+                }
+                let count = u32::from(child_fd) + 1;
+                descriptor_table.extend_from_slice(&count.to_ne_bytes());
+                descriptor_table.extend(std::iter::repeat_n(0, child_fd as usize));
+                descriptor_table.push(0x09);
+                for index in 0..count {
+                    let descriptor = if index == u32::from(child_fd) {
+                        handle
+                    } else {
+                        INVALID_HANDLE_VALUE
+                    };
                     descriptor_table.extend_from_slice(&descriptor.to_ne_bytes());
                 }
                 si.StartupInfo.cbReserved2 = descriptor_table.len() as u16;
                 si.StartupInfo.lpReserved2 = descriptor_table.as_mut_ptr();
             }
             let mut inherited_handles = vec![stdin_h, stdout_h];
-            if let Some(handle) = control_handle {
+            if let Some((handle, _)) = control_handle {
                 inherited_handles.push(handle);
             }
             if !inherited_handles.contains(&stderr_h) {
@@ -305,7 +310,7 @@ unsafe fn create_process_for_identity(
                 )
             };
             let creation_error = (ok == 0).then(|| GetLastError() as i32);
-            if let Some(handle) = control_handle
+            if let Some((handle, _)) = control_handle
                 && SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) == 0
                 && ok != 0
             {
@@ -507,7 +512,7 @@ impl LocalExecutionProcess {
         stdin_open: bool,
         terminal_size: Option<(u16, u16)>,
     ) -> Result<Self> {
-        Self::spawn_with_io(command, cwd, environment, stdin_open, terminal_size, false)
+        Self::spawn_with_io(command, cwd, environment, stdin_open, terminal_size, None)
     }
 
     pub fn spawn_with_control(
@@ -515,8 +520,9 @@ impl LocalExecutionProcess {
         cwd: &Path,
         environment: &HashMap<String, String>,
         stdin_open: bool,
+        child_fd: u16,
     ) -> Result<Self> {
-        Self::spawn_with_io(command, cwd, environment, stdin_open, None, true)
+        Self::spawn_with_io(command, cwd, environment, stdin_open, None, Some(child_fd))
     }
 
     fn spawn_with_io(
@@ -525,7 +531,7 @@ impl LocalExecutionProcess {
         environment: &HashMap<String, String>,
         stdin_open: bool,
         terminal_size: Option<(u16, u16)>,
-        control_pipe: bool,
+        control_fd: Option<u16>,
     ) -> Result<Self> {
         if terminal_size
             .is_some_and(|(rows, cols)| !(1..=1000).contains(&rows) || !(1..=1000).contains(&cols))
@@ -605,7 +611,7 @@ impl LocalExecutionProcess {
                         None,
                         true,
                         None,
-                        control_pipe,
+                        control_fd,
                     )?;
 
                     (
@@ -753,7 +759,7 @@ pub fn spawn_process_with_pipes(
         logs_base_dir,
         start_suspended,
         security_capabilities,
-        false,
+        None,
     )
 }
 
@@ -770,7 +776,7 @@ pub fn spawn_process_with_pipes_and_control(
     logs_base_dir: Option<&Path>,
     start_suspended: bool,
     security_capabilities: Option<*mut SECURITY_CAPABILITIES>,
-    control_pipe: bool,
+    control_fd: Option<u16>,
 ) -> Result<PipeSpawnHandles> {
     spawn_process_with_pipes_for_identity(
         ProcessIdentity::PrimaryToken(h_token),
@@ -784,7 +790,7 @@ pub fn spawn_process_with_pipes_and_control(
         logs_base_dir,
         start_suspended,
         security_capabilities,
-        control_pipe,
+        control_fd,
     )
 }
 
@@ -801,9 +807,14 @@ fn spawn_process_with_pipes_for_identity(
     logs_base_dir: Option<&Path>,
     start_suspended: bool,
     security_capabilities: Option<*mut SECURITY_CAPABILITIES>,
-    control_pipe: bool,
+    control_fd: Option<u16>,
 ) -> Result<PipeSpawnHandles> {
-    let control = control_pipe.then(crate::DuplexControl::pair).transpose()?;
+    if control_fd.is_some_and(|fd| !(3..=255).contains(&fd)) {
+        anyhow::bail!("invalid control descriptor");
+    }
+    let control = control_fd
+        .map(|_| crate::DuplexControl::pair())
+        .transpose()?;
 
     let mut in_r: HANDLE = 0;
     let mut in_w: HANDLE = 0;
@@ -849,7 +860,9 @@ fn spawn_process_with_pipes_for_identity(
             restricting_sids,
             start_suspended,
             security_capabilities,
-            control.as_ref().map(|(_, child)| child.handle()),
+            control
+                .as_ref()
+                .map(|(_, child)| (child.handle(), control_fd.unwrap())),
         )
     };
     let created = match spawn_result {

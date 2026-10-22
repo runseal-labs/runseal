@@ -131,12 +131,20 @@ fn io_from_params(
                     RunSealError::new("INVALID_REQUEST", "io.control must be an object")
                 })?;
                 validate_param_keys(control, "io.control", &["mode", "child_fd"])?;
-                if control.get("mode").and_then(Value::as_str) != Some("pipe")
-                    || control.get("child_fd").and_then(Value::as_u64) != Some(3)
-                {
+                let _child_fd = control
+                    .get("child_fd")
+                    .and_then(Value::as_u64)
+                    .filter(|fd| (3..=255).contains(fd))
+                    .ok_or_else(|| {
+                        RunSealError::new(
+                            "INVALID_REQUEST",
+                            "control child_fd must be from 3 to 255",
+                        )
+                    })?;
+                if control.get("mode").and_then(Value::as_str) != Some("pipe") {
                     return Err(RunSealError::new(
                         "INVALID_REQUEST",
-                        "control requires pipe mode and child_fd 3",
+                        "control requires pipe mode and child_fd from 3 to 255",
                     ));
                 }
                 #[cfg(not(windows))]
@@ -146,7 +154,9 @@ fn io_from_params(
                     json!({"missing_features":["control_channel"]}),
                 ));
                 #[cfg(windows)]
-                return Ok(crate::backend::ExecutionIo::PipeControl);
+                return Ok(crate::backend::ExecutionIo::PipeControl {
+                    child_fd: _child_fd as u16,
+                });
             }
             Ok(crate::backend::ExecutionIo::Pipe)
         }
@@ -716,4 +726,53 @@ pub(crate) fn signal_from_params(params: &Value) -> Result<String, RunSealError>
         ));
     }
     required_prefixed_string_param(params, "execution_id", "exec_")
+}
+
+#[cfg(test)]
+mod descriptor_tests {
+    use super::*;
+
+    #[test]
+    fn invalid_control_descriptors_fail_before_backend_selection() {
+        for fd in [
+            json!(null),
+            json!(0),
+            json!(2),
+            json!(256),
+            json!(-1),
+            json!(3.5),
+            json!("7"),
+        ] {
+            let params = json!({"io":{"mode":"pipe","control":{"mode":"pipe","child_fd":fd}}});
+            assert!(
+                io_from_params(
+                    match params.as_object() {
+                        Some(value) => value,
+                        None => panic!("test object"),
+                    },
+                    &crate::backend::ExecutionStdin::Empty
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn control_descriptor_selection_is_preserved() {
+        for fd in [3, 7, 255] {
+            let params = json!({"io":{"mode":"pipe","control":{"mode":"pipe","child_fd":fd}}});
+            let selected = match io_from_params(
+                match params.as_object() {
+                    Some(value) => value,
+                    None => panic!("test object"),
+                },
+                &crate::backend::ExecutionStdin::Empty,
+            ) {
+                Ok(value) => value,
+                Err(error) => panic!("{error:?}"),
+            };
+            assert_eq!(selected.control_fd(), Some(fd));
+        }
+    }
 }

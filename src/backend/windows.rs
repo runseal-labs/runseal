@@ -484,13 +484,14 @@ pub(super) fn execute_windows_sandbox_plan(
                     timeout_ms: timeout.map(duration_millis_u64),
                     stdin: stdin_bytes,
                     terminal_size: output.as_ref().and_then(|sink| match sink.io {
-                        ExecutionIo::Pipe | ExecutionIo::PipeControl => None,
+                        ExecutionIo::Pipe | ExecutionIo::PipeControl { .. } => None,
                         ExecutionIo::Pty { rows, cols } => {
                             Some(codex_windows_sandbox::ResizePayload { rows, cols })
                         }
                     }),
                     input_source,
                     input_acknowledged,
+                    control_fd: output.as_ref().and_then(|sink| sink.io.control_fd()),
                     control_source: output
                         .as_ref()
                         .and_then(|sink| {

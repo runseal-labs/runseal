@@ -26,7 +26,7 @@ use std::path::PathBuf;
 const MAX_FRAME_LEN: usize = 8 * 1024 * 1024;
 
 /// Protocol version shared by the parent process and elevated command runner.
-pub const IPC_PROTOCOL_VERSION: u8 = 12;
+pub const IPC_PROTOCOL_VERSION: u8 = 13;
 
 /// Validated deployment wait budget; distinct from the command execution timeout.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -112,7 +112,7 @@ pub struct SpawnRequest {
     pub terminal_size: Option<ResizePayload>,
     #[serde(default)]
     pub stdin_open: bool,
-    pub control_open: bool,
+    pub control_fd: Option<u16>,
     #[serde(default)]
     pub use_private_desktop: bool,
 }
@@ -619,7 +619,7 @@ mod tests {
                     tty: false,
                     terminal_size: None,
                     stdin_open: false,
-                    control_open: false,
+                    control_fd: None,
                     use_private_desktop: false,
                 }),
             },

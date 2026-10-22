@@ -7005,6 +7005,7 @@ sys.exit(7)
         tmp.path(),
         &std::env::vars().collect(),
         false,
+        3,
     )?;
     let peer = codex_windows_sandbox::LocalExecutionProcess::spawn(
         &[python()?, "-c".into(), "import time;time.sleep(30)".into()],
@@ -7222,14 +7223,18 @@ fn contained_python_fixture(workspace: &std::path::Path) -> Result<String> {
 #[cfg(windows)]
 #[test]
 #[ignore = "requires a prepared Windows sandbox identity; run with --include-ignored"]
-fn rpc_control_fd3_three_binary_rounds_and_half_close_preserve_streams_and_audit() -> Result<()> {
+fn rpc_control_selected_descriptor_three_binary_rounds_and_half_close_preserve_streams_and_audit()
+-> Result<()> {
     let _guard = process_test_gate();
-    for policy in [
+    for (policy, child_fd) in [
         "danger-full-access",
         "read-only",
         "workspace-write",
         "workspace-contained",
-    ] {
+    ]
+    .into_iter()
+    .flat_map(|policy| [3, 7].map(|fd| (policy, fd)))
+    {
         let tmp = TempDir::new()?;
         let python_executable = if policy == "workspace-contained" {
             contained_python_fixture(tmp.path())?
@@ -7255,10 +7260,11 @@ assert os.read(3,8192)==b''
 assert os.read(0,1)==b''
 os.write(3,b'FINAL:'+data)
 sys.exit(7)
-"#;
+"#
+        .replace("(3,", &format!("({child_fd},"));
         client.send(1, "execute", json!({
             "command":[python_executable,"-I","-S","-u","-c",child_code], "cwd":tmp.path(), "policy":policy,
-            "stdin":{"mode":"stream"}, "io":{"mode":"pipe","control":{"mode":"pipe","child_fd":3}}
+            "stdin":{"mode":"stream"}, "io":{"mode":"pipe","control":{"mode":"pipe","child_fd":child_fd}}
         }))?;
         let receipt = client.next(Duration::from_secs(2))?;
         assert_eq!(
@@ -7745,6 +7751,7 @@ sys.exit(7)
             tmp.path(),
             &std::env::vars().collect(),
             false,
+            3,
         )?;
         let mut control = cli.control.take().context("caller control")?;
         let mut stdout = cli.stdout.take().context("stdout")?;
@@ -7891,6 +7898,7 @@ fn cli_control_stalled_caller_cleans_owned_range_and_preserves_peer() -> Result<
                 environment
             },
             false,
+            3,
         )?;
         let mut unread_control = cli.control.take().context("caller control")?;
         let mut stdout = cli.stdout.take().context("stdout")?;

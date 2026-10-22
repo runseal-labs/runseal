@@ -75,15 +75,17 @@ pub(super) fn spawn_local_command_with_output(
             .map(|(key, value)| (key.to_ascii_uppercase(), value.clone())),
     );
     let terminal_size = output.as_ref().and_then(|sink| match sink.io {
-        super::ExecutionIo::Pipe | super::ExecutionIo::PipeControl => None,
+        super::ExecutionIo::Pipe | super::ExecutionIo::PipeControl { .. } => None,
         super::ExecutionIo::Pty { rows, cols } => Some((rows, cols)),
     });
-    let mut process = if output.as_ref().is_some_and(|sink| sink.io.has_control()) {
+    let mut process = if let Some(child_fd) = output.as_ref().and_then(|sink| sink.io.control_fd())
+    {
         codex_windows_sandbox::LocalExecutionProcess::spawn_with_control(
             command,
             cwd,
             &environment,
             !matches!(&stdin, ExecutionStdin::Empty),
+            child_fd,
         )
     } else {
         codex_windows_sandbox::LocalExecutionProcess::spawn_with_terminal(

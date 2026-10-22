@@ -27,6 +27,7 @@ pub struct ElevatedSandboxProfileCaptureRequest<'a> {
     pub terminal_size: Option<crate::ResizePayload>,
     pub input_source: Option<SandboxInputSource>,
     pub input_acknowledged: Option<Box<dyn FnMut(usize) -> bool + Send>>,
+    pub control_fd: Option<u16>,
     pub control_source: Option<SandboxInputSource>,
     pub control_acknowledged: Option<Box<dyn FnMut(usize) -> bool + Send>>,
     pub output_observer: Option<SandboxOutputObserver<'a>>,
@@ -447,6 +448,7 @@ mod windows_impl {
             input_source,
             mut input_acknowledged,
             control_source,
+            control_fd,
             mut control_acknowledged,
             mut output_observer,
             mut started_observer,
@@ -474,6 +476,11 @@ mod windows_impl {
                 workspace_roots,
             )?;
         let control_open = control_source.is_some();
+        if control_open != control_fd.is_some()
+            || control_fd.is_some_and(|fd| !(3..=255).contains(&fd))
+        {
+            anyhow::bail!("invalid control descriptor");
+        }
         if control_open && (terminal_size.is_some() || output_observer.is_none()) {
             anyhow::bail!("control requires pipe output observation");
         }
@@ -562,7 +569,7 @@ mod windows_impl {
                 tty: terminal_size.is_some(),
                 terminal_size,
                 stdin_open: true,
-                control_open,
+                control_fd,
                 use_private_desktop,
             };
             let transport = spawn_runner_transport(

@@ -157,7 +157,7 @@ impl Service {
     }
 
     pub(crate) fn take_admitted_starts(&mut self) -> Vec<SyncSender<()>> {
-        self.pending_starts.drain(..).collect()
+        std::mem::take(&mut self.pending_starts)
     }
 
     pub(crate) fn cancel_owned(&self) {

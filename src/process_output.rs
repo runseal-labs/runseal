@@ -84,7 +84,7 @@ fn decode_utf16le_if_likely(bytes: &[u8]) -> Option<String> {
 
     let mut pairs = 0usize;
     let mut zero_high_bytes = 0usize;
-    for chunk in bytes.chunks_exact(2).take(64) {
+    for chunk in bytes.as_chunks::<2>().0.iter().take(64) {
         pairs += 1;
         if chunk[1] == 0 {
             zero_high_bytes += 1;
@@ -103,7 +103,9 @@ fn decode_utf16le_if_likely(bytes: &[u8]) -> Option<String> {
 fn decode_utf16le(bytes: &[u8], start: usize) -> Option<String> {
     let units = bytes
         .get(start..)?
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
         .collect::<Vec<_>>();
     Some(String::from_utf16_lossy(&units))
