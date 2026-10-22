@@ -847,7 +847,15 @@ blocks every later sandboxed execution until an explicit repair.
 `sandboxed_stalled_console_output_cleans_owned_range_and_preserves_peer` cover
 stalled plain-console output with local and sandboxed execution. RunSeal forwards
 console bytes through an owned helper process; when backpressure or timeout
-requires cancellation, cleanup terminates and waits for that process before
-reporting completion. The local test runs on generic Windows. The sandboxed test
-requires a prepared Windows identity and remains ignored on generic Windows CI;
-its result is pending and is not counted as an acceptance pass.
+requires cancellation, cleanup requests termination and confirms native process
+and feeder-thread exit within the shared deadline. A failed delivery suppresses
+the final diagnostic write: stdout and stderr may share the same stalled Console.
+The local test runs on generic Windows; the sandboxed test requires a prepared
+Windows identity and is included in the prepared CI suite.
+
+`commands::exec::output::tests::console_cleanup_deadline_includes_pending_native_process_exit`
+holds a real Windows process at its exit debug event. Both explicit cleanup and
+Drop must return by the deadline without claiming cleanup success, before the
+test releases the event. This reproduces the old unbounded process wait without
+depending on Console timing. Unconfirmed helper and feeder owners remain
+retained, and are reaped only after native exit is confirmed.

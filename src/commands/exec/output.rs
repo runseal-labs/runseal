@@ -8,7 +8,7 @@ use std::process::{Child, Command, Stdio};
 #[cfg(windows)]
 use std::sync::Arc;
 #[cfg(windows)]
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 #[cfg(windows)]
 use std::sync::mpsc::{self, SyncSender, TrySendError};
 #[cfg(windows)]
@@ -184,58 +184,88 @@ impl Output {
         let _ = deadline;
         Ok(())
     }
+
+    #[cfg(windows)]
+    pub(super) fn worker_delivery_failed(&self) -> bool {
+        self.console.is_some() && self.failure.is_some()
+    }
 }
 
 #[cfg(windows)]
 struct ConsoleOutputWorker {
-    child: Child,
+    child: Option<Child>,
     sender: Option<SyncSender<Vec<u8>>>,
     writer: Option<JoinHandle<io::Result<()>>>,
     progress: Arc<AtomicU64>,
+    stop: Arc<AtomicBool>,
+    aborted: bool,
+    cleanup_deadline: Option<Instant>,
 }
 
 #[cfg(windows)]
 impl ConsoleOutputWorker {
     fn spawn(stderr: bool) -> io::Result<Self> {
         let executable = std::env::current_exe()?;
-        let mut child = Command::new(executable)
+        let child = Command::new(executable)
             .args(["__console-output", if stderr { "stderr" } else { "stdout" }])
             .stdin(Stdio::piped())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
             .spawn()?;
+        Self::from_child(child)
+    }
+
+    fn from_child(mut child: Child) -> io::Result<Self> {
         let mut stdin = match child.stdin.take() {
             Some(stdin) => stdin,
             None => {
                 let _ = child.kill();
-                let _ = child.wait();
+                retain_console_output(child, None);
                 return Err(io::Error::other("console output worker input unavailable"));
             }
         };
         let (sender, receiver) = mpsc::sync_channel::<Vec<u8>>(4);
         let progress = Arc::new(AtomicU64::new(0));
         let writer_progress = progress.clone();
+        let stop = Arc::new(AtomicBool::new(false));
+        let writer_stop = stop.clone();
         let writer = match std::thread::Builder::new()
             .name("runseal-console-output-feed".into())
             .spawn(move || {
                 while let Ok(bytes) = receiver.recv() {
-                    stdin.write_all(&bytes)?;
-                    writer_progress.fetch_add(bytes.len() as u64, Ordering::Release);
+                    let mut pending = bytes.as_slice();
+                    while !pending.is_empty() {
+                        if writer_stop.load(Ordering::Acquire) {
+                            return Ok(());
+                        }
+                        match stdin.write(pending) {
+                            Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
+                            Ok(count) => {
+                                pending = &pending[count..];
+                                writer_progress.fetch_add(count as u64, Ordering::Release);
+                            }
+                            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                            Err(error) => return Err(error),
+                        }
+                    }
                 }
                 Ok(())
             }) {
             Ok(writer) => writer,
             Err(error) => {
                 let _ = child.kill();
-                let _ = child.wait();
+                retain_console_output(child, None);
                 return Err(error);
             }
         };
         Ok(Self {
-            child,
+            child: Some(child),
             sender: Some(sender),
             writer: Some(writer),
             progress,
+            stop,
+            aborted: false,
+            cleanup_deadline: None,
         })
     }
 
@@ -244,8 +274,11 @@ impl ConsoleOutputWorker {
     }
 
     fn abort(&mut self) {
+        self.aborted = true;
+        self.stop.store(true, Ordering::Release);
         self.sender.take();
         let _ = self.kill_child();
+        self.cancel_writer();
     }
 
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
@@ -261,22 +294,44 @@ impl ConsoleOutputWorker {
     }
 
     fn finish(&mut self, deadline: Instant, abort: bool) -> io::Result<()> {
+        crate::backend::record_test_cleanup_trace("console_output_finish_started");
+        let deadline = self
+            .cleanup_deadline
+            .map_or(deadline, |previous| previous.min(deadline));
+        self.cleanup_deadline = Some(deadline);
         self.sender.take();
-        let mut forced = abort;
-        if forced {
-            self.kill_child()?;
+        if abort {
+            self.abort();
         }
         let status = loop {
-            if let Some(status) = self.child.try_wait()? {
+            let Some(child) = &mut self.child else {
+                return Ok(());
+            };
+            let status = child.try_wait()?;
+            let writer_finished = self
+                .writer
+                .as_ref()
+                .is_none_or(crate::execution::retained::thread_finished);
+            if let Some(status) = status
+                && writer_finished
+            {
                 break status;
             }
             if Instant::now() >= deadline {
-                forced = true;
-                self.kill_child()?;
-                break self.child.wait()?;
+                self.abort();
+                crate::backend::record_test_cleanup_trace("console_output_cleanup_deadline");
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "console output cleanup deadline",
+                ));
+            }
+            if self.aborted {
+                self.cancel_writer();
             }
             std::thread::sleep(Duration::from_millis(5));
         };
+        self.child.take();
+        crate::backend::record_test_cleanup_trace("console_output_child_exited");
         let writer = self
             .writer
             .take()
@@ -284,14 +339,17 @@ impl ConsoleOutputWorker {
         let write_result = writer
             .join()
             .map_err(|_| io::Error::other("console output writer panicked"))?;
-        if !forced && !status.success() {
+        crate::backend::record_test_cleanup_trace("console_output_writer_exited");
+        if !self.aborted && !status.success() {
             return Err(io::Error::other("console output worker failed"));
         }
         if let Err(error) = write_result
-            && !(forced
+            && !(self.aborted
                 && matches!(
                     error.kind(),
-                    io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset
+                    io::ErrorKind::BrokenPipe
+                        | io::ErrorKind::ConnectionReset
+                        | io::ErrorKind::Interrupted
                 ))
         {
             return Err(error);
@@ -300,24 +358,69 @@ impl ConsoleOutputWorker {
     }
 
     fn kill_child(&mut self) -> io::Result<()> {
-        match self.child.kill() {
+        let Some(child) = &mut self.child else {
+            return Ok(());
+        };
+        match child.kill() {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == io::ErrorKind::InvalidInput => Ok(()),
             Err(error) => Err(error),
         }
     }
+
+    fn cancel_writer(&self) {
+        use std::os::windows::io::AsRawHandle;
+        if let Some(writer) = &self.writer {
+            unsafe {
+                windows_sys::Win32::System::IO::CancelSynchronousIo(writer.as_raw_handle());
+            }
+        }
+    }
 }
+
+#[cfg(all(test, windows))]
+mod tests;
 
 #[cfg(windows)]
 impl Drop for ConsoleOutputWorker {
     fn drop(&mut self) {
-        self.sender.take();
-        let _ = self.kill_child();
-        let _ = self.child.wait();
-        if let Some(writer) = self.writer.take() {
+        crate::backend::record_test_cleanup_trace("console_output_drop_started");
+        let deadline = self
+            .cleanup_deadline
+            .unwrap_or_else(|| Instant::now() + Duration::from_secs(2));
+        let _ = self.finish(deadline, true);
+        if let Some(child) = self.child.take() {
+            retain_console_output(child, self.writer.take());
+            crate::backend::record_test_cleanup_trace("console_output_cleanup_retained");
+        }
+        crate::backend::record_test_cleanup_trace("console_output_drop_finished");
+    }
+}
+
+#[cfg(windows)]
+fn retain_console_output(child: Child, writer: Option<JoinHandle<io::Result<()>>>) {
+    type Owner = (Child, Option<JoinHandle<io::Result<()>>>);
+    static OWNERS: std::sync::OnceLock<std::sync::Mutex<Vec<Owner>>> = std::sync::OnceLock::new();
+    let mut owners = OWNERS
+        .get_or_init(std::sync::Mutex::default)
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    // TerminateProcess requests termination; pending native I/O can outlive it.
+    // Keep both owners after the deadline and only reap confirmed native exits.
+    owners.retain_mut(|(child, writer)| {
+        if child.try_wait().ok().flatten().is_none()
+            || writer
+                .as_ref()
+                .is_some_and(|writer| !crate::execution::retained::thread_finished(writer))
+        {
+            return true;
+        }
+        if let Some(writer) = writer.take() {
             let _ = writer.join();
         }
-    }
+        false
+    });
+    owners.push((child, writer));
 }
 
 #[cfg(windows)]
