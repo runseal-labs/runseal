@@ -99,6 +99,11 @@ stdout 和 stderr，并保留子命令退出码。RunSeal 自身失败的外层�
 端点或凭据。可运行的客户端和示例位于 [`examples/`](examples/)。公开协议与策略契约见
 [RFC 仓库](https://github.com/runseal-labs/rfcs)。
 
+RunSeal 0.2 使用 `runseal.protocol/v2`，与 0.1.x 的协议不兼容。升级前，客户端必须
+支持 v2；不提供 v1 兼容模式或自动降级。策略 schema 仍为 `runseal.policy/v1`。详见
+[发布说明](CHANGELOG.md)和
+[RFC-0021](https://github.com/runseal-labs/rfcs/blob/main/rfcs/0021-realtime-execution-protocol-v2.md)。
+
 ## 运行时限额
 
 下列启动设置在进程启动时冻结，并通过 `getCapabilities.limits` 报告。字节值以

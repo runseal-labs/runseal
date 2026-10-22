@@ -112,6 +112,12 @@ do not hard-code proxy endpoints or credentials. Runnable clients and examples
 are in [`examples/`](examples/). The public protocol and policy contract are
 defined in the [RFC repository](https://github.com/runseal-labs/rfcs).
 
+RunSeal 0.2 uses `runseal.protocol/v2`, a breaking change from 0.1.x. Clients must
+support v2 before upgrading; there is no v1 compatibility mode or automatic
+downgrade. The policy schema remains `runseal.policy/v1`. See the
+[release notes](CHANGELOG.md) and
+[RFC-0021](https://github.com/runseal-labs/rfcs/blob/main/rfcs/0021-realtime-execution-protocol-v2.md).
+
 ## Runtime limits
 
 The following startup settings are frozen for the process and reported through

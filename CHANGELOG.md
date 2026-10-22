@@ -1,8 +1,23 @@
 # RunSeal release notes
 
-## 0.2.0-rc.1 (unreleased candidate)
+## 0.2.0 (2026-10-23)
 
-This candidate implements the accepted `runseal.protocol/v2` contract in RFC-0021.
+This release implements the accepted `runseal.protocol/v2` contract in
+[RFC-0021](https://github.com/runseal-labs/rfcs/blob/main/rfcs/0021-realtime-execution-protocol-v2.md).
+
+### Breaking protocol changes
+
+- The protocol changes from `runseal.protocol/v1` in 0.1.x to `runseal.protocol/v2`.
+  Clients must support v2 before upgrading; there is no v1 compatibility mode or
+  automatic downgrade. The `runseal.policy/v1` schema remains unchanged.
+- `execute` returns a `preparing` admission receipt. Clients consume live events
+  and query the Execution for its final result instead of treating that receipt
+  as completed execution or proof that the command has started.
+- Cancellation returns a `canceling` receipt. Only the terminal result with
+  `cleanup_complete: true` proves that the owned execution range was cleaned up.
+- Capability decisions use the reported execution profiles and limits for the
+  requested sandbox, network, and I/O combination. Portable backends remain
+  experimental and fail closed for unsupported combinations.
 
 ### Added
 
@@ -14,9 +29,17 @@ This candidate implements the accepted `runseal.protocol/v2` contract in RFC-002
 
 - Fail-closed setup and reservation errors use structured public status and preserve `setup_status` in the terminal audit record.
 - Pre-start failures release their reservation when no runner spawn was delivered.
-- Windows console output cleanup owns and waits for its forwarding helper.
+- Windows Console output cleanup bounds helper-process and feeder-thread waits
+  by the shared deadline, retains unconfirmed native owners, and avoids another
+  diagnostic write after delivery has failed.
 
-### Validation status
+### Validation
 
 - RFC-0021 was accepted in `runseal-labs/rfcs` at merge commit `5fe5c5b4b6b8553c58e17f325aa99abc75fda4c0`.
-- The package candidate is not tagged or published. Prepared Windows sandbox conformance remains incomplete; do not promote this candidate to a release until the required matrix passes.
+- The [three-platform CI matrix](https://github.com/runseal-labs/runseal/actions/runs/39858559608)
+  passed, including the prepared Windows sandbox conformance and third-party
+  examples. The original stalled-Console case and the native-exit deadline
+  regression passed in Windows CI.
+- Local Windows prepared validation passed 479 tests, excluding two tests that
+  require an elevated token; those checks passed in CI. Local macOS passed 352
+  tests and the portable smoke checks.
