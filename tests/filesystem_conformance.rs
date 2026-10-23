@@ -212,8 +212,10 @@ fn ps_path(path: &Path) -> String {
 }
 
 fn ps_write_text(path: &Path, text: &str) -> String {
+    // Resolve the OS cmdlet directly. Unqualified discovery can enumerate the
+    // runner's unrelated third-party modules before testing filesystem access.
     format!(
-        "Set-Content -LiteralPath {} -Value {} -NoNewline",
+        "Microsoft.PowerShell.Management\\Set-Content -LiteralPath {} -Value {} -NoNewline",
         ps_path(path),
         ps_literal(text)
     )
@@ -721,6 +723,7 @@ fn workspace_write_allows_workspace_write_when_supported_or_fails_closed() -> Re
         response.stderr
     );
     assert_eq!(response["result"]["exit_code"], 0);
+    assert_eq!(response["result"]["cleanup_complete"], true);
     assert_eq!(fs::read_to_string(target)?, "inside");
     Ok(())
 }
