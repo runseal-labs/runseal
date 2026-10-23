@@ -265,9 +265,10 @@ pub(super) fn spawn_local_command_with_output(
                                         .resize(rows, cols)
                                         .map_err(|_| io::Error::other("terminal resize failed"))?
                                 }
-                                crate::execution::TerminalCommand::Interrupt => {
+                                crate::execution::TerminalCommand::Interrupt { sequence } => {
                                     pipe.write_all(&[3])?;
                                     if let Some(sink) = &output {
+                                        sink.control.set_pending_signal_sequence(sequence);
                                         sink.signal_delivered()?;
                                     }
                                 }
@@ -680,7 +681,7 @@ pub(super) fn cleanup_child_after_setup_error(mut child: Child, setup_err: io::E
     }
 }
 
-pub(super) fn minimal_environment(plan: &PlatformSandboxPlan) -> Vec<(OsString, OsString)> {
+pub(crate) fn minimal_environment(plan: &PlatformSandboxPlan) -> Vec<(OsString, OsString)> {
     if plan.environment_inherit != "minimal" {
         return Vec::new();
     }

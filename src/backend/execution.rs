@@ -5,9 +5,9 @@ use std::sync::mpsc::{SyncSender, TrySendError};
 pub enum OutputStream {
     Stdout,
     Stderr,
-    #[cfg_attr(not(windows), allow(dead_code))]
+    #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
     Terminal,
-    #[cfg_attr(not(windows), allow(dead_code))]
+    #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
     Control,
 }
 
@@ -17,15 +17,13 @@ pub enum ExecutionIo {
     Pipe,
     PipeControl {
         child_fd: u16,
+        #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
         byte_pipe: bool,
     },
     // Parsed on every platform so unsupported requests can be rejected before
-    // execution; only the Windows reference backend consumes the dimensions.
-    #[cfg_attr(not(windows), allow(dead_code))]
-    Pty {
-        rows: u16,
-        cols: u16,
-    },
+    // execution; the Windows and macOS backends consume the dimensions.
+    #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
+    Pty { rows: u16, cols: u16 },
 }
 impl ExecutionIo {
     pub fn has_control(self) -> bool {
@@ -37,6 +35,7 @@ impl ExecutionIo {
             _ => None,
         }
     }
+    #[cfg(any(windows, all(test, target_os = "macos")))]
     pub fn byte_pipe(self) -> bool {
         matches!(
             self,
@@ -59,17 +58,25 @@ pub struct OutputChunk {
 
 #[derive(Debug)]
 pub enum BackendMessage {
-    Started { time: String, process_id: u32 },
-    SignalDelivered { sequence: u64, process_id: u32 },
+    Started {
+        time: String,
+        process_id: u32,
+    },
+    #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
+    SignalDelivered {
+        sequence: u64,
+        process_id: u32,
+        process_group_id: Option<u32>,
+    },
     Output(OutputChunk),
 }
 
 #[derive(Clone)]
 pub struct ExecutionOutputSink {
     pub sender: SyncSender<BackendMessage>,
-    #[cfg_attr(not(windows), allow(dead_code))]
+    #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
     pub io: ExecutionIo,
-    #[cfg_attr(not(windows), allow(dead_code))]
+    #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
     pub control_input: Option<ExecutionInput>,
     pub(crate) control: crate::execution::ExecutionControl,
 }
@@ -104,21 +111,31 @@ impl ExecutionOutputSink {
         )
     }
 
+    #[cfg(windows)]
     pub fn signal_delivered(&self) -> io::Result<()> {
+        let sequence = self
+            .control
+            .take_pending_signal_sequence()
+            .ok_or_else(|| io::Error::other("missing interrupt sequence"))?;
+        self.signal_delivered_with_group(sequence, None)
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    pub fn signal_delivered_with_group(
+        &self,
+        sequence: u64,
+        process_group_id: Option<u32>,
+    ) -> io::Result<()> {
         let process_id = *self
             .control
             .process_id
             .get()
             .ok_or_else(|| io::Error::other("missing terminal identity"))?;
-        let sequence = self
-            .control
-            .delivered_sequence
-            .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
-            + 1;
         self.deliver(
             BackendMessage::SignalDelivered {
                 sequence,
                 process_id,
+                process_group_id,
             },
             false,
         )

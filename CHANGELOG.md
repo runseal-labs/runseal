@@ -1,5 +1,12 @@
 # RunSeal release notes
 
+## 0.2.2
+
+- Implement native macOS PTY and control descriptors with authenticated, bounded guardian transport.
+- Isolate each execution in a resource coalition and require positive kernel cleanup proof, identity-bound signalling and joined I/O.
+- Recover abandoned executions using protected durable ownership records, preserving concurrent live executions and failing closed on unknown ownership.
+- Verify interactive cancellation, restart and host/owner loss on macOS arm64; retain explicit unrestricted execution semantics.
+
 ## 0.2.1 (2026-10-23)
 
 This version is prepared for release. This entry does not claim that a `v0.2.1`

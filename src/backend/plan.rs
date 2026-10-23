@@ -577,7 +577,6 @@ impl PlatformSandboxPlan {
     pub fn is_sandbox_enforced(&self) -> bool {
         self.enforcement != "local-execution"
     }
-
     #[cfg(windows)]
     pub(super) fn vendor_permission_profile(&self) -> io::Result<PermissionProfile> {
         let Some(permission_profile) = &self.private_vendor_permission_profile else {
@@ -739,6 +738,79 @@ impl PlatformSandboxPlan {
             .join("runtime")
             .join(&self.execution_id))
     }
+}
+
+/// Recovery-side runtime cleanup for a recorded execution. The manifest stores
+/// the exact `execution_id`, workspace `cwd`, and `runtime_root`; this reuses the
+/// same lexical, ancestor, marker, and symlink checks as normal plan cleanup
+/// before removing anything.
+#[cfg(target_os = "macos")]
+pub(crate) fn cleanup_recorded_runtime_root(
+    execution_id: &str,
+    cwd: &str,
+    runtime_root: &str,
+) -> io::Result<()> {
+    let execution = Path::new(execution_id);
+    if !matches!(execution.components().next(), Some(Component::Normal(_)))
+        || execution.components().count() != 1
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid recorded execution id for runtime root: {execution_id}"),
+        ));
+    }
+    let expected = normalize_lexical(
+        &Path::new(cwd)
+            .join(".runseal")
+            .join("runtime")
+            .join(execution),
+    );
+    let workspace = normalize_lexical(Path::new(cwd));
+    validate_runtime_root_ancestors(&expected, &workspace, "recover")?;
+    let runtime_root = Path::new(runtime_root);
+    if normalize_lexical(runtime_root) != expected {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "refusing to recover runtime root outside planned workspace runtime directory: {}",
+                runtime_root.display()
+            ),
+        ));
+    }
+    if !runtime_root.exists() {
+        return Ok(());
+    }
+    let metadata = fs::symlink_metadata(runtime_root)?;
+    if metadata.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "refusing to recover symlinked runtime root: {}",
+                runtime_root.display()
+            ),
+        ));
+    }
+    let marker = runtime_root.join(RUNTIME_ROOT_MARKER);
+    if !runtime_marker_is_regular_file(&marker)? {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "refusing to recover unmarked runtime root: {}",
+                runtime_root.display()
+            ),
+        ));
+    }
+    if fs::read_to_string(&marker)? != execution_id {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "refusing to recover runtime root with mismatched marker: {}",
+                runtime_root.display()
+            ),
+        ));
+    }
+    validate_runtime_tree_has_no_symlinks(runtime_root, "recover")?;
+    fs::remove_dir_all(runtime_root)
 }
 
 #[cfg(test)]

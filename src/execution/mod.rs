@@ -6,7 +6,7 @@ mod output;
 mod paths;
 mod preparation;
 pub(crate) mod retained;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 pub(crate) use control::TerminalCommand;
 pub(crate) use control::{ExecutionControl, TerminationCause};
 #[cfg(windows)]

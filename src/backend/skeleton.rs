@@ -83,6 +83,17 @@ impl SandboxBackend for MacosExperimentalBackend {
         &[]
     }
 
+    fn execution_capabilities(&self) -> super::capability::ExecutionCapabilityStatuses {
+        #[cfg(target_os = "macos")]
+        {
+            super::capability::macos_execution_capabilities()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            super::capability::baseline_execution_capabilities()
+        }
+    }
+
     fn compile_plan(
         &self,
         execution_id: &str,
@@ -109,7 +120,8 @@ impl SandboxBackend for MacosExperimentalBackend {
             self,
             &[
                 "macOS backend is an experimental contribution track",
-                "unsupported sandboxed policies fail closed until conformance tests prove enforcement",
+                "native PTY and control transports are experimental",
+                "native PTY and control transports use a per-user launchd cohort in the GUI login domain; cleanup and crash recovery use positive kernel-counter proofs and remain experimental pending broader macOS version and sandbox-boundary conformance",
             ],
         );
         payload["sandbox_levels"]["read-only"] = json!(CapabilityStatus::Experimental.as_str());
@@ -123,6 +135,16 @@ impl SandboxBackend for MacosExperimentalBackend {
         mark_proxy_features_experimental(&mut payload);
         super::capability::refresh_execution_profiles(&mut payload);
         payload["capability_probes"] = crate::macos::capability_probe::capability_probes();
+        #[cfg(target_os = "macos")]
+        {
+            if crate::macos::controller::startup_recovery_blocked()
+                && let Some(notes) = payload["notes"].as_array_mut()
+            {
+                notes.push(json!(
+                    "startup recovery is blocked by an unproven retained execution record; new executions are refused until it is resolved"
+                ));
+            }
+        }
         payload
     }
 }
@@ -470,7 +492,34 @@ fn execute_macos_plan(
         timeout,
         output: sink,
     } = options;
+    #[cfg(target_os = "macos")]
+    crate::macos::controller::recover_before_execution()?;
     if !plan.is_sandbox_enforced() {
+        #[cfg(target_os = "macos")]
+        {
+            let io = sink
+                .as_ref()
+                .map(|sink| sink.io)
+                .unwrap_or(crate::backend::ExecutionIo::Pipe);
+            if io.is_pty() || io.has_control() {
+                // Explicit danger-full-access is still an owned local
+                // execution: interactive transports use the guardian cohort for
+                // lifecycle ownership, but receive an empty profile so no
+                // sandbox is added and the audit stays enforced=false.
+                return crate::macos::controller::spawn_guardian_execution(
+                    plan,
+                    command,
+                    cwd,
+                    "",
+                    stdin,
+                    env,
+                    BackendExecutionOptions {
+                        timeout,
+                        output: sink,
+                    },
+                );
+            }
+        }
         return spawn_local_command_with_output(plan, command, cwd, stdin, env, timeout, sink);
     }
     if plan.enforcement != "macos-experimental" {
@@ -526,6 +575,17 @@ fn execute_macos_plan(
         output.events.extend(events);
         Ok(output)
     })();
+    let cleanup_unconfirmed = output
+        .as_ref()
+        .err()
+        .is_some_and(crate::backend::cleanup_failed);
+    if cleanup_unconfirmed {
+        // A retained controller ownership record and live/unknown execution
+        // cohort means the runtime roots are still recovery evidence. Only a
+        // startup recovery that positively verifies kernel zero may remove
+        // them; normal success paths clean up below.
+        return output;
+    }
     let cleanup = plan.cleanup_runtime_roots();
     match (output, cleanup) {
         (Ok(output), Ok(_)) => Ok(output),
@@ -546,11 +606,38 @@ fn spawn_macos_sandbox_exec(
     options: BackendExecutionOptions,
     managed_proxy: Option<&ManagedSandboxProxy>,
 ) -> io::Result<BackendExecutionOutput> {
-    let BackendExecutionOptions {
-        timeout,
-        output: sink,
-    } = options;
-    let profile = macos_profile(plan, cwd, managed_proxy.map(ManagedSandboxProxy::addr))?;
+    let BackendExecutionOptions { timeout, output } = options;
+    let proxy_addr = managed_proxy.map(ManagedSandboxProxy::addr);
+
+    let mut runner_plan = plan.clone();
+    runner_plan.enforcement = "local-execution";
+    runner_plan.process_boundary = "local-process";
+    runner_plan.process_cleanup = "direct-child";
+
+    #[cfg(target_os = "macos")]
+    {
+        let io = output
+            .as_ref()
+            .map(|sink| sink.io)
+            .unwrap_or(crate::backend::ExecutionIo::Pipe);
+        if io.is_pty() || io.has_control() {
+            // Restricted PTY/control executions are owned by the launchd
+            // guardian resource coalition. There is deliberately no fallback to
+            // the local direct-child path when guardian setup fails.
+            let base_profile = macos_profile(plan, cwd, proxy_addr)?;
+            return crate::macos::controller::spawn_guardian_execution(
+                &runner_plan,
+                command,
+                cwd,
+                &base_profile,
+                stdin,
+                env,
+                BackendExecutionOptions { timeout, output },
+            );
+        }
+    }
+
+    let profile = macos_profile(plan, cwd, proxy_addr)?;
     let mut sandbox_command = vec![
         "/usr/bin/sandbox-exec".to_string(),
         "-p".to_string(),
@@ -558,10 +645,6 @@ fn spawn_macos_sandbox_exec(
     ];
     sandbox_command.extend(command.iter().cloned());
 
-    let mut runner_plan = plan.clone();
-    runner_plan.enforcement = "local-execution";
-    runner_plan.process_boundary = "local-process";
-    runner_plan.process_cleanup = "direct-child";
     spawn_local_command_with_output(
         &runner_plan,
         &sandbox_command,
@@ -569,7 +652,7 @@ fn spawn_macos_sandbox_exec(
         stdin,
         env,
         timeout,
-        sink,
+        output,
     )
 }
 
@@ -623,6 +706,9 @@ fn macos_profile(
             writable_roots.join(" ")
         )
     };
+    // PTY permissions are added only for the exact slave device returned by
+    // openpty/ttyname_r, in the native PTY spawn path. Do not grant terminal
+    // devices to control-only or ordinary executions.
     if plan.network_direct_egress == "unmanaged" {
         profile.push_str("(allow network*)");
     } else if plan.network_managed_proxy == "required" {

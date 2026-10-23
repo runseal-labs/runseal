@@ -39,8 +39,8 @@ use managed_proxy::LinuxSandboxProxy;
 use managed_proxy::ManagedSandboxProxy;
 #[cfg(test)]
 use process::cleanup_child_after_setup_error;
-#[cfg(any(test, windows))]
-use process::minimal_environment;
+#[cfg(any(test, windows, target_os = "macos"))]
+pub(crate) use process::minimal_environment;
 #[cfg(test)]
 use process::spawn_local_command;
 use process::spawn_local_command_with_output;
@@ -88,13 +88,15 @@ pub(crate) fn set_sandbox_level_capability_status(payload: &mut Value, status: C
 #[cfg(test)]
 use capability::missing_backend_features;
 pub use core::SandboxBackend;
-use error::BackendCleanupError;
+pub(crate) use error::BackendCleanupError;
 pub(crate) use error::BackendCleanupFacts;
 pub use error::BackendError;
 #[cfg(all(test, windows))]
 pub(crate) use error::BackendInputFacts;
 #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
 use error::BackendUnavailableError;
+#[cfg(target_os = "macos")]
+pub(crate) use error::cleanup_unconfirmed;
 #[cfg(all(test, windows))]
 pub(crate) use error::policy_transition_busy_error_for_test;
 #[cfg(windows)]
@@ -104,6 +106,8 @@ use error::{
 };
 pub(crate) use error::{backend_unavailable_reason, policy_transition_busy_reason};
 pub(crate) use error::{cleanup_failed, failure_exit_code, failure_timed_out, input_failed};
+#[cfg(all(test, target_os = "macos"))]
+pub(crate) use execution::OutputChunk;
 pub use execution::{
     BackendExecutionOptions, BackendExecutionOutput, BackendMessage, ExecutionEnv, ExecutionIo,
     ExecutionOutputSink, ExecutionStdin, OutputStream,
@@ -111,6 +115,8 @@ pub use execution::{
 #[cfg(target_os = "linux")]
 pub(crate) use managed_proxy::run_linux_proxy_relay;
 pub use plan::PlatformSandboxPlan;
+#[cfg(target_os = "macos")]
+pub(crate) use plan::cleanup_recorded_runtime_root;
 #[cfg(test)]
 use plan::environment_runtime_json;
 use plan::protected_filesystem_labels;

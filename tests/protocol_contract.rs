@@ -4678,7 +4678,7 @@ fn execution_capability_profiles_are_complete_and_consistent() -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
 #[test]
 fn portable_unsupported_interactive_modes_fail_before_execution_start() -> Result<()> {
     let capabilities = run_rpc(&rpc_request("getCapabilities", json!({})))?;

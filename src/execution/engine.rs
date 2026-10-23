@@ -686,13 +686,14 @@ fn execute_inner<B: SandboxBackend + Send + Sync + 'static>(
             crate::backend::BackendMessage::SignalDelivered {
                 sequence,
                 process_id,
+                process_group_id,
             } => {
-                let event = execution_event_at(
-                    json!({"type":"execution.signal_delivered", "execution_id":ids.execution_id,
-                    "signal":"interrupt", "sequence":sequence, "target_process_id":process_id}),
-                    &timestamp_now(),
-                    &event_context,
-                );
+                let mut payload = json!({"type":"execution.signal_delivered", "execution_id":ids.execution_id,
+                    "signal":"interrupt", "sequence":sequence, "target_process_id":process_id});
+                if let Some(process_group_id) = process_group_id {
+                    payload["target_process_group_id"] = json!(process_group_id);
+                }
+                let event = execution_event_at(payload, &timestamp_now(), &event_context);
                 if let Err(err) = journal.emit(&event, observer) {
                     control.request(super::TerminationCause::from_started_error_code(&err.code));
                     owner_error = Some(err);

@@ -150,13 +150,13 @@ fn io_from_params(
                         "control requires pipe or socket mode and child_fd from 3 to 255",
                     ));
                 }
-                #[cfg(not(windows))]
+                #[cfg(not(any(windows, target_os = "macos")))]
                 return Err(RunSealError::with_details(
                     "BACKEND_CAPABILITY_MISSING",
                     "control channel unavailable",
                     json!({"missing_features":["control_channel"]}),
                 ));
-                #[cfg(windows)]
+                #[cfg(any(windows, target_os = "macos"))]
                 return Ok(crate::backend::ExecutionIo::PipeControl {
                     child_fd: _child_fd as u16,
                     byte_pipe: control.get("mode").and_then(Value::as_str) == Some("pipe"),
@@ -174,7 +174,7 @@ fn io_from_params(
             }
             let rows = terminal_dimension(io, "rows")?;
             let cols = terminal_dimension(io, "cols")?;
-            #[cfg(not(windows))]
+            #[cfg(not(any(windows, target_os = "macos")))]
             {
                 let _ = (rows, cols);
                 Err(RunSealError::with_details(
@@ -183,7 +183,7 @@ fn io_from_params(
                     json!({"missing_features":["pty"]}),
                 ))
             }
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "macos"))]
             {
                 Ok(crate::backend::ExecutionIo::Pty { rows, cols })
             }
@@ -761,7 +761,7 @@ mod descriptor_tests {
         }
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn control_descriptor_selection_is_preserved() {
         for (fd, mode) in [3, 7, 255]

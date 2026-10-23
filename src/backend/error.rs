@@ -1,11 +1,28 @@
 use super::*;
 
 #[derive(Debug)]
-pub(super) struct BackendCleanupError;
+pub(crate) struct BackendCleanupError;
 #[derive(Debug)]
 pub(crate) struct BackendCleanupFacts {
     pub(crate) exit_code: Option<i32>,
     pub(crate) timed_out: bool,
+}
+/// Cleanup could not be proven and an ownership record was deliberately kept.
+/// The detail is private diagnostics; the public classification is still
+/// `cleanup_failed`.
+#[derive(Debug)]
+pub(crate) struct BackendCleanupUnconfirmed {
+    pub(crate) detail: String,
+}
+impl std::fmt::Display for BackendCleanupUnconfirmed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.detail)
+    }
+}
+impl std::error::Error for BackendCleanupUnconfirmed {}
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn cleanup_unconfirmed(detail: String) -> io::Error {
+    io::Error::other(BackendCleanupUnconfirmed { detail })
 }
 
 #[derive(Debug)]
@@ -61,8 +78,11 @@ impl std::fmt::Display for BackendCleanupError {
 }
 impl std::error::Error for BackendCleanupError {}
 pub(crate) fn cleanup_failed(err: &io::Error) -> bool {
-    err.get_ref()
-        .is_some_and(|error| error.is::<BackendCleanupError>() || error.is::<BackendCleanupFacts>())
+    err.get_ref().is_some_and(|error| {
+        error.is::<BackendCleanupError>()
+            || error.is::<BackendCleanupFacts>()
+            || error.is::<BackendCleanupUnconfirmed>()
+    })
 }
 
 #[derive(Debug)]

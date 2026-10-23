@@ -8,7 +8,8 @@ use std::sync::{
 pub(crate) struct ExecutionControl {
     pub(crate) process_id: Arc<std::sync::OnceLock<u32>>,
     interrupt_sequence: Arc<AtomicU64>,
-    pub(crate) delivered_sequence: Arc<AtomicU64>,
+    #[cfg(windows)]
+    pending_signal_sequence: Arc<AtomicU64>,
     accepted_at: Arc<std::sync::OnceLock<std::time::Instant>>,
     cancelled: Arc<AtomicBool>,
     terminal_commands: Arc<Mutex<std::collections::VecDeque<TerminalCommand>>>,
@@ -18,12 +19,10 @@ pub(crate) struct ExecutionControl {
 
 #[derive(Clone, Copy)]
 pub(crate) enum TerminalCommand {
-    #[cfg_attr(not(windows), allow(dead_code))]
-    Resize {
-        rows: u16,
-        cols: u16,
-    },
-    Interrupt,
+    #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
+    Resize { rows: u16, cols: u16 },
+    #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
+    Interrupt { sequence: u64 },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -94,8 +93,18 @@ impl ExecutionControl {
         self.queue_terminal(TerminalCommand::Resize { rows, cols })
     }
     pub(crate) fn interrupt(&self) -> Result<u64, crate::backend::InputError> {
-        self.queue_terminal(TerminalCommand::Interrupt)?;
-        Ok(self.interrupt_sequence.fetch_add(1, Ordering::AcqRel) + 1)
+        let sequence = self.interrupt_sequence.fetch_add(1, Ordering::AcqRel) + 1;
+        self.queue_terminal(TerminalCommand::Interrupt { sequence })?;
+        Ok(sequence)
+    }
+    /// Queue an interrupt whose sequence was already accepted by the execution
+    /// layer. The sequence is carried through unchanged; it is never renumbered.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub(crate) fn interrupt_with_sequence(
+        &self,
+        sequence: u64,
+    ) -> Result<(), crate::backend::InputError> {
+        self.queue_terminal(TerminalCommand::Interrupt { sequence })
     }
     fn queue_terminal(&self, command: TerminalCommand) -> Result<(), crate::backend::InputError> {
         let mut queue = self
@@ -111,9 +120,21 @@ impl ExecutionControl {
         queue.push_back(command);
         Ok(())
     }
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     pub(crate) fn take_terminal_command(&self) -> Option<TerminalCommand> {
         self.terminal_commands.lock().ok()?.pop_front()
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn set_pending_signal_sequence(&self, sequence: u64) {
+        self.pending_signal_sequence
+            .store(sequence, Ordering::Release);
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn take_pending_signal_sequence(&self) -> Option<u64> {
+        let sequence = self.pending_signal_sequence.swap(0, Ordering::AcqRel);
+        (sequence > 0).then_some(sequence)
     }
     pub fn cancel(&self) {
         self.request(TerminationCause::Cancelled);

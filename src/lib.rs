@@ -87,6 +87,8 @@ fn run() -> Result<(), String> {
         [command, rest @ ..] if command == "__linux-proxy-relay" => {
             backend::run_linux_proxy_relay(rest).map(|code| std::process::exit(code))
         }
+        #[cfg(target_os = "macos")]
+        [command, rest @ ..] if command == "__macos-cohort-guardian" => macos::runner::run(rest),
         [command, flag] if command == "rpc" && flag == "--stdio" => {
             protocol::rpc_handler::run_rpc_stdio()
         }

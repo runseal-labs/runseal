@@ -132,6 +132,21 @@ pub fn windows_execution_capabilities() -> ExecutionCapabilityStatuses {
     statuses
 }
 
+/// macOS adds native PTY and control transport through a per-user launchd
+/// cohort on the experimental backend. The status stays experimental pending
+/// broader macOS version and sandbox-boundary conformance; Windows keeps its
+/// reference-backend statuses.
+#[cfg(target_os = "macos")]
+pub fn macos_execution_capabilities() -> ExecutionCapabilityStatuses {
+    use CapabilityStatus::Experimental;
+    use ExecutionCapability as E;
+    let mut statuses = baseline_execution_capabilities();
+    for capability in [E::Pty, E::PtyResize, E::PtyInterrupt, E::ControlChannel] {
+        statuses[capability.index()] = Experimental;
+    }
+    statuses
+}
+
 fn execution_capabilities_object(statuses: &ExecutionCapabilityStatuses) -> Value {
     let mut map = serde_json::Map::new();
     for (name, status) in EXECUTION_CAPABILITY_NAMES.iter().zip(statuses.iter()) {

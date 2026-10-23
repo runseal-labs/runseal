@@ -382,7 +382,10 @@ pub(super) fn execute_windows_sandbox_plan(
                             crate::execution::TerminalCommand::Resize { rows, cols } => {
                                 codex_windows_sandbox::SandboxInputPoll::Resize { rows, cols }
                             }
-                            crate::execution::TerminalCommand::Interrupt => {
+                            crate::execution::TerminalCommand::Interrupt { sequence } => {
+                                if let Some(control) = terminal_control.as_ref() {
+                                    control.set_pending_signal_sequence(sequence);
+                                }
                                 codex_windows_sandbox::SandboxInputPoll::Interrupt
                             }
                         };

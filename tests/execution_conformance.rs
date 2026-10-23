@@ -2950,13 +2950,18 @@ fn execution_capability_profiles_match_live_supported_and_rejected_behavior() ->
 
     let mut supported_profiles = 0;
     let mut rejected_profiles = 0;
+    let mut verified_pty_profiles = 0;
     let mut request_id = 2;
     for profile in profiles {
         let status = profile["status"].as_str().context("profile status")?;
         let sandbox_level = profile["sandbox_level"].as_str().context("sandbox level")?;
         let network_mode = profile["network_mode"].as_str().context("network mode")?;
         let io_mode = profile["io_mode"].as_str().context("I/O mode")?;
-        if status == "experimental" {
+        let verify_experimental_pty = cfg!(target_os = "macos")
+            && status == "experimental"
+            && io_mode == "pty"
+            && network_mode == "unmanaged";
+        if status == "experimental" && !verify_experimental_pty {
             continue;
         }
 
@@ -2966,13 +2971,23 @@ fn execution_capability_profiles_match_live_supported_and_rejected_behavior() ->
         } else {
             python()?
         };
-        #[cfg(not(windows))]
+        #[cfg(not(any(windows, target_os = "macos")))]
         let interpreter = python()?;
+        #[cfg(not(target_os = "macos"))]
         let command = [
             interpreter,
             "-u".to_string(),
             "-c".to_string(),
             "import os,sys; expected=sys.argv[1]=='pty'; assert all(os.isatty(fd)==expected for fd in (0,1,2)); print('AC26_PROFILE_OK',flush=True)".to_string(),
+            io_mode.to_string(),
+        ];
+        // CI toolcache Python may lie outside the contained policy.
+        #[cfg(target_os = "macos")]
+        let command = [
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            r#"if [ "$1" = pty ]; then test -t 0 && test -t 1 && test -t 2; else ! test -t 0 && ! test -t 1 && ! test -t 2; fi && printf 'AC26_PROFILE_OK\n'"#.to_string(),
+            "profile-fixture".to_string(),
             io_mode.to_string(),
         ];
         let mut request = json!({
@@ -3001,7 +3016,7 @@ fn execution_capability_profiles_match_live_supported_and_rejected_behavior() ->
                 "unsupported profile must fail before admission: {profile}: {rejected}"
             );
             rejected_profiles += 1;
-        } else if status == "supported" {
+        } else if status == "supported" || verify_experimental_pty {
             let receipt = client.next(Duration::from_secs(15))?;
             assert_eq!(receipt["id"], request_id, "{profile}: {receipt}");
             assert_eq!(receipt["result"]["status"], "preparing", "{profile}");
@@ -3046,19 +3061,26 @@ fn execution_capability_profiles_match_live_supported_and_rejected_behavior() ->
                 "supported profile did not run the target: {profile}"
             );
             supported_profiles += 1;
+            if io_mode == "pty" {
+                verified_pty_profiles += 1;
+            }
         } else {
             anyhow::bail!("unknown profile status {status:?}: {profile}");
         }
         request_id += 2;
     }
     assert!(supported_profiles > 0, "test must execute claimed profiles");
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     assert!(
         rejected_profiles > 0,
         "portable PTY profiles must fail closed"
     );
-    #[cfg(windows)]
-    let _ = rejected_profiles;
+    #[cfg(target_os = "macos")]
+    assert!(
+        verified_pty_profiles >= 2,
+        "macOS must execute real PTY profiles"
+    );
+    let _ = (rejected_profiles, verified_pty_profiles);
     Ok(())
 }
 
