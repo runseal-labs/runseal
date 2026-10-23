@@ -693,14 +693,26 @@ fn workspace_write_allows_workspace_write_when_supported_or_fails_closed() -> Re
     fs::create_dir_all(&workspace)?;
     let target = workspace.join("inside.txt");
     let code = format!("from pathlib import Path; Path({target:?}).write_text('inside')");
-    let response = execute_platform_script(
-        "workspace-write",
-        &workspace,
-        None,
-        code,
-        ps_write_text(&target, "inside"),
-    )?;
+    let script = match std::env::var("RUNSEAL_TEST_WRITE_DIAGNOSTIC").as_deref() {
+        Ok("discovery") => format!(
+            "[IO.File]::WriteAllText({}, 'native'); [Console]::Error.WriteLine('fixture:native-write-returned'); [Console]::Error.WriteLine('fixture:module-path=' + $env:PSModulePath); Trace-Command -Name CommandDiscovery,Modules -Expression {{ {} }} -PSHost",
+            ps_path(&workspace.join("native-probe.txt")),
+            ps_write_text(&target, "inside")
+        ),
+        Ok("qualified") => format!(
+            "Microsoft.PowerShell.Management\\{}",
+            ps_write_text(&target, "inside")
+        ),
+        _ => ps_write_text(&target, "inside"),
+    };
+    let response = execute_platform_script("workspace-write", &workspace, None, code, script)?;
 
+    if std::env::var_os("RUNSEAL_TEST_WRITE_DIAGNOSTIC").is_some() {
+        eprintln!(
+            "diagnostic stdout: {}\nstderr: {}",
+            response.stdout, response.stderr
+        );
+    }
     if is_backend_missing(&response) {
         assert_backend_missing(&response, &workspace)?;
         assert!(!target.exists());
