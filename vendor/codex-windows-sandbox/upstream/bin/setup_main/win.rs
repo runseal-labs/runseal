@@ -271,14 +271,14 @@ fn spawn_read_acl_helper(payload: &Payload, _log: &mut dyn Write) -> Result<()> 
     let payload_json = serde_json::to_vec(&read_payload)?;
     let payload_path = write_setup_payload_file(&payload.codex_home, payload_json.as_slice())?;
     let exe = std::env::current_exe().context("locate setup helper")?;
-    let spawn_result = Command::new(&exe)
-        .arg("--payload-file")
-        .arg(&payload_path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .creation_flags(0x08000000) // CREATE_NO_WINDOW
-        .spawn();
+    let spawn_result = codex_windows_sandbox::setup_process::SetupProcess::spawn(
+        &exe,
+        &[
+            "--payload-file".into(),
+            payload_path.to_string_lossy().into_owned(),
+        ],
+        false,
+    );
     if let Err(err) = spawn_result {
         let _ = remove_setup_payload_file(&payload_path);
         return Err(err).with_context(|| {
@@ -719,9 +719,170 @@ pub fn main() -> Result<()> {
 
 fn real_main() -> Result<()> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
+    if args == ["--refresh-worker"] {
+        return run_refresh_worker();
+    }
     match parse_setup_invocation(&args)? {
         SetupInvocation::TaskRun(path) => run_scheduled_setup_task(&path),
         SetupInvocation::PayloadFile(path) => run_payload_file(&path),
+    }
+}
+
+static REFRESH_WORKER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+mod read_preparation;
+static READ_ACL_TASK: std::sync::Mutex<Option<read_preparation::PreparationQueue<Payload>>> =
+    std::sync::Mutex::new(None);
+static PREPARED: std::sync::Mutex<Option<Vec<u8>>> = std::sync::Mutex::new(None);
+static READ_PREPARATION_PENDING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+fn background_read_acls(payload: &Payload, log: &mut dyn Write) -> Result<()> {
+    let snapshot = read_preparation_snapshot(payload);
+    if snapshot.as_ref().is_ok_and(|value| {
+        PREPARED
+            .lock()
+            .is_ok_and(|prepared| prepared.as_ref() == Some(value))
+    }) {
+        return log_line(
+            log,
+            "read ACL preparation unchanged; reusing verified grants",
+        );
+    }
+    let mut task = READ_ACL_TASK
+        .lock()
+        .map_err(|_| anyhow::anyhow!("read preparation task lock poisoned"))?;
+    if task.is_none() {
+        *task = Some(read_preparation::PreparationQueue::new(
+            |payload: Payload| {
+                let dir = sandbox_dir(&payload.codex_home);
+                if let Some(mut log) = log_writer(&dir) {
+                    if let Err(err) = prepared_read_acls(&payload, &mut log) {
+                        log_note(
+                            &format!("background read ACL preparation failed: {err}"),
+                            Some(&dir),
+                        );
+                    }
+                } else {
+                    log_note(
+                        "background read ACL preparation log unavailable",
+                        Some(&dir),
+                    );
+                }
+            },
+        )?);
+    }
+    task.as_ref()
+        .ok_or_else(|| anyhow::anyhow!("read preparation queue unavailable"))?
+        .enqueue(serde_json::to_vec(payload)?, payload.clone())?;
+    READ_PREPARATION_PENDING.store(true, std::sync::atomic::Ordering::Relaxed);
+    log_line(
+        log,
+        "read ACL preparation accepted; completion remains pending",
+    )
+}
+
+fn prepared_read_acls(payload: &Payload, log: &mut dyn Write) -> Result<()> {
+    let before = read_preparation_snapshot(payload);
+    if before.as_ref().is_ok_and(|snapshot| {
+        PREPARED
+            .lock()
+            .is_ok_and(|prepared| prepared.as_ref() == Some(snapshot))
+    }) {
+        return log_line(
+            log,
+            "read ACL preparation unchanged; reusing verified grants",
+        );
+    }
+    *PREPARED
+        .lock()
+        .map_err(|_| anyhow::anyhow!("read preparation lock poisoned"))? = None;
+    run_read_acl_only(payload, log)?;
+    match read_preparation_snapshot(payload) {
+        Ok(snapshot) => {
+            *PREPARED
+                .lock()
+                .map_err(|_| anyhow::anyhow!("read preparation lock poisoned"))? = Some(snapshot)
+        }
+        Err(err) => log_line(log, &format!("read preparation will be rechecked: {err}"))?,
+    }
+    Ok(())
+}
+
+fn read_preparation_snapshot(payload: &Payload) -> Result<Vec<u8>> {
+    let marker = std::fs::read(sandbox_dir(&payload.codex_home).join("setup_marker.json"))?;
+    let mut acls = Vec::new();
+    for path in &payload.read_roots {
+        match std::fs::metadata(path) {
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                acls.push(None);
+                continue;
+            }
+            Err(err) => return Err(err.into()),
+            Ok(_) => {}
+        }
+        unsafe {
+            let (dacl, descriptor) = fetch_dacl_handle(path)?;
+            let bytes = if dacl.is_null() {
+                Vec::new()
+            } else {
+                std::slice::from_raw_parts(dacl.cast::<u8>(), usize::from((*dacl).AclSize)).to_vec()
+            };
+            LocalFree(descriptor as HLOCAL);
+            acls.push(Some(bytes));
+        }
+    }
+    Ok(serde_json::to_vec(&(
+        payload.version,
+        &payload.codex_home,
+        &payload.sandbox_username,
+        &payload.read_roots,
+        &payload.read_cap_sid,
+        &payload.appcontainer_sid,
+        marker,
+        acls,
+    ))?)
+}
+
+fn run_refresh_worker() -> Result<()> {
+    use std::io::{BufRead, Read};
+    REFRESH_WORKER.store(true, std::sync::atomic::Ordering::Relaxed);
+    let mut input = std::io::stdin().lock();
+    let mut output = std::io::stdout().lock();
+    loop {
+        let mut frame = String::new();
+        let length = (&mut input).take(65537).read_line(&mut frame)?;
+        if length == 0 {
+            if let Some(task) = READ_ACL_TASK
+                .lock()
+                .map_err(|_| anyhow::anyhow!("read preparation task lock poisoned"))?
+                .take()
+            {
+                task.close()?;
+            }
+            return Ok(());
+        }
+        anyhow::ensure!(
+            length <= 65536 && frame.ends_with('\n'),
+            "invalid refresh worker frame"
+        );
+        let path: PathBuf = serde_json::from_str(&frame)?;
+        let json = std::fs::read(&path)?;
+        let payload: Payload = serde_json::from_slice(&json)?;
+        anyhow::ensure!(
+            payload.refresh_only && payload.mode == SetupMode::Full,
+            "worker only accepts ACL refresh"
+        );
+        READ_PREPARATION_PENDING.store(false, std::sync::atomic::Ordering::Relaxed);
+        let result = run_payload_file(&path);
+        let status = if result.is_err() {
+            1
+        } else if READ_PREPARATION_PENDING.load(std::sync::atomic::Ordering::Relaxed) {
+            2
+        } else {
+            0
+        };
+        writeln!(output, "{status}")?;
+        output.flush()?;
     }
 }
 
@@ -1378,7 +1539,13 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
     } else if payload.read_cap_sid.is_some() {
         // Contained tokens enforce read restrictions before process creation,
         // so their capability grants cannot be delegated to the background helper.
-        run_read_acl_only(payload, log)?;
+        if REFRESH_WORKER.load(std::sync::atomic::Ordering::Relaxed) {
+            prepared_read_acls(payload, log)?;
+        } else {
+            run_read_acl_only(payload, log)?;
+        }
+    } else if REFRESH_WORKER.load(std::sync::atomic::Ordering::Relaxed) {
+        background_read_acls(payload, log)?;
     } else {
         match read_acl_mutex_exists() {
             Ok(true) => {
@@ -1780,6 +1947,38 @@ mod tests {
             "proxy_ports": [],
             "real_user": "User",
         })
+    }
+
+    #[test]
+    fn read_preparation_invalidates_on_acl_root_and_marker_changes() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().join("read-root");
+        std::fs::create_dir_all(&root)?;
+        let mut payload: Payload = serde_json::from_value(payload_json())?;
+        payload.codex_home = temp.path().to_owned();
+        payload.read_roots = vec![root.clone()];
+        let marker = super::sandbox_dir(temp.path()).join("setup_marker.json");
+        std::fs::create_dir_all(marker.parent().expect("marker parent"))?;
+        std::fs::write(&marker, b"generation-one")?;
+        let first = super::read_preparation_snapshot(&payload)?;
+        assert_eq!(first, super::read_preparation_snapshot(&payload)?);
+        let sid = LocalSid::from_string("S-1-5-21-100-200-300-12345")?;
+        unsafe {
+            super::ensure_allow_mask_aces_with_inheritance(
+                &root,
+                &[sid.as_ptr()],
+                FILE_GENERIC_READ,
+                OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE,
+            )?;
+        }
+        let changed_acl = super::read_preparation_snapshot(&payload)?;
+        assert_ne!(first, changed_acl);
+        std::fs::write(&marker, b"generation-two")?;
+        let changed_marker = super::read_preparation_snapshot(&payload)?;
+        assert_ne!(changed_acl, changed_marker);
+        payload.read_roots.push(temp.path().join("missing-root"));
+        assert_ne!(changed_marker, super::read_preparation_snapshot(&payload)?);
+        Ok(())
     }
 
     unsafe fn test_dacl_with_flags(entries: &[(LockAclEntry, u32)]) -> *mut ACL {

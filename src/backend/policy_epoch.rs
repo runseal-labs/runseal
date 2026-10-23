@@ -101,6 +101,48 @@ fn mark_cross_process_quarantined(
 }
 
 #[cfg(windows)]
+pub(crate) fn quarantine_setup_cleanup() -> io::Result<()> {
+    let identity =
+        codex_windows_sandbox::setup_refresh_worker_identity().map_err(io::Error::other)?;
+    quarantine_setup_binding(&windows_sandbox_binding_key()?, Some(identity))
+}
+
+#[cfg(windows)]
+fn quarantine_setup_binding(
+    binding_key: &str,
+    helper_identity: Option<(u32, u64)>,
+) -> io::Result<()> {
+    let quarantine = std::sync::Arc::new(WindowsSandboxQuarantineSignal::open(binding_key)?);
+    mark_cross_process_quarantined(&AtomicBool::new(false), &quarantine)?;
+    if let Some((pid, creation)) = helper_identity {
+        let _mutex =
+            WindowsSandboxNamedMutexGuard::acquire(&cross_process_gate_mutex_name(binding_key))?;
+        let path = cross_process_gate_state_path(binding_key)?;
+        let mut state = read_cross_process_gate_state(&path)?;
+        if !state
+            .active
+            .iter()
+            .any(|entry| entry.pid == pid && entry.process_creation_time == creation)
+        {
+            state.active.push(WindowsSandboxCrossProcessGateEntry {
+                pid,
+                process_creation_time: creation,
+                token: format!("setup-helper-{pid}-{creation}"),
+                policy_hash: "setup-cleanup-unconfirmed".into(),
+                runtime_roots: Some(Vec::new()),
+            });
+            write_cross_process_gate_state(&path, &state)?;
+        }
+    }
+    // There may be no execution reservation during idle provider teardown.
+    // Persist its unconfirmed helper cleanup across a subsequent RPC process.
+    fs::write(
+        cross_process_gate_state_path(binding_key)?.with_extension("cleanup-failed"),
+        b"cleanup_failed",
+    )
+}
+
+#[cfg(windows)]
 impl WindowsSandboxCrossProcessGate {
     fn finish_after_execution_cleanup(
         &mut self,
@@ -916,6 +958,44 @@ fn to_wide(value: &OsStr) -> Vec<u16> {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn idle_setup_quarantine_blocks_admission_without_an_execution_reservation() -> io::Result<()> {
+        let tmp = TempDir::new()?;
+        let key = WindowsSandboxPolicyCohortKey {
+            binding_key: format!("idle-setup-fixture:{}", tmp.path().display()),
+            policy_hash: "policy-a".into(),
+        };
+        quarantine_setup_binding(
+            &key.binding_key,
+            Some((
+                std::process::id(),
+                process_creation_time(unsafe {
+                    windows_sys::Win32::System::Threading::GetCurrentProcess()
+                })?,
+            )),
+        )?;
+        let marker =
+            cross_process_gate_state_path(&key.binding_key)?.with_extension("cleanup-failed");
+        assert!(marker.is_file());
+        let signal = WindowsSandboxQuarantineSignal::open(&key.binding_key)?;
+        assert!(signal.check().is_err());
+        assert!(WindowsSandboxCrossProcessGate::acquire(&key).is_err());
+        // Even after losing the live event, the durable failure marker refuses admission.
+        signal.reset()?;
+        assert!(WindowsSandboxCrossProcessGate::acquire(&key).is_err());
+        assert!(
+            repair_execution_gate_for_binding(
+                &key.binding_key,
+                false,
+                std::time::Instant::now() + std::time::Duration::from_secs(2)
+            )
+            .is_err()
+        );
+        fs::remove_file(marker)?;
+        fs::remove_file(cross_process_gate_state_path(&key.binding_key)?)?;
+        Ok(())
+    }
 
     #[test]
     fn reservation_release_respects_held_native_mutex_deadline_and_preserves_quarantine()

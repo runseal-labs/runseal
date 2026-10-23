@@ -121,6 +121,8 @@ pub(crate) use plan::cleanup_recorded_runtime_root;
 use plan::environment_runtime_json;
 use plan::protected_filesystem_labels;
 #[cfg(windows)]
+pub(crate) use policy_epoch::quarantine_setup_cleanup;
+#[cfg(windows)]
 use policy_epoch::windows_sandbox_execution_gate;
 #[cfg(windows)]
 pub(crate) use policy_epoch::{ExecutionGateRepair, repair_execution_gate};

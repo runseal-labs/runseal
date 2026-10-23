@@ -222,6 +222,11 @@ fn run_setup_refresh_inner(
         mode: SetupMode::Full,
         refresh_only: true,
     };
+    if let Some(slot) = REFRESH_WORKER.get() {
+        slot.lock()
+            .map_err(|_| anyhow!("setup worker lock poisoned"))?
+            .admit()?;
+    }
     let refresh_cache_key = setup_refresh_cache_key(&payload);
     if setup_refresh_cache()
         .lock()
@@ -250,12 +255,6 @@ fn run_setup_refresh_inner(
         }
     };
     // Refresh should never request elevation; ensure verb isn't set and we don't trigger UAC.
-    let mut cmd = Command::new(&exe);
-    cmd.arg("--payload-file")
-        .arg(&payload_path)
-        .creation_flags(0x08000000) // CREATE_NO_WINDOW
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
     let cwd = std::env::current_dir().unwrap_or_else(|_| request.codex_home.to_path_buf());
     log_note(
         &format!(
@@ -267,9 +266,10 @@ fn run_setup_refresh_inner(
         ),
         Some(&sbx_dir),
     );
-    let status = cmd.status();
+    let status = run_refresh_worker(&exe, &payload_path);
     let _ = remove_setup_payload_file(&payload_path);
     let status = status.map_err(|err| {
+        if err.is::<crate::SandboxCleanupError>() { return err; }
         let message = format!(
             "setup refresh failed to launch helper: helper={}, cwd={}, log={}, payload_file={}, error={err}",
             exe.display(),
@@ -280,6 +280,9 @@ fn run_setup_refresh_inner(
         log_note(&format!("setup refresh: {message}"), Some(&sbx_dir));
         failure(SetupErrorCode::OrchestratorHelperLaunchFailed, message)
     })?;
+    if status.code() == Some(2) {
+        return Ok(());
+    }
     if !status.success() {
         log_note(
             &format!("setup refresh: exited with status {status:?}"),
@@ -305,6 +308,133 @@ fn run_setup_refresh_inner(
     }
     cache.insert(refresh_cache_key);
     Ok(())
+}
+
+#[derive(Default)]
+struct RefreshWorker {
+    owned: Option<(PathBuf, crate::setup_process::SetupProcess)>,
+    quarantined: bool,
+}
+
+impl RefreshWorker {
+    fn admit(&self) -> Result<()> {
+        if self.quarantined {
+            return Err(anyhow!(crate::SandboxCleanupError)
+                .context("setup worker cleanup is unconfirmed; new preparation is quarantined"));
+        }
+        Ok(())
+    }
+
+    fn retire(&mut self) -> Result<()> {
+        let Some((_, worker)) = self.owned.as_mut() else {
+            return Ok(());
+        };
+        self.quarantined = true;
+        let result = worker.shutdown();
+        if worker.cleanup_confirmed() {
+            self.owned = None;
+            self.quarantined = false;
+        } else {
+            return Err(anyhow!(crate::SandboxCleanupError).context(format!(
+                "setup worker cleanup unconfirmed: {:?}",
+                result.err()
+            )));
+        }
+        let status = result?;
+        anyhow::ensure!(status.success(), "setup worker exited unsuccessfully");
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod refresh_lifecycle_tests {
+    use super::*;
+
+    #[test]
+    fn unconfirmed_worker_retains_ownership_and_refuses_new_preparation() {
+        let mut worker = crate::setup_process::tests::fixture("hang");
+        worker.force_unconfirmed = true;
+        let mut slot = RefreshWorker {
+            owned: Some((PathBuf::from("fixture"), worker)),
+            quarantined: false,
+        };
+        assert!(
+            slot.retire()
+                .unwrap_err()
+                .is::<crate::SandboxCleanupError>()
+        );
+        assert!(slot.owned.is_some());
+        assert!(slot.admit().is_err());
+        assert!(!slot.owned.as_ref().unwrap().1.cleanup_confirmed());
+        let (pid, creation) = slot.owned.as_ref().unwrap().1.process_identity().unwrap();
+        assert!(pid > 0 && creation > 0);
+        slot.owned.as_mut().unwrap().1.force_unconfirmed = false;
+        // Forced but confirmed cleanup is still reported as an abnormal shutdown,
+        // while its admission quarantine may now be released.
+        assert!(slot.retire().is_err());
+        assert!(slot.owned.is_none());
+        assert!(slot.admit().is_ok());
+    }
+}
+
+static REFRESH_WORKER: OnceLock<Mutex<RefreshWorker>> = OnceLock::new();
+
+pub fn setup_refresh_worker_identity() -> Result<(u32, u64)> {
+    let slot = REFRESH_WORKER
+        .get()
+        .ok_or_else(|| anyhow!("setup worker owner unavailable"))?
+        .try_lock()
+        .map_err(|_| anyhow!("setup worker owner unavailable"))?;
+    let identity = slot
+        .owned
+        .as_ref()
+        .ok_or_else(|| anyhow!("setup worker owner unavailable"))?
+        .1
+        .process_identity()?;
+    anyhow::ensure!(slot.quarantined, "setup worker is not an unconfirmed owner");
+    Ok(identity)
+}
+
+pub fn shutdown_setup_refresh_worker() -> Result<()> {
+    if let Some(slot) = REFRESH_WORKER.get() {
+        slot.lock()
+            .map_err(|_| anyhow!("setup worker lock poisoned"))?
+            .retire()?;
+    }
+    Ok(())
+}
+
+fn run_refresh_worker(exe: &Path, payload: &Path) -> Result<std::process::ExitStatus> {
+    let mut slot = REFRESH_WORKER
+        .get_or_init(Mutex::default)
+        .lock()
+        .map_err(|_| anyhow!("setup worker lock poisoned"))?;
+    slot.admit()?;
+    if slot.owned.as_ref().is_some_and(|(path, _)| path != exe) {
+        slot.retire()?;
+    }
+    if slot.owned.is_none() {
+        let worker =
+            crate::setup_process::SetupProcess::spawn(exe, &["--refresh-worker".into()], true)?;
+        slot.owned = Some((exe.to_owned(), worker));
+    }
+    let mut frame = serde_json::to_vec(payload)?;
+    frame.push(b'\n');
+    let result = slot
+        .owned
+        .as_mut()
+        .ok_or_else(|| anyhow!("setup worker unavailable"))?
+        .1
+        .exchange(frame, Duration::from_secs(120));
+    if result.is_err()
+        && let Err(cleanup) = slot.retire()
+    {
+        if cleanup.is::<crate::SandboxCleanupError>() {
+            return Err(cleanup);
+        }
+        return result.map_err(|error| error.context(format!("helper cleanup: {cleanup}")));
+    }
+    result
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1228,14 +1358,15 @@ fn run_setup_exe(
     if !needs_elevation {
         let payload_path = write_setup_payload_file(codex_home, payload_json.as_bytes())?;
         let _error_mode = ErrorModeGuard::suppress_system_error_dialogs();
-        let status = Command::new(&exe)
-            .arg("--payload-file")
-            .arg(&payload_path)
-            .creation_flags(0x08000000) // CREATE_NO_WINDOW
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+        let status = crate::setup_process::SetupProcess::spawn(
+            &exe,
+            &[
+                "--payload-file".into(),
+                payload_path.to_string_lossy().into_owned(),
+            ],
+            false,
+        )
+        .and_then(|mut helper| helper.wait().map_err(Into::into));
         let _ = remove_setup_payload_file(&payload_path);
         let status = status.map_err(|err| {
             failure(
