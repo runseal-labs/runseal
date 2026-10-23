@@ -1,5 +1,12 @@
 # RunSeal release notes
 
+## 0.2.3 (2026-10-23)
+
+- Reuse Windows setup preparation across executions without showing process-start pointer feedback.
+- Bound helper request writes, response reads and shutdown; block new preparation until cleanup is confirmed.
+- Preserve distinct queued preparation requests and independent execution cancellation while shared preparation is active.
+- Retain unconfirmed helper ownership for safe recovery and add native lifecycle and preparation regression coverage.
+
 ## 0.2.2
 
 - Implement native macOS PTY and control descriptors with authenticated, bounded guardian transport.
