@@ -65,6 +65,19 @@ runseal exec --policy danger-full-access --cwd /path/to/workspace -- python3 -c 
 Use `runseal explain-policy --policy workspace-write` to inspect a policy
 before execution.
 
+### Prebuilt binaries
+
+Release builds are published for Windows x86_64/arm64, Linux x86_64/aarch64,
+and macOS x86_64/arm64. Pin an exact release version; do not resolve `latest`.
+Assets are named `runseal-v<version>-<platform>.<ext>`, and each archive has a
+`.sha256` sidecar. Draft releases are not public download targets. The
+artifact matrix, checksum format, and publication rules are in
+[RELEASING.md](RELEASING.md).
+
+RunSeal 0.2.1 and later include the RFC-0022 native control/PTY identity
+contract. The `v0.2.0` tag and the `v0.1.x` line predate it and are not
+compatible baselines for clients that require that contract.
+
 ### Windows setup
 
 Windows sandbox support requires Windows 10, version 1809 (build 17763) or

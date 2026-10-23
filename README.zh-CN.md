@@ -58,6 +58,17 @@ runseal exec --policy danger-full-access --cwd /path/to/workspace -- python3 -c 
 
 运行前可用 `runseal explain-policy --policy workspace-write` 查看策略解析结果。
 
+### 预构建二进制
+
+发布构建覆盖 Windows x86_64/arm64、Linux x86_64/aarch64、macOS x86_64/arm64。
+请固定精确版本，不要解析 `latest`。产物名为
+`runseal-v<version>-<platform>.<ext>`，每个归档都有对应的 `.sha256` 校验文件。
+Draft release 不是公开下载目标。产物矩阵、校验格式和发布规则见
+[RELEASING.md](RELEASING.md)。
+
+RunSeal 0.2.1 及之后版本包含 RFC-0022 原生 control/PTY identity 契约。
+`v0.2.0` tag 与 `v0.1.x` 系列早于该契约，不能作为需要该契约的客户端兼容基线。
+
 ### Windows setup
 
 Windows sandbox 要求 Windows 10 1809（build 17763）或更新版本。请将

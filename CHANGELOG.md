@@ -1,5 +1,44 @@
 # RunSeal release notes
 
+## 0.2.1 (2026-10-23)
+
+This version is prepared for release. This entry does not claim that a `v0.2.1`
+tag, draft, or downloadable asset already exists; publication is a separate,
+reviewed step.
+
+### Compatibility
+
+- `runseal.protocol/v2` and `runseal.policy/v1` are unchanged from 0.2.0.
+- 0.2.1 includes the RFC-0022 native control and terminal-identity contract
+  added after the `v0.2.0` tag (commits `3a1a74b` and `ee871b0`). The `v0.2.0`
+  tag and its draft assets predate that contract; clients that require
+  configurable control descriptors, the reported child PID, interrupt delivery
+  receipts, or native async pipe semantics must require 0.2.1 or later. The
+  0.1.x line remains protocol v1 and is not compatible with v2 clients.
+
+### Added
+
+- RFC-0022 control-descriptor selection: RPC pipe control accepts an explicit
+  child descriptor from 3 to 255; the CLI uses descriptor 3.
+- Native terminal identity and byte-pipe behavior: startup reports the real
+  child PID; interrupt acceptance includes a sequence and
+  `execution.signal_delivered` confirms the native Ctrl-C write to the
+  identified Windows console root; resize replies acknowledge acceptance only.
+- Control mode `pipe` exposes native asynchronous byte I/O (input close seals
+  writes without peer EOF); `socket` exposes CRT byte I/O with independent
+  half-close.
+
+### Release engineering
+
+- Package version, Cargo lock entry, CLI output, changelog heading, and release
+  tag are checked for consistency before a release is built.
+- Release assets use the stable per-platform naming contract and per-asset
+  SHA-256 files documented in [`RELEASING.md`](RELEASING.md).
+- Stable releases are marked latest; SemVer prereleases are marked prerelease
+  and are never marked latest.
+- The release workflow refuses to overwrite assets on an already published
+  release or on a draft that already has assets.
+
 ## 0.2.0 (2026-10-23)
 
 This release implements the accepted `runseal.protocol/v2` contract in
