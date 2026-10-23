@@ -644,6 +644,9 @@ pub(super) fn execute_windows_sandbox_plan(
                     .is_some()
                 {
                     super::record_test_cleanup_trace("sandbox_runner_cleanup_failed");
+                    // Setup helpers run as the host identity, so generic sandbox
+                    // identity probing cannot prove them gone during repair.
+                    let _ = super::quarantine_setup_cleanup();
                     return io::Error::other(BackendCleanupError);
                 }
                 if let Some(failure) = codex_windows_sandbox::extract_setup_failure(&err) {

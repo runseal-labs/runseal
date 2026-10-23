@@ -214,6 +214,9 @@ mod sandbox_utils;
 
 #[cfg(target_os = "windows")]
 mod setup;
+#[cfg(windows)]
+#[doc(hidden)]
+pub mod setup_process;
 
 #[cfg(target_os = "windows")]
 mod setup_error;
@@ -423,6 +426,11 @@ pub use setup::sandbox_dir;
 #[cfg(target_os = "windows")]
 pub use setup::sandbox_secrets_dir;
 pub use setup::scheduled_setup_broker_available;
+#[doc(hidden)]
+#[cfg(target_os = "windows")]
+pub use setup::setup_refresh_worker_identity;
+#[cfg(target_os = "windows")]
+pub use setup::shutdown_setup_refresh_worker;
 #[cfg(target_os = "windows")]
 pub use setup_error::SetupErrorCode;
 #[cfg(target_os = "windows")]

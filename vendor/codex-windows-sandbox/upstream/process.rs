@@ -810,7 +810,7 @@ pub fn spawn_process_with_pipes_and_control(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn spawn_process_with_pipes_for_identity(
+pub(crate) fn spawn_process_with_pipes_for_identity(
     identity: ProcessIdentity,
     argv: &[String],
     cwd: &Path,

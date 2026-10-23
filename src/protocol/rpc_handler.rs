@@ -179,6 +179,15 @@ fn run_stdio(stateful: bool) -> Result<(), String> {
     } else {
         crate::execution::retained::retain(reader_thread);
     }
+    #[cfg(windows)]
+    codex_windows_sandbox::shutdown_setup_refresh_worker().map_err(|error| {
+        if error.is::<codex_windows_sandbox::SandboxCleanupError>()
+            && crate::backend::quarantine_setup_cleanup().is_err()
+        {
+            return "setup worker cleanup unconfirmed; quarantine persistence failed".to_string();
+        }
+        "setup worker cleanup could not be verified".to_string()
+    })?;
     if aborted.is_some() {
         Err("protocol connection closed after transport failure".to_string())
     } else {

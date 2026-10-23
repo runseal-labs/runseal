@@ -11,6 +11,14 @@ trimmed `codex-*` dependency crates under `vendor/`.
 This vendored implementation intentionally diverges from upstream to implement
 RunSeal's single sandbox identity model.
 
+Setup refresh uses one non-elevated helper worker per RPC owner. Helper launches
+reuse the native pipe/process boundary with startup cursor feedback disabled.
+The worker keeps ordinary read preparation in one background thread, joins it
+at EOF, and prepares write roots separately for every execution. Contained read
+grants remain synchronous. Read preparation is reused only while its setup
+generation, roots, capability identities and observed root DACLs are unchanged.
+RPC shutdown closes and joins the worker after owned executions have drained.
+
 Keep local RunSeal changes outside `upstream/` unless they are deliberately
 tracked as vendor patches.
 
@@ -160,3 +168,32 @@ The runner selects it before process creation and preserves the earliest absolut
 deadline on natural exit, disconnect, and explicit termination. Native wait-only
 process fixtures cover configured expiry without claiming successful termination.
 Full sandbox capture under nondefault budgets remains an acceptance requirement.
+
+The shared setup refresh worker owns a separate kill-on-close Job, installed
+before its suspended primary thread is resumed. It is not part of any execution's
+cancellation range. Request writes and response reads share a 120-second absolute deadline, including blocked writes through an owned cancellable native I/O thread. Shutdown
+closes the request pipe, grants two seconds for cooperative exit, then terminates
+the owned Job and grants five seconds to confirm both primary-process exit and
+zero active Job members. Forced shutdown and unconfirmed cleanup return errors;
+failed workers are removed only after process, Job membership, and native I/O exit are confirmed. Unconfirmed owners remain quarantined and return the typed cleanup failure; idle RPC shutdown also persists the existing execution-gate quarantine across RPC processes.
+One-shot helper waits are also finite. Advisory fire-and-forget read helpers keep
+their existing independent lifetime.
+
+Native disposable-process tests cover cooperative EOF, unresponsive workers and
+descendants, response expiry, an unaffected peer worker, replacement, repeated
+requests, and a console-free launch beneath a detached parent. Provider service tests
+separately cover cancellation before admission and concurrent execution isolation.
+
+Advisory read preparation uses one bounded ordered queue. Only equivalent
+outstanding payloads coalesce; different payloads remain queued. An internal
+pending receipt does not populate the completed setup cache. Completed read
+snapshots are checked separately, and queue failure does not become successful
+preparation. The queue drains on EOF within the helper's externally bounded Job.
+Native regression fixtures cover blocked writes, response expiry, retained
+unconfirmed owners, persistent idle quarantine, and distinct queued payloads.
+A native setup barrier fixture proves preparation has begun before cancellation;
+the same helper must subsequently serve the peer and retry without launching the
+cancelled command.
+The existing cross-process gate also records the unconfirmed helper's PID and
+native creation time. Helpers use the host identity, so repair must check that
+recorded owner rather than infer exit from an empty sandbox-identity process scan.

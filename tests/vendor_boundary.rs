@@ -484,7 +484,7 @@ fn vendored_windows_setup_uses_broker_without_direct_uac() {
         .expect("setup.rs must be included");
 
     assert!(setup.contains("ShellExecuteExW"));
-    assert!(setup.contains(".arg(\"--payload-file\")"));
+    assert!(setup.contains("\"--payload-file\".into()"));
     assert!(setup.contains("try_run_setup_exe_via_scheduled_task"));
     assert!(!setup.contains("RUNSEAL_WINDOWS_SANDBOX_NO_UAC"));
 }
