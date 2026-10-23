@@ -141,7 +141,9 @@ fn platform_script_command(_python_code: String, powershell_script: String) -> V
         "-NoProfile".to_string(),
         "-NonInteractive".to_string(),
         "-Command".to_string(),
-        powershell_script,
+        format!(
+            "[Console]::Error.WriteLine('fixture:script-entered'); {powershell_script}; [Console]::Error.WriteLine('fixture:script-returned')"
+        ),
     ]
 }
 

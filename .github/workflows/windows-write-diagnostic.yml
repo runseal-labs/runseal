@@ -1,0 +1,18 @@
+name: windows-write-diagnostic
+on:
+  push:
+    branches: [codex/windows-ci-write-timeout]
+permissions:
+  contents: read
+jobs:
+  reproduce:
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582
+      - name: Prepare sandbox
+        shell: pwsh
+        run: ./scripts/windows-smoke.ps1
+      - name: Reproduce filesystem write
+        run: cargo test --test filesystem_conformance workspace_write_allows_workspace_write_when_supported_or_fails_closed -- --exact --nocapture
