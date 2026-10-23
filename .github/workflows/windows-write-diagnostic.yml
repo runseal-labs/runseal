@@ -14,12 +14,5 @@ jobs:
       - name: Prepare sandbox
         shell: pwsh
         run: ./scripts/windows-smoke.ps1
-      - name: Reproduce filesystem write
-        continue-on-error: true
-        env:
-          RUNSEAL_TEST_WRITE_DIAGNOSTIC: discovery
-        run: cargo test --test filesystem_conformance workspace_write_allows_workspace_write_when_supported_or_fails_closed -- --exact --nocapture
-      - name: Qualified cmdlet control
-        env:
-          RUNSEAL_TEST_WRITE_DIAGNOSTIC: qualified
-        run: cargo test --test filesystem_conformance workspace_write_allows_workspace_write_when_supported_or_fails_closed -- --exact --nocapture
+      - name: Verify original filesystem conformance
+        run: cargo test --test filesystem_conformance -- --include-ignored

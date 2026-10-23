@@ -141,9 +141,7 @@ fn platform_script_command(_python_code: String, powershell_script: String) -> V
         "-NoProfile".to_string(),
         "-NonInteractive".to_string(),
         "-Command".to_string(),
-        format!(
-            "[Console]::Error.WriteLine('fixture:script-entered'); {powershell_script}; [Console]::Error.WriteLine('fixture:script-returned')"
-        ),
+        powershell_script,
     ]
 }
 
@@ -214,8 +212,10 @@ fn ps_path(path: &Path) -> String {
 }
 
 fn ps_write_text(path: &Path, text: &str) -> String {
+    // Resolve the OS cmdlet directly. Unqualified discovery can enumerate the
+    // runner's unrelated third-party modules before testing filesystem access.
     format!(
-        "Set-Content -LiteralPath {} -Value {} -NoNewline",
+        "Microsoft.PowerShell.Management\\Set-Content -LiteralPath {} -Value {} -NoNewline",
         ps_path(path),
         ps_literal(text)
     )
@@ -693,26 +693,14 @@ fn workspace_write_allows_workspace_write_when_supported_or_fails_closed() -> Re
     fs::create_dir_all(&workspace)?;
     let target = workspace.join("inside.txt");
     let code = format!("from pathlib import Path; Path({target:?}).write_text('inside')");
-    let script = match std::env::var("RUNSEAL_TEST_WRITE_DIAGNOSTIC").as_deref() {
-        Ok("discovery") => format!(
-            "[IO.File]::WriteAllText({}, 'native'); [Console]::Error.WriteLine('fixture:native-write-returned'); [Console]::Error.WriteLine('fixture:module-path=' + $env:PSModulePath); Trace-Command -Name CommandDiscovery,Modules -Expression {{ {} }} -PSHost",
-            ps_path(&workspace.join("native-probe.txt")),
-            ps_write_text(&target, "inside")
-        ),
-        Ok("qualified") => format!(
-            "Microsoft.PowerShell.Management\\{}",
-            ps_write_text(&target, "inside")
-        ),
-        _ => ps_write_text(&target, "inside"),
-    };
-    let response = execute_platform_script("workspace-write", &workspace, None, code, script)?;
+    let response = execute_platform_script(
+        "workspace-write",
+        &workspace,
+        None,
+        code,
+        ps_write_text(&target, "inside"),
+    )?;
 
-    if std::env::var_os("RUNSEAL_TEST_WRITE_DIAGNOSTIC").is_some() {
-        eprintln!(
-            "diagnostic stdout: {}\nstderr: {}",
-            response.stdout, response.stderr
-        );
-    }
     if is_backend_missing(&response) {
         assert_backend_missing(&response, &workspace)?;
         assert!(!target.exists());
@@ -735,6 +723,7 @@ fn workspace_write_allows_workspace_write_when_supported_or_fails_closed() -> Re
         response.stderr
     );
     assert_eq!(response["result"]["exit_code"], 0);
+    assert_eq!(response["result"]["cleanup_complete"], true);
     assert_eq!(fs::read_to_string(target)?, "inside");
     Ok(())
 }
